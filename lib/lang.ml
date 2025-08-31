@@ -449,6 +449,20 @@ type shared_var_def = {
   assigning_thread: int;
   shared_lifetime: sig_lifetime;
 }
+type gate_vars =
+  | Msg of message_specifier
+  | Register of identifier
+
+
+type gate_qualifier =
+  | GateAnd
+  | GateXor
+
+type control_gate = {
+  gate_id : identifier;
+  gate_class: gate_qualifier;
+  gate_elements: gate_vars list;
+}
 
 (** Process body. *)
 type proc_def_body = {
@@ -458,6 +472,7 @@ type proc_def_body = {
   spawns: spawn_def ast_node list;
   regs: reg_def ast_node list;
   shared_vars: shared_var_def ast_node list;  (* New field *)
+  control_gates: control_gate list;
   (* prog: expr; *)
   threads: (expr_node * message_specifier option) list; (** the second component is the optional reset signal *)
 }

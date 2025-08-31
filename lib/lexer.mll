@@ -32,6 +32,7 @@ rule read =
   | '-'       { MINUS }
   | "--"      { DOUBLE_MINUS }
   | '^'       { XOR }
+  | "control" { KEYWORD_CONTROL }
   | "&&"      { DOUBLE_AND }
   | '&'       { AND }
   | "||"      { DOUBLE_OR }

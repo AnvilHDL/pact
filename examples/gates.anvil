@@ -1,0 +1,13 @@
+chan ch{
+    left req : (logic@#1)
+}
+proc gates(ep : left ch){
+    reg res : logic;
+    control <&>{
+        ep.req;res
+    }test_ctrl;
+    loop{
+        let x = recv ep.req >>
+        set res := x
+    }
+}

@@ -36,6 +36,7 @@
 %token DOUBLE_AND           (* && *)
 %token OR                   (* | *)
 %token DOUBLE_OR            (* || *)
+%token KEYWORD_CONTROL      (* control *)
 %token AT                   (* @ *)
 %token TILDE                (* ~ *)
 %token PERIOD               (* . *)
@@ -175,7 +176,13 @@ proc_def_body:
       regs = [];
       threads = [];
       shared_vars = [];
+      control_gates = [];
     }
+  }
+
+| KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = IDENT; SEMICOLON body = proc_def_body;
+  {
+    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv})::body.control_gates}
   }
 | KEYWORD_LOOP; reset_by = message_specifier?; LEFT_BRACE; thread_prog = node(expr); RIGHT_BRACE; body=proc_def_body //For thread definitions
   {
@@ -858,3 +865,16 @@ typed_arg:
     {
       { arg_name = name; arg_type = None } : Lang.typed_arg
     }
+
+gate_qualifiers:
+  | AND
+    { Lang.GateAnd }
+  | XOR
+    { Lang.GateXor }
+
+
+gate_vars:
+  | msg_spec = message_specifier
+    { Msg(msg_spec) : Lang.gate_vars }
+  | reg_ident = IDENT
+    { Register(reg_ident) : Lang.gate_vars }
