@@ -373,7 +373,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       (string_of_lvalue lval) (string_of_data_type lvi.lval_dtype) (string_of_data_type td.dtype) in
     check_dtype err_string (Some lvi.lval_dtype) td.dtype e.span ci.file_name ci.weak_typecasts;
     ctx.current.actions <- (RegAssign (lvi, td) |> tag_with_span e.span)::ctx.current.actions;
-    let g = GateHelper.add_reg_assignment_event graph.gate_context lval ctx.current  in
+    let g = GateHelper.add_reg_assignment_event graph.gate_context lval ctx.current e.span  in
     graph.gate_context <- g;
     Typing.cycles_data graph 1 ctx.current
   | Call (id, arg_list) ->
@@ -821,7 +821,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td.dtype) in
     check_dtype err_string (Some msg_dtype) td.dtype e.span ci.file_name ci.weak_typecasts;
     let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx.current in
-    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live in
+    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live e.span in
     ctx.current.sustained_actions <-
       ({
         until = ntd.lt.live;
@@ -839,7 +839,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
     graph.wires <- wires';
     let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx.current in
-    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live in
+    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live e.span in
     ctx.current.sustained_actions <-
       ({until = ntd.lt.live; ty = Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx.current.sustained_actions;
     graph.gate_context <- gc;
@@ -1124,6 +1124,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           tmp_graph.last_event_id <- (EventGraphOps.find_last_event tmp_graph).id;
           tmp_graph.is_general_recursive <- tmp_graph.last_event_id <> td.lt.live.id;
           (* Optimisation *)
+          LifetimeCheck.gate_check config ci tmp_graph;
           let tmp_graph = GraphOpt.optimize config true ci tmp_graph in
           if not config.disable_lt_checks then (
             LifetimeCheck.lifetime_check config ci tmp_graph

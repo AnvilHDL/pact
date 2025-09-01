@@ -167,7 +167,7 @@ and sustained_action = {
 (** members of the gate control groups  *)
 and gate_mem = {
   mid : Lang.gate_vars;
-  mutable g_events : event list;
+  mutable g_events : (event * Lang.code_span) list;
 }
 
 (** Individual control group  *)

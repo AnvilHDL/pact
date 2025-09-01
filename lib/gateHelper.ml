@@ -19,13 +19,13 @@ let gate_sanity_check g (reg_defs:reg_def ast_node list) (_channel_args: endpoin
 
 
 
-let add_reg_assignment_event gate_context (lval) (ev) : gate_class list=
+let add_reg_assignment_event gate_context (lval) (ev) span : gate_class list=
 
   let full_reg_add_event (gcl: EventGraph.gate_class) id =
     let gm = List.map (fun mem ->
       match mem.mid with
       | Register (op, id') when (op = GateWrite || op = GateReadWrite && id = id') -> 
-        {mem with g_events = ev:: mem.g_events}
+        {mem with g_events = (ev,span):: mem.g_events}
       | _ ->  mem
     ) gcl.gmem in
     {gcl with gmem = gm} in
@@ -39,12 +39,12 @@ let add_reg_assignment_event gate_context (lval) (ev) : gate_class list=
 
 
 
-let add_msg_event gate_context (msg_spec: Lang.message_specifier) (ev) : gate_class list = 
+let add_msg_event gate_context (msg_spec: Lang.message_specifier) (ev) span : gate_class list = 
   List.map (fun gcl -> 
     let gcm = List.map (fun mem -> 
       match mem.mid with
       | Msg ms when ms = msg_spec -> 
-        {mem with g_events = ev:: mem.g_events}
+        {mem with g_events = (ev, span):: mem.g_events}
       | _ ->  mem
     ) gcl.gmem in 
     {gcl with gmem = gcm}

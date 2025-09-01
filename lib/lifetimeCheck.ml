@@ -599,6 +599,36 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
         ) (List.rev g.events)
    )
   in
-  Utils.StringMap.iter check_msg_sync_mode !msg_to_check;
+  Utils.StringMap.iter check_msg_sync_mode !msg_to_check
 
 
+
+  let gate_check (_config : Config.compile_config) (_ci : cunit_info) (g : event_graph) =
+    let lookup_message msg = MessageCollection.lookup_message g.messages msg _ci.channel_classes in
+    List.iter (fun gc ->
+    (
+      match gc.gqual with
+      | GateAnd ->
+            let base_len = List.length (List.hd gc.gmem).g_events in
+            List.iter (fun gmem ->
+              if List.length gmem.g_events <> base_len then
+                raise (Except.TypeError [Text ("Violation of Control Group : " ^ gc.gid ^ " by "); Except.codespan_local (snd (List.hd gmem.g_events))])
+            ) gc.gmem;
+            List.iter (fun gmem ->
+              List.iteri (fun i ge ->
+                  let slack = GraphAnalysis.events_max_dist g.events lookup_message (fst ge) in
+                  List.iter (fun gm_ref ->
+                      let eid = (fst (List.nth gm_ref.g_events i)) in
+                      if slack.(eid.id) <> 0 then
+                        raise (LifetimeCheckError [
+                          Text ("Violation of Control Group : " ^ gc.gid ^ " by ");
+                          Except.codespan_local (snd (List.nth gm_ref.g_events i));
+                          Text ("and the following member are not happening in the same cycle");
+                          Except.codespan_local (snd ge)
+                        ])
+                  ) gc.gmem
+              ) gmem.g_events
+            ) gc.gmem
+      | GateXor -> ()
+    )
+    ) g.gate_context

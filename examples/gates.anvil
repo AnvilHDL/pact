@@ -8,6 +8,11 @@ proc gates(ep : left ch){
     }test_ctrl;
     loop{
         let x = recv ep.req >>
-        set res := x
+        set res := x >>
+
+        let x = recv ep.req >>
+        cycle 4 >>
+        set res := 1'd1 >>
+        cycle 1
     }
 }
