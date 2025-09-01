@@ -588,6 +588,17 @@ and string_of_index (idx : index) : string =
   | Single e -> "Single (" ^ string_of_expr e.d ^ ")"
   | Range (e1, e2) -> "Range (" ^ string_of_expr e1.d ^ ", " ^ string_of_expr e2.d ^ ")"
 
+and string_of_gvar gv : string = 
+  match gv with
+  | Msg msg_spec -> "Msg " ^ string_of_msg_spec msg_spec
+  | Register (op, id) ->
+      let op_str = match op with
+        | GateRead -> "Read"
+        | GateWrite -> "Write"
+        | GateReadWrite -> "ReadWrite"
+      in
+      "Register " ^ op_str ^ " : " ^ id
+
 and string_of_data_type (dtype : data_type) : string =
   match dtype with
   | `Logic -> "Logic"

@@ -603,7 +603,19 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
 
 
 
-  let gate_check (_config : Config.compile_config) (_ci : cunit_info) (g : event_graph) =
+  let gate_check (config : Config.compile_config) (_ci : cunit_info) (g : event_graph) =
+  if config.verbose then
+    (
+    List.iter (fun gc ->
+      Printf.eprintf "Gate Context for: %s\n" gc.gid;
+      List.iter (fun gmem ->
+        Printf.eprintf "  Member: %s\n" (string_of_gvar gmem.mid);
+        List.iter (fun (ev, _) ->
+          Printf.eprintf "    Event: %d\n" ev.id
+        ) gmem.g_events
+      ) gc.gmem
+    ) g.gate_context
+    );
     let lookup_message msg = MessageCollection.lookup_message g.messages msg _ci.channel_classes in
     List.iter (fun gc ->
     (
@@ -621,7 +633,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                       let eid = (fst (List.nth gm_ref.g_events i)) in
                       if slack.(eid.id) <> 0 then
                         raise (LifetimeCheckError [
-                          Text ("Violation of Control Group : " ^ gc.gid ^ " by ");
+                          Text ("Potential Violation of Control Group (Coherence) "^ (string_of_gvar gm_ref.mid) ^ " and " ^ (string_of_gvar gmem.mid) ^ " for group " ^ gc.gid ^ " by ");
                           Except.codespan_local (snd (List.nth gm_ref.g_events i));
                           Text ("and the following member are not happening in the same cycle");
                           Except.codespan_local (snd ge)
@@ -629,6 +641,26 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                   ) gc.gmem
               ) gmem.g_events
             ) gc.gmem
-      | GateXor -> ()
+      | GateXor -> 
+        List.iter (fun gmem ->
+          List.iter (fun ge ->
+    
+            List.iter (fun gm_ref ->
+              if gm_ref.mid <> gmem.mid then
+                (
+                  List.iter (fun ge_ref ->
+                    let eid = (fst ge_ref) in
+                    if events_get_order g.events lookup_message eid (fst ge) |> is_strict_ordered |> not then
+                      raise (LifetimeCheckError [
+                        Text ("Potential Violation of Control Group (Mutual Exclusion) between " ^ (string_of_gvar gm_ref.mid)  ^ " and " ^ (string_of_gvar gmem.mid) ^ " for group " ^ gc.gid ^ " by ");
+                        Except.codespan_local (snd ge_ref);
+                        Text ("and the following member are happening in the same cycle");
+                        Except.codespan_local (snd ge)
+                      ])
+                  ) gm_ref.g_events
+                )
+            ) gc.gmem
+          ) gmem.g_events
+        ) gc.gmem
     )
-    ) g.gate_context
+  ) g.gate_context

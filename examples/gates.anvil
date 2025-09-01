@@ -3,16 +3,17 @@ chan ch{
 }
 proc gates(ep : left ch){
     reg res : logic;
+    reg rot : logic;
+    control<^>{
+        := res; :=rot
+    }test2_ctrl;
     control <&>{
         ep.req; :=res
     }test_ctrl;
     loop{
         let x = recv ep.req >>
-        set res := x >>
-
-        let x = recv ep.req >>
-        cycle 4 >>
-        set res := 1'd1 >>
+        (set res := x ;
+        set rot := 1'd1)>>
         cycle 1
     }
 }

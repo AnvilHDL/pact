@@ -24,7 +24,7 @@ let add_reg_assignment_event gate_context (lval) (ev) span : gate_class list=
   let full_reg_add_event (gcl: EventGraph.gate_class) id =
     let gm = List.map (fun mem ->
       match mem.mid with
-      | Register (op, id') when (op = GateWrite || op = GateReadWrite && id = id') -> 
+      | Register (_, id') when id = id' -> 
         {mem with g_events = (ev,span):: mem.g_events}
       | _ ->  mem
     ) gcl.gmem in
