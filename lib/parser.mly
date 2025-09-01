@@ -94,7 +94,7 @@
 %left XOR AND OR PLUS MINUS
 %left DOUBLE_LEFT_ABRACK DOUBLE_RIGHT_ABRACK
 %left PERIOD
-%left LEFT_BRACKET RIGHT_BRACKET
+%left LEFT_BRACKET
 %nonassoc TILDE UMINUS UAND UOR KEYWORD_IN
 %start <Lang.compilation_unit> cunit
 %%
@@ -180,7 +180,7 @@ proc_def_body:
     }
   }
 
-| KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = IDENT; SEMICOLON body = proc_def_body;
+| KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
   {
     let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv})::body.control_gates}
   }
@@ -876,5 +876,13 @@ gate_qualifiers:
 gate_vars:
   | msg_spec = message_specifier
     { Msg(msg_spec) : Lang.gate_vars }
-  | reg_ident = IDENT
-    { Register(reg_ident) : Lang.gate_vars }
+  | op = gate_op; reg_ident = IDENT
+    { Register(op,reg_ident) : Lang.gate_vars }
+
+gate_op:
+| ASTERISK
+  { Lang.GateRead }
+| COLON_EQ
+  { Lang.GateWrite }
+| ASTERISK; COLON_EQ
+  { Lang.GateReadWrite }

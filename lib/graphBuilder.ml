@@ -373,6 +373,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       (string_of_lvalue lval) (string_of_data_type lvi.lval_dtype) (string_of_data_type td.dtype) in
     check_dtype err_string (Some lvi.lval_dtype) td.dtype e.span ci.file_name ci.weak_typecasts;
     ctx.current.actions <- (RegAssign (lvi, td) |> tag_with_span e.span)::ctx.current.actions;
+    let g = GateHelper.add_reg_assignment_event graph.gate_context lval ctx.current  in
+    graph.gate_context <- g;
     Typing.cycles_data graph 1 ctx.current
   | Call (id, arg_list) ->
       let func = List.find_opt (fun (f: Lang.func_def) -> f.name = id) ci.func_defs
@@ -819,11 +821,13 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td.dtype) in
     check_dtype err_string (Some msg_dtype) td.dtype e.span ci.file_name ci.weak_typecasts;
     let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx.current in
+    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live in
     ctx.current.sustained_actions <-
       ({
         until = ntd.lt.live;
         ty = Send (send_pack.send_msg_spec, td)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
+    graph.gate_context <- gc;
     ntd
   | Recv recv_pack ->
     let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
@@ -835,8 +839,10 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
     graph.wires <- wires';
     let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx.current in
+    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live in
     ctx.current.sustained_actions <-
       ({until = ntd.lt.live; ty = Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx.current.sustained_actions;
+    graph.gate_context <- gc;
     ntd
   | Indirect (e', fieldname) ->
     let td = visit_expr graph ci ctx e' in
@@ -1030,6 +1036,12 @@ let recurse_unfold_for_checks ci shared_vars_info graph expr_node =
   done;
   !cur_expr
 
+let build_control_group (gates : Lang.control_gate) = 
+  {
+    gid = gates.gate_id.d;
+    gqual = gates.gate_class;
+    gmem = List.map (fun gm -> {mid = gm; g_events = []}) gates.gate_elements;
+  }
 (* Builds the graph representation for each process To Do: Add support for commands outside loop (be executed once or continuosly)*)
 let build_proc (config : Config.compile_config) sched module_name param_values
               (ci' : cunit_info) (proc : proc_def) : proc_graph =
@@ -1050,6 +1062,11 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       | _ -> acc
     ) ci'.macro_defs proc.params param_values in
 
+  
+  let control_groups = match proc.body with
+  | Extern _ -> []
+  | Native p -> List.map (fun g -> build_control_group g) p.control_gates 
+  in
   let ci = {
     file_name = ci'.file_name;
     typedefs = ci'.typedefs;
@@ -1058,9 +1075,6 @@ let build_proc (config : Config.compile_config) sched module_name param_values
     func_defs = ci'.func_defs;
     weak_typecasts = ci'.weak_typecasts;
   } in
-
-
-
 
   match proc.body with
   | Native body ->
@@ -1099,6 +1113,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           is_general_recursive = false;
           thread_codespan = e.span;
           comb = false;
+          gate_context = control_groups;
         } in
         (* Bruteforce treatment: just run twice *)
         let graph_opt = if (not config.disable_lt_checks) || config.two_round_graph then (
@@ -1203,4 +1218,13 @@ let syntax_tree_precheck (_config : Config.compile_config) cunit =
         check_dependent_msg msg1
       | _ -> ()
     ) cc.messages
-  ) cunit.channel_classes
+  ) cunit.channel_classes;
+
+  List.iter (fun (proc : proc_def) ->
+    match proc.body with
+    | Extern _ -> ()
+    | Native p ->
+      List.iter (fun g ->
+        GateHelper.gate_sanity_check g p.regs proc.args
+      )p.control_gates
+  ) cunit.procs

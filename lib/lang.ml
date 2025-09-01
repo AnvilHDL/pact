@@ -449,9 +449,15 @@ type shared_var_def = {
   assigning_thread: int;
   shared_lifetime: sig_lifetime;
 }
+type gate_op =
+  | GateRead
+  | GateWrite
+  | GateReadWrite
+
+
 type gate_vars =
   | Msg of message_specifier
-  | Register of identifier
+  | Register of gate_op*identifier
 
 
 type gate_qualifier =
@@ -459,7 +465,7 @@ type gate_qualifier =
   | GateXor
 
 type control_gate = {
-  gate_id : identifier;
+  gate_id : identifier ast_node;
   gate_class: gate_qualifier;
   gate_elements: gate_vars list;
 }

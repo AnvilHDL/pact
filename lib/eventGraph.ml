@@ -164,6 +164,19 @@ and sustained_action = {
   ty : sustained_action_type
 }
 
+(** members of the gate control groups  *)
+and gate_mem = {
+  mid : Lang.gate_vars;
+  mutable g_events : event list;
+}
+
+(** Individual control group  *)
+and gate_class = {
+  gid : Lang.identifier;
+  gqual : Lang.gate_qualifier;
+  gmem : gate_mem list
+}
+
 (** An event graph, usually corresponding to a single looping thread.
 All parameters in an event graph have been concretised. *)
 and event_graph = {
@@ -180,6 +193,7 @@ and event_graph = {
   thread_codespan : Lang.code_span;
   mutable is_general_recursive : bool; (** is this a general recursive graph? *)
   mutable comb : bool;
+  mutable gate_context : gate_class list;
 }
 
 type proc_graph = {

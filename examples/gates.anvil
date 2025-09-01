@@ -4,7 +4,7 @@ chan ch{
 proc gates(ep : left ch){
     reg res : logic;
     control <&>{
-        ep.req;res
+        ep.req; :=res
     }test_ctrl;
     loop{
         let x = recv ep.req >>
