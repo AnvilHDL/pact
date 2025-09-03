@@ -2,18 +2,19 @@ chan ch{
     left req : (logic@#1)
 }
 proc gates(ep : left ch){
-    reg res : logic;
+    reg res : logic[2];
     reg rot : logic;
     control<^>{
         := res; :=rot
     }test2_ctrl;
-    control <&>{
-        ep.req; :=res
-    }test_ctrl;
+    // control <&>{
+    //     ep.req; :=res
+    // }test_ctrl;
     loop{
         let x = recv ep.req >>
-        (set res := x ;
-        set rot := 1'd1)>>
+        let y = *res[0] >>
+        set res[1] := x >>
+        dprint "y = %d" (y) >>
         cycle 1
     }
 }

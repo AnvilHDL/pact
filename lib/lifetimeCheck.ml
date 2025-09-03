@@ -624,7 +624,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
             let base_len = List.length (List.hd gc.gmem).g_events in
             List.iter (fun gmem ->
               if List.length gmem.g_events <> base_len then
-                raise (Except.TypeError [Text ("Violation of Control Group : " ^ gc.gid ^ " by "); Except.codespan_local (snd (List.hd gmem.g_events))])
+                raise (Except.TypeError [Text ("Violation of Control Group : " ^ gc.gid ^ " by event len mismatch between "^ (string_of_int base_len) ^ " and " ^ (string_of_int (List.length gmem.g_events))); Except.codespan_local Lang.code_span_dummy])
             ) gc.gmem;
             List.iter (fun gmem ->
               List.iteri (fun i ge ->
