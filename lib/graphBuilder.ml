@@ -367,13 +367,11 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
   | Assign (lval, e') ->
     let td = visit_expr graph ci ctx e' in
     let lvi = lvalue_info_of graph ci ctx e.span lval in
-    (* if td.dtype <> lvi.lval_dtype then
-      raise (Except.TypeError [Text ("In assignment: Invalid data type for " ^ (string_of_lvalue lval) ^ ": expected " ^ (string_of_data_type lvi.lval_dtype) ^ " got " ^ (string_of_data_type td.dtype)); Except.codespan_local e.span]); *)
     let err_string = Printf.sprintf "In assignment: Invalid data type for %s: expected %s but got %s"
       (string_of_lvalue lval) (string_of_data_type lvi.lval_dtype) (string_of_data_type td.dtype) in
     check_dtype err_string (Some lvi.lval_dtype) td.dtype e.span ci.file_name ci.weak_typecasts;
     ctx.current.actions <- (RegAssign (lvi, td) |> tag_with_span e.span)::ctx.current.actions;
-    let g = GateHelper.add_reg_assignment_event graph.gate_context lval ctx.current e.span  in
+    let g = GateHelper.add_reg_event graph.gate_context lval ctx.current e.span Lang.GateWrite in
     graph.gate_context <- g;
     Typing.cycles_data graph 1 ctx.current
   | Call (id, arg_list) ->
@@ -815,6 +813,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let (dt,off,le,wires',w) = get_borrow_info 0 full_sz r.d_type wires'' w'' rlval in
     graph.wires <- wires';
     let borrow = {borrow_range = sub_reg_range reg_ident off le; borrow_start = ctx.current; borrow_source_span = e.span} in
+    let g = GateHelper.add_reg_event graph.gate_context rlval ctx.current e.span Lang.GateRead in
+    graph.gate_context <- g;
     {w = Some w; lt = EventGraphOps.lifetime_const ctx.current; reg_borrows = [borrow]; dtype = dt}
   | Debug op ->
     (
