@@ -607,7 +607,14 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
   if config.verbose then
     (
     List.iter (fun gc ->
-      Printf.eprintf "Gate Context for: %s\n" gc.gid;
+      
+      Printf.eprintf "Gate Context for: %s\n" (fst gc.gid);
+      if Option.is_some gc.trigger then(
+        let trig = Option.get gc.trigger in
+        Printf.eprintf "Trigger: %s\n" (string_of_gvar trig.mid);
+        List.iter (fun (ev, _) ->
+          Printf.eprintf "  Event: %d\n" ev.id
+        ) trig.g_events);
       List.iter (fun gmem ->
         Printf.eprintf "  Member: %s\n" (string_of_gvar gmem.mid);
         List.iter (fun (ev, _) ->
@@ -624,16 +631,16 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
             let base_len = List.length (List.hd gc.gmem).g_events in
             List.iter (fun gmem ->
               if List.length gmem.g_events <> base_len then
-                raise (Except.TypeError [Text ("Violation of Control Group : " ^ gc.gid ^ " by event len mismatch between "^ (string_of_int base_len) ^ " and " ^ (string_of_int (List.length gmem.g_events))); Except.codespan_local Lang.code_span_dummy])
+                raise (Except.TypeError [Text ("Violation of Control Group : " ^ (fst gc.gid) ^ " by event len mismatch between "^ (string_of_int base_len) ^ " and " ^ (string_of_int (List.length gmem.g_events))); Except.codespan_local Lang.code_span_dummy])
             ) gc.gmem;
             List.iter (fun gmem ->
               List.iteri (fun i ge ->
-                  let slack = GraphAnalysis.events_max_dist g.events lookup_message (fst ge) in
+                  (* let slack = GraphAnalysis.events_max_dist g.events lookup_message (fst ge) in *)
                   List.iter (fun gm_ref ->
-                      let eid = (fst (List.nth gm_ref.g_events i)) in
-                      if slack.(eid.id) <> 0 then
+                      (* let eid = (fst (List.nth gm_ref.g_events i)) in *)
+                      if (events_get_order g.events lookup_message (fst (List.nth gm_ref.g_events i)) (fst ge) <> AlwaysEq) then
                         raise (LifetimeCheckError [
-                          Text ("Potential Violation of Control Group (Coherence) "^ (string_of_gvar gm_ref.mid) ^ " and " ^ (string_of_gvar gmem.mid) ^ " for group " ^ gc.gid ^ " by ");
+                          Text ("Potential Violation of Control Group (Coherence) between " ^ (string_of_gvar gm_ref.mid)  ^ " and " ^ (string_of_gvar gmem.mid) ^ " for group " ^ (fst gc.gid) ^ " by ");
                           Except.codespan_local (snd (List.nth gm_ref.g_events i));
                           Text ("and the following member are not happening in the same cycle");
                           Except.codespan_local (snd ge)
@@ -652,7 +659,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                     let eid = (fst ge_ref) in
                     if events_get_order g.events lookup_message eid (fst ge) |> is_strict_ordered |> not then
                       raise (LifetimeCheckError [
-                        Text ("Potential Violation of Control Group (Mutual Exclusion) between " ^ (string_of_gvar gm_ref.mid)  ^ " and " ^ (string_of_gvar gmem.mid) ^ " for group " ^ gc.gid ^ " by ");
+                        Text ("Potential Violation of Control Group (Mutual Exclusion) between " ^ (string_of_gvar gm_ref.mid)  ^ " and " ^ (string_of_gvar gmem.mid) ^ " for group " ^ (fst gc.gid) ^ " by ");
                         Except.codespan_local (snd ge_ref);
                         Text ("and the following member are happening in the same cycle");
                         Except.codespan_local (snd ge)
@@ -662,5 +669,40 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
             ) gc.gmem
           ) gmem.g_events
         ) gc.gmem
+
+      | GateOr -> 
+              if Option.is_none  gc.trigger then raise (Except.TypeError [Text ("OR control group must have a trigger: " ^ (fst gc.gid)); Except.codespan_local (snd gc.gid)])
+              else (
+                let trigger = Option.get gc.trigger in
+                let fst_vio = ref [] in
+
+                List.iter (fun ge ->
+
+                      let ev = fst ge in
+                      let ev_local_match = ref false in
+                      List.iter (fun gmem ->
+                        List.iter(fun ge_pr ->
+                          let gev =fst ge_pr in
+                            if events_get_order g.events lookup_message gev ev = AlwaysEq then (Printf.eprintf "matched %d to %d\n" ev.id gev.id; ev_local_match := true)
+                        ) gmem.g_events
+                      ) gc.gmem;
+                    if !ev_local_match |> not then fst_vio := ge::!fst_vio
+                )trigger.g_events;
+
+                let empty = List.length !fst_vio = 0 in
+                if empty |> not then
+                (
+                    List.iter (fun ge ->
+                      let span = snd ge in
+                      raise (LifetimeCheckError [
+                        Text ("Potential Violation of Control Group (Liveness) for group " ^ (fst gc.gid) ^ " by event ");
+                        Except.codespan_local span;
+                        Text ("is not reachable from any member of the group");
+                        Except.codespan_local (snd gc.gid)
+                      ])
+                    ) !fst_vio
+                )
+              )
+      | _ -> ()
     )
-  ) g.gate_context
+      ) g.gate_context

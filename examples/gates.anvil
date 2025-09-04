@@ -24,10 +24,9 @@ proc gates(ep : left ch){
     control<^>{
         *tag; :=tag
     }tag_rd_write_ctrl_grp;
-    // control <||>{
-    //     trigger ep.rd_req,
-    //     ep.hit, ep.miss
-    // }
+    control <||> when <ep.rd_req>{
+        ep.hit; ep.miss
+    }liveness_ctrl_grp;
     // control<&><[p]>{
     //     :=mem[p]; :=tag[p]
     // }

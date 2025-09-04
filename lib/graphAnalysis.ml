@@ -445,6 +445,133 @@ let events_max_dist events lookup_message ev =
     );
   res
 
+
+let events_worst_max_dist events lookup_message ev =
+  let n = List.length events in
+
+  (* get the base array for res *)
+  let res = Array.make n (-event_distance_max) in
+  (* get the minimal distance for predecessor events -1 if not predecessor*)
+  let pred_min_dist = events_pred_min_dist ev in
+
+  let pred_min_dist_mxn = Array.length pred_min_dist in
+
+
+  let is_pred e' = e'.id < pred_min_dist_mxn && pred_min_dist.(e'.id) >= 0 in
+  let reachable = events_reachable events ev in
+  (* update_dist_if_reachable *)
+  let update_dist e v =
+    if res.(e.id) > v then
+      res.(e.id) <- v
+  in
+  let get_max_delay =
+    (* For Branch now we consider it to be worse *)
+    function
+    | `Cycles n -> n
+    | `Send m  ->
+      let msg_def = lookup_message m |> Option.get in
+      (
+        match msg_def.recv_sync with
+        | Static _ | Dependent _ -> 0
+        | _ -> event_distance_max
+      )
+    | `Recv m ->
+      let msg_def = lookup_message m |> Option.get in
+      (
+        match msg_def.send_sync with
+        | Static _ | Dependent _ -> 0
+        | _ -> event_distance_max
+      )
+    | `Sync _ -> event_distance_max (* oo *)
+  in
+  let get_min_delay =
+    function
+    | `Cycles n -> n
+    | `Send _ | `Recv _ | `Sync _ -> 0
+  in
+  let min2_outs = Array.make n
+    ((event_distance_max, 0), (event_distance_max, 0))
+  in
+  let update_min2_outs v e' e =
+    let ((m0, i0), (m1, i1)) = min2_outs.(e.id) in
+    let r =
+      if v < m0 then
+        ((v, e'.id), (m0, i0))
+      else if v < m1 then
+        ((m0, i0), (v, e'.id))
+      else
+        ((m0, i0), (m1, i1))
+    in
+    min2_outs.(e.id) <- r
+  in
+  let pick_filter_out ((m0, i0), (m1, _i1)) i =
+    if i0 <> i then m0
+    else m1
+  in
+  List.iter (fun e ->
+    if is_pred e then (
+      match e.source with
+      | `Seq (e', d') ->
+        update_min2_outs (-(pred_min_dist.(e.id) + (get_min_delay d'))) e e'
+      | `Root (Some (e', br_side)) ->
+        let other_side =
+          if br_side.branch_side_sel = 0 then 1 else 0
+        in
+        let other_side = List.nth br_side.owner_branch.branches_to other_side in
+        if not (is_pred other_side) || br_side.branch_side_sel = 0 then (
+          let m =
+            List.fold_left (fun v e ->
+              if is_pred e then
+                Int.min v (-pred_min_dist.(e.id))
+              else
+                v
+            ) event_distance_max br_side.owner_branch.branches_to
+          in
+          let e = List.hd br_side.owner_branch.branches_to in
+          update_min2_outs m e e'
+        )
+      | _ -> ()
+    )
+  ) events;
+  List.rev events
+    |> List.iter (fun e ->
+      if reachable.(e.id) then (
+        let pred = is_pred e in
+        if pred then res.(e.id) <- -pred_min_dist.(e.id)
+        else res.(e.id) <- event_distance_max;
+        (
+          (* propagate *)
+          match e.source with
+          | `Root None -> ()
+          | `Seq (e', d) -> (
+            let gap = get_max_delay d in
+            if res.(e'.id) = -event_distance_max then
+              update_dist e @@ -event_distance_max
+            else (
+              update_dist e @@ res.(e'.id) + gap;
+              (* we can look at other paths *)
+              let other_path = pick_filter_out min2_outs.(e'.id) e.id in
+              if other_path <> -event_distance_max then
+                update_dist e @@ other_path + gap
+            )
+          )
+          | `Later (e1, e2) ->
+            if not pred then
+              update_dist e @@ Int.max (res.(e1.id)) (res.(e2.id))
+          | `Branch (_, {branches_val; _}) ->
+            update_dist e
+              @@
+              List.fold_left
+                (fun v e -> Int.max v res.(e.id))
+                (- event_distance_max) branches_val
+          | `Root (Some (e', br_side)) ->
+            update_dist e res.(e'.id);
+            let first_br_to = List.hd br_side.owner_branch.branches_to in
+            update_dist e @@ pick_filter_out min2_outs.(e'.id) first_br_to.id
+        )
+      )
+    );
+  res
 let event_is_msg_end msg e =
   List.exists (fun ac_span ->
     match ac_span.d with
@@ -536,6 +663,25 @@ let events_get_order events lookup_message e1 e2 =
   in
   let mx_dist1 = (events_max_dist events lookup_message e1).(e2.id) |> to_sign in
   let mx_dist2 = (events_max_dist events lookup_message e2).(e1.id) |> to_sign in
+  match mx_dist1, mx_dist2 with
+  | -2, _ | _, -2 -> Unreachable
+  | 0, 0 -> AlwaysEq
+  | 1, 1 | -1, -1 -> Unordered
+  | -1, 0 | 0, 1 -> AfterEq
+  | -1, 1 -> After
+  | 1, 0 | 0, -1 -> BeforeEq
+  | 1, -1 -> Before
+  | _ -> Unreachable
+
+let events_get_worst_order events lookup_message e1 e2 =
+  let to_sign v =
+    if v = -event_distance_max then -2
+    else if v < 0 then -1
+    else if v > 0 then 1
+    else 0
+  in
+  let mx_dist1 = (events_worst_max_dist events lookup_message e1).(e2.id) |> to_sign in
+  let mx_dist2 = (events_worst_max_dist events lookup_message e2).(e1.id) |> to_sign in
   match mx_dist1, mx_dist2 with
   | -2, _ | _, -2 -> Unreachable
   | 0, 0 -> AlwaysEq

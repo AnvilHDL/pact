@@ -172,8 +172,9 @@ and gate_mem = {
 
 (** Individual control group  *)
 and gate_class = {
-  gid : Lang.identifier;
+  gid : (Lang.identifier * Lang.code_span);
   gqual : Lang.gate_qualifier;
+  trigger : gate_mem option;
   gmem : gate_mem list
 }
 

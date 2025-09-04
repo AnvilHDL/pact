@@ -122,3 +122,6 @@ val event_is_msg_end : Lang.message_specifier -> EventGraph.event -> bool
 
 (** Returns the list of immediate predecessors. *)
 val imm_preds : EventGraph.event -> EventGraph.event list
+
+val events_get_worst_order : EventGraph.event list -> (Lang.message_specifier -> Lang.message_def option)
+                        -> EventGraph.event -> EventGraph.event -> events_order

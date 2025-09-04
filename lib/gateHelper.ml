@@ -15,7 +15,16 @@ let gate_sanity_check g (reg_defs:reg_def ast_node list) (_channel_args: endpoin
     | Register (_, id) ->
       if not (reg_membership id) then
         raise (Except.TypeError [Text ("Gate control register not found " ^ id); Except.codespan_local g.gate_id.span])
-  ) g.gate_elements
+  ) g.gate_elements;
+  if Option.is_some g.trigger then
+    let trig = Option.get g.trigger in
+    match trig with
+    | Msg msg_spec ->
+      if not (ep_membership msg_spec) then
+        raise (Except.TypeError [Text ("Gate trigger endpoint/msg not found " ^ string_of_msg_spec msg_spec); Except.codespan_local g.gate_id.span])
+    | Register (_, id) ->
+      if not (reg_membership id) then
+        raise (Except.TypeError [Text ("Gate trigger register not found " ^ id); Except.codespan_local g.gate_id.span])
 
 
 
@@ -36,7 +45,17 @@ let add_reg_event gate_context (lval) (ev) span op : gate_class list=
         {mem with g_events = (ev,span):: mem.g_events}
       | _ ->  mem
     ) gcl.gmem in
-    {gcl with gmem = gm} in
+    let new_gc = {gcl with gmem = gm} in
+
+    if Option.is_some gcl.trigger then
+      let trig = Option.get gcl.trigger in
+      match trig.mid with
+      | Register (op', id') when (gate_equivalence op op') && id = id' ->
+        {new_gc with trigger = Some {trig with g_events = (ev, span):: trig.g_events}; gmem = gm}
+      | _ -> new_gc
+    else new_gc in
+
+
 
   let id = Lang.get_lvalue_reg_id lval in
   match lval with 
@@ -64,6 +83,13 @@ let add_msg_event gate_context (msg_spec: Lang.message_specifier) (ev) span : ga
         {mem with g_events = (ev, span):: mem.g_events}
       | _ ->  mem
     ) gcl.gmem in 
-    {gcl with gmem = gcm}
+    let new_gc = {gcl with gmem = gcm} in
+    if Option.is_some gcl.trigger then
+      let trig = Option.get gcl.trigger in
+      match trig.mid with
+      | Msg ms when ms = msg_spec ->
+        {new_gc with trigger = Some {trig with g_events = (ev, span):: trig.g_events}; gmem = gcm}
+      | _ -> new_gc
+    else new_gc
   ) gate_context
 

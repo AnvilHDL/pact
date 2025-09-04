@@ -42,6 +42,8 @@
 %token PERIOD               (* . *)
 %token KEYWORD_LOOP         (* loop *)
 %token KEYWORD_PROC         (* proc *)
+%token KEYWORD_WHEN         (* when *)
+%token DOLLAR               (* $ *)       
 %token KEYWORD_CHAN         (* chan *)
 %token KEYWORD_LEFT         (* left *)
 %token KEYWORD_RIGHT        (* right *)
@@ -182,7 +184,11 @@ proc_def_body:
 
 | KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
   {
-    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv})::body.control_gates}
+    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv;trigger  = None})::body.control_gates}
+  }
+| KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; trigger = triggercon; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
+  {
+    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv; trigger = Some trigger})::body.control_gates}
   }
 | KEYWORD_LOOP; reset_by = message_specifier?; LEFT_BRACE; thread_prog = node(expr); RIGHT_BRACE; body=proc_def_body //For thread definitions
   {
@@ -871,7 +877,11 @@ gate_qualifiers:
     { Lang.GateAnd }
   | XOR
     { Lang.GateXor }
-
+  | DOUBLE_OR
+    { Lang.GateOr }
+  | DOLLAR
+    { Lang.GateSecret }
+    
 
 gate_vars:
   | msg_spec = message_specifier
@@ -886,3 +896,8 @@ gate_op:
   { Lang.GateWrite }
 | ASTERISK; COLON_EQ
   { Lang.GateReadWrite }
+
+triggercon:
+| KEYWORD_WHEN; LEFT_ABRACK cond = gate_vars RIGHT_ABRACK
+  { cond }
+;

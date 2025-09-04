@@ -575,6 +575,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       reg_borrows = [];
       dtype = `Logic;
     } in
+    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ctx.current e.span  in
+    graph.gate_context <- gc;
     graph.wires <- wires;
 
     (* TODO: dedup *)
@@ -620,8 +622,10 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       w = Some w_cond;
       lt = {live = ctx.current; dead = [(ctx.current, `Cycles 1)]};
       reg_borrows = [];
-      dtype = `Logic;
+      dtype = `Logic; 
     } in
+    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ctx.current e.span in
+    graph.gate_context <- gc;
     graph.wires <- wires;
 
     (* TODO: dedup *)
@@ -1061,8 +1065,9 @@ let recurse_unfold_for_checks ci shared_vars_info graph expr_node =
 
 let build_control_group (gates : Lang.control_gate) = 
   {
-    gid = gates.gate_id.d;
+    gid = (gates.gate_id.d, gates.gate_id.span);
     gqual = gates.gate_class;
+    trigger = if Option.is_some gates.trigger then Some (let t= (Option.get gates.trigger) in {mid = t; g_events = []}) else None;
     gmem = List.map (fun gm -> {mid = gm; g_events = []}) gates.gate_elements;
   }
 (* Builds the graph representation for each process To Do: Add support for commands outside loop (be executed once or continuosly)*)

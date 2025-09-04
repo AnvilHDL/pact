@@ -1,9 +1,10 @@
 (menhir
-(flags --explain)
+ (flags --explain --table)
  (modules parser))
 
 (ocamllex lexer)
 
 (library
  (name anvil)
- (public_name anvil))
+ (public_name anvil)
+ (libraries menhirLib))

@@ -463,11 +463,14 @@ type gate_vars =
 type gate_qualifier =
   | GateAnd
   | GateXor
+  | GateOr
+  | GateSecret
 
 type control_gate = {
   gate_id : identifier ast_node;
   gate_class: gate_qualifier;
   gate_elements: gate_vars list;
+  trigger : gate_vars option;  (* optional trigger variable *)
 }
 
 (** Process body. *)
