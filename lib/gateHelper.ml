@@ -44,8 +44,16 @@ let add_reg_event gate_context (lval) (ev) span op : gate_class list=
       List.map (fun gcl ->
         full_reg_add_event gcl id op
       ) gate_context
-    | _ -> gate_context
-
+    | Indexed (lval,_) ->
+      let id = Lang.get_lvalue_reg_id lval in
+      List.map (fun gcl ->
+        full_reg_add_event gcl id op
+      ) gate_context
+    | Indirected (lval, _) ->
+      let id = Lang.get_lvalue_reg_id lval in
+      List.map (fun gcl ->
+        full_reg_add_event gcl id op
+      ) gate_context
 
 
 let add_msg_event gate_context (msg_spec: Lang.message_specifier) (ev) span : gate_class list = 

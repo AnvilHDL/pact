@@ -9,3 +9,4 @@
 **/obj_dir/
 **/logs/
 lib/self-notes.md
+**/*.anvil.sv

@@ -8,16 +8,23 @@ all: obj_dir/V$(MODULE_NAME)
 
 .PHONY: run clean
 
+ANVIL_FLAGS= --
 ifdef LTOFF
-    ANVIL_FLAGS = -- -disable-lt-checks
-else
-    ANVIL_FLAGS = -- -O 0
+    ANVIL_FLAGS += -disable-lt-checks
 endif
 
-$(MODULE_NAME).sv: $(MODULE_NAME).anvil
+ifdef DEBUG
+	ANVIL_FLAGS += -verbose
+endif
+
+ifdef NOOPT
+	ANVIL_FLAGS += -O 0
+endif
+
+$(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
 	dune exec anvil $(ANVIL_FLAGS) $< > $@
 
-obj_dir/V$(MODULE_NAME): $(MODULE_NAME)_driver.cpp $(MODULE_NAME).sv
+obj_dir/V$(MODULE_NAME): $(MODULE_NAME)_driver.cpp $(MODULE_NAME).anvil.sv
 	verilator --cc --exe --build $(VERILATOR_FLAGS) $^
 
 $(MODULE_NAME)_driver.cpp: $(TEST_DRIVER)
@@ -27,4 +34,4 @@ run: obj_dir/V$(MODULE_NAME)
 	@ $< $(TIMEOUT)
 
 clean:
-	rm -rf $(MODULE_NAME).sv $(MODULE_NAME)_driver.cpp obj_dir
+	rm -rf *.anvil.sv *_driver.cpp obj_dir

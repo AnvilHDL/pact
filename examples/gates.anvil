@@ -1,20 +1,55 @@
+struct  wr_pack_t{
+    addr : logic[16],
+    data : logic[8]
+}
+
 chan ch{
-    left req : (logic@#1)
+    left rd_req : (logic[16]@#1),
+    right hit : (logic[8]@#1) @dyn - @#1,
+    right miss : (logic@#1) @dyn - @#1,
+    left wr_req : (wr_pack_t@#1)
 }
 proc gates(ep : left ch){
-    reg res : logic;
-    reg rot : logic;
+    reg mem : logic[32][8];
+    reg tag : logic[32][11];
+    control<&>{
+        := mem; :=tag
+    }write_ctrl_grp;
+    control<&>{
+        ep.hit; *mem
+    }hit_ctrl_grp;
     control<^>{
-        := res; *rot
-    }test2_ctrl;
-    control <&>{
-        ep.req; :=res
-    }test_ctrl;
+        *mem; :=mem
+    }mem_rd_write_ctrl_grp;
+    control<^>{
+        *tag; :=tag
+    }tag_rd_write_ctrl_grp;
+    // control <||>{
+    //     trigger ep.rd_req,
+    //     ep.hit, ep.miss
+    // }
+    // control<&><[p]>{
+    //     :=mem[p]; :=tag[p]
+    // }
+
+
     loop{
-        let x = recv ep.req >>
-        set res := x >>
-        let y = *rot >>
-        dprint "y = %d" (y) >>
-        cycle 1
+        try rd_addr = recv ep.rd_req{
+            let idx = rd_addr[0+:5] >>
+            let tag = rd_addr[5+:11] >>
+            if(tag == *tag[idx]){
+                send ep.hit(*mem[idx])
+            } >>
+            cycle 1
+        }
+        else try wr_packet = recv ep.wr_req{
+            let idx = wr_packet.addr[0+:5] >>
+            let tag = wr_packet.addr[5+:11] >>
+            set tag[idx] := tag;
+            set mem[idx] := wr_packet.data
+        }
+        else{
+            cycle 1
+        }
     }
 }
