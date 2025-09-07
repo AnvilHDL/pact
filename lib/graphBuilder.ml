@@ -790,7 +790,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     List.map snd tds |> Typing.merged_data graph (Some w) new_dtype ctx.current
   | Read rlval ->
     let reg_ident = Lang.get_lvalue_reg_id rlval in
-    Printf.eprintf "Reading register %s\n" reg_ident;
     let r = Utils.StringMap.find_opt reg_ident graph.regs
       |> unwrap_or_err ("Undefined register " ^ reg_ident) e.span in    
     let (wires'', w'') = WireCollection.add_reg_read graph.thread_id ci.typedefs ci.macro_defs r graph.wires in
@@ -1152,7 +1151,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           tmp_graph.last_event_id <- (EventGraphOps.find_last_event tmp_graph).id;
           tmp_graph.is_general_recursive <- tmp_graph.last_event_id <> td.lt.live.id;
           (* Optimisation *)
-          LifetimeCheck.gate_check config ci tmp_graph;
+          LifetimeCheck.gate_check config ci tmp_graph;          
           let tmp_graph = GraphOpt.optimize config true ci tmp_graph in
           if not config.disable_lt_checks then (
             LifetimeCheck.lifetime_check config ci tmp_graph

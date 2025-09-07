@@ -663,3 +663,31 @@ let find_all_paths_prime (graph_prime : event_graph_prime) (from_id : int) (to_i
     )
   in
   find_paths from_id [] []
+
+let filter_paths_with_event (paths: int list list) (event_ids: int list) : int list list =
+  let filter_path = List.filter (
+          fun p -> List.exists(fun ge -> List.mem ge p)event_ids
+  ) paths
+  in 
+  filter_path
+  (* filter_path
+  now start the path from where event id matches *)
+  (* let trim_path p =
+    match List.find_opt (fun ge -> List.mem ge p) event_ids with
+    | None -> []  (* This case should not happen due to prior filtering *)
+    | Some first_event ->
+        let rec aux acc = function
+          | [] -> List.rev acc
+          | x::xs ->
+              if x = first_event then List.rev (x::acc)
+              else aux (x::acc) xs
+        in
+        aux [] p
+  in
+  let trimmed_paths = List.map trim_path filter_path in
+  Printf.eprintf "The trimmed paths are  of len %d \n" (List.length trimmed_paths);
+  List.iter(fun p -> Printf.eprintf "original path : " ;List.iter (fun ge -> Printf.printf "%d " ge) p; Printf.eprintf "\n") paths;
+  List.iter(
+    fun p -> Printf.eprintf "trimmed path : " ;List.iter (fun ge -> Printf.printf "%d " ge) p; Printf.eprintf "\n"
+  ) trimmed_paths;
+  trimmed_paths *)

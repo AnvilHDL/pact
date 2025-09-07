@@ -125,3 +125,12 @@ let string_of_actions action =
   | PutShared _ -> "PutShared"
   | ImmediateRecv _ -> "ImmediateRecv"
   | ImmediateSend _ -> "ImmediateSend"
+
+
+let print_paths paths = 
+
+List.iter (fun p -> 
+                      Printf.eprintf "Path: ";
+                      List.iter (fun id -> Printf.eprintf "%d " id) p;
+                      Printf.eprintf "\n"
+                    ) paths

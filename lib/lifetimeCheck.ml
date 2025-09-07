@@ -210,18 +210,6 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     Printf.eprintf "==== Lifetime Check Details ====\n";
     EventGraphOps.print_graph g;
     EventGraphOps.print_dot_graph g Out_channel.stderr;
-    (* let g' = GraphAnalysis.transform_event_graph g in *)
-    (* EventGraphOps.print_dot_graph_from_event_graph_prime g' Out_channel.stderr;
-    let path = GraphAnalysis.find_all_paths_prime g' 0 10 in
-    List.iter (fun p ->
-      Printf.eprintf "Path: ";
-      List.iter (fun id -> Printf.eprintf "%d " id) p;
-      Printf.eprintf "\n"
-    ) path;
-    let reachable = GraphAnalysis.get_all_reachable_prime g' 5 in 
-    Printf.eprintf "All reachable from 5: ";
-    List.iter (fun id -> Printf.eprintf "%d " id) reachable;
-    Printf.eprintf "\n" *)
   );
 
   GraphAnalysis.events_prepare_outs g.events;
@@ -637,10 +625,19 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     ) g.gate_context
     );
     let lookup_message msg = MessageCollection.lookup_message g.messages msg _ci.channel_classes in
+    let g' = GraphAnalysis.transform_event_graph g in
+    let paths = GraphAnalysis.find_all_paths_prime g' 0 (List.length g.events - 1) in
+    if config.verbose then
+      (
+        Printf.eprintf "All paths in the graph:\n";
+        EventGraphOps.print_paths paths;
+        EventGraphOps.print_dot_graph_from_event_graph_prime g' Out_channel.stderr
+      );
     List.iter (fun gc ->
     (
       match gc.gqual with
       | GateAnd ->
+            if Option.is_none gc.trigger then (
             let base_len = List.length (List.hd gc.gmem).g_events in
             List.iter (fun gmem ->
               if List.length gmem.g_events <> base_len then
@@ -661,6 +658,10 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                   ) gc.gmem
               ) gmem.g_events
             ) gc.gmem
+            )
+            else (
+              Printf.eprintf "Gate AND with trigger will be implemented soon\n"
+            )
       | GateXor -> 
         List.iter (fun gmem ->
           List.iter (fun ge ->
@@ -686,35 +687,35 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       | GateOr -> 
               if Option.is_none  gc.trigger then raise (Except.TypeError [Text ("OR control group must have a trigger: " ^ (fst gc.gid)); Except.codespan_local (snd gc.gid)])
               else (
-                let trigger = Option.get gc.trigger in
-                let fst_vio = ref [] in
-
-                List.iter (fun ge ->
-
-                      let ev = fst ge in
-                      let ev_local_match = ref false in
-                      List.iter (fun gmem ->
-                        List.iter(fun ge_pr ->
-                          let gev =fst ge_pr in
-                            if events_get_order g.events lookup_message gev ev = AlwaysEq then (Printf.eprintf "matched %d to %d\n" ev.id gev.id; ev_local_match := true)
+            
+                    let trigger = Option.get gc.trigger in
+                    let trigger_event_ids = List.map (fun ge -> (fst ge).id) trigger.g_events in
+                    let all_trigger_path = GraphAnalysis.filter_paths_with_event paths trigger_event_ids in
+                    
+                    
+                    Printf.eprintf "All trigger paths: ";
+                    List.iter (fun id -> Printf.eprintf "%d " id) trigger_event_ids;
+                    Printf.eprintf "\n";
+                    List.iter (fun p ->
+                      Printf.eprintf "Path: ";
+                    List.iter (fun id -> Printf.eprintf "%d " id) p;
+                    Printf.eprintf "\n"
+                  ) all_trigger_path;
+                    let found_all = List.for_all (fun p ->
+                      List.for_all (fun gmem ->
+                        List.exists (fun ge ->
+                          List.mem (fst ge).id p
                         ) gmem.g_events
-                      ) gc.gmem;
-                    if !ev_local_match |> not then fst_vio := ge::!fst_vio
-                )trigger.g_events;
+                      ) gc.gmem
+                    ) all_trigger_path in
 
-                let empty = List.length !fst_vio = 0 in
-                if empty |> not then
-                (
-                    List.iter (fun ge ->
-                      let span = snd ge in
-                      raise (LifetimeCheckError [
-                        Text ("Potential Violation of Control Group (Liveness) for group " ^ (fst gc.gid) ^ " by event ");
-                        Except.codespan_local span;
-                        Text ("is not reachable from any member of the group");
-                        Except.codespan_local (snd gc.gid)
-                      ])
-                    ) !fst_vio
-                )
+                        if found_all |> not then
+                          raise (LifetimeCheckError [
+                            Text ("Potential Violation of Control Group (Liveness) for group " ^ (fst gc.gid) ^ " by event ");
+                            Except.codespan_local (List.hd trigger.g_events |> snd);
+                            Text ("Trigger " ^ (Lang.string_of_gvar trigger.mid) ^ " is not followed by any member of the group");
+                            Except.codespan_local (snd gc.gid)
+                        ])
               )
       | _ -> ()
     )
