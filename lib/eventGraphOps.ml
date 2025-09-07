@@ -81,6 +81,36 @@ let print_dot_graph g out =
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH IN DOT FORMAT\n"
 
+let print_dot_graph_from_event_graph_prime (g: event_graph_prime) out =
+  Printf.fprintf out "// BEGIN Prime GRAPH IN DOT FORMAT";
+  Printf.fprintf out "// can render to PDF with 'dot -Tpdf -O <filename>'\n";
+  Printf.fprintf out "digraph {\n";
+  let ev_node_name ev_id = Printf.sprintf "event%d" ev_id in
+  let print_edge e1 e2 label =
+    Printf.fprintf out "  %s -> %s [label = \"%s\"];\n"
+      (ev_node_name e1)
+      (ev_node_name e2)
+      label
+  in
+  List.iter (fun ev ->
+    List.iter (fun (child : event_child) ->
+      match child.edge with
+      | `Later _ -> print_edge ev.ev_id child.cid "L"
+      | `Seq (_, l) ->
+        (match l with
+        | `Cycles n -> print_edge ev.ev_id child.cid (Printf.sprintf "#%d" n)
+        | `Send _ -> print_edge ev.ev_id child.cid "S"
+        | `Recv _ -> print_edge ev.ev_id child.cid "R"
+        | `Sync _ -> print_edge ev.ev_id child.cid "G"
+        )
+      | `Branch _ -> print_edge ev.ev_id child.cid "B"
+      | `Root _ -> print_edge ev.ev_id child.cid "R"
+    ) ev.child;
+  ) g.event_nodes;
+
+  Printf.fprintf out "}\n";
+  Printf.fprintf out "// END Prime GRAPH IN DOT FORMAT\n"
+
 let find_last_event g =
   List.find (
     fun e ->

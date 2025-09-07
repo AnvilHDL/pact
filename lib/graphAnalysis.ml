@@ -256,6 +256,7 @@ let events_pred_min_dist ev =
       match e.source with
       | `Seq (e', d) -> (
         let gap =
+          (* if we want max delay of pred we change send recv to <max> *)
           match d with
           | `Cycles n -> n
           | `Send _ | `Recv _
@@ -293,6 +294,7 @@ let events_pred_min_dist ev =
     );
   res
 
+(* E G (ev -> e) *)
 let events_reachable events ev =
   let n = List.length events in
   let event_is_reachable = Array.make n true in
@@ -445,133 +447,6 @@ let events_max_dist events lookup_message ev =
     );
   res
 
-
-let events_worst_max_dist events lookup_message ev =
-  let n = List.length events in
-
-  (* get the base array for res *)
-  let res = Array.make n (-event_distance_max) in
-  (* get the minimal distance for predecessor events -1 if not predecessor*)
-  let pred_min_dist = events_pred_min_dist ev in
-
-  let pred_min_dist_mxn = Array.length pred_min_dist in
-
-
-  let is_pred e' = e'.id < pred_min_dist_mxn && pred_min_dist.(e'.id) >= 0 in
-  let reachable = events_reachable events ev in
-  (* update_dist_if_reachable *)
-  let update_dist e v =
-    if res.(e.id) > v then
-      res.(e.id) <- v
-  in
-  let get_max_delay =
-    (* For Branch now we consider it to be worse *)
-    function
-    | `Cycles n -> n
-    | `Send m  ->
-      let msg_def = lookup_message m |> Option.get in
-      (
-        match msg_def.recv_sync with
-        | Static _ | Dependent _ -> 0
-        | _ -> event_distance_max
-      )
-    | `Recv m ->
-      let msg_def = lookup_message m |> Option.get in
-      (
-        match msg_def.send_sync with
-        | Static _ | Dependent _ -> 0
-        | _ -> event_distance_max
-      )
-    | `Sync _ -> event_distance_max (* oo *)
-  in
-  let get_min_delay =
-    function
-    | `Cycles n -> n
-    | `Send _ | `Recv _ | `Sync _ -> 0
-  in
-  let min2_outs = Array.make n
-    ((event_distance_max, 0), (event_distance_max, 0))
-  in
-  let update_min2_outs v e' e =
-    let ((m0, i0), (m1, i1)) = min2_outs.(e.id) in
-    let r =
-      if v < m0 then
-        ((v, e'.id), (m0, i0))
-      else if v < m1 then
-        ((m0, i0), (v, e'.id))
-      else
-        ((m0, i0), (m1, i1))
-    in
-    min2_outs.(e.id) <- r
-  in
-  let pick_filter_out ((m0, i0), (m1, _i1)) i =
-    if i0 <> i then m0
-    else m1
-  in
-  List.iter (fun e ->
-    if is_pred e then (
-      match e.source with
-      | `Seq (e', d') ->
-        update_min2_outs (-(pred_min_dist.(e.id) + (get_min_delay d'))) e e'
-      | `Root (Some (e', br_side)) ->
-        let other_side =
-          if br_side.branch_side_sel = 0 then 1 else 0
-        in
-        let other_side = List.nth br_side.owner_branch.branches_to other_side in
-        if not (is_pred other_side) || br_side.branch_side_sel = 0 then (
-          let m =
-            List.fold_left (fun v e ->
-              if is_pred e then
-                Int.min v (-pred_min_dist.(e.id))
-              else
-                v
-            ) event_distance_max br_side.owner_branch.branches_to
-          in
-          let e = List.hd br_side.owner_branch.branches_to in
-          update_min2_outs m e e'
-        )
-      | _ -> ()
-    )
-  ) events;
-  List.rev events
-    |> List.iter (fun e ->
-      if reachable.(e.id) then (
-        let pred = is_pred e in
-        if pred then res.(e.id) <- -pred_min_dist.(e.id)
-        else res.(e.id) <- event_distance_max;
-        (
-          (* propagate *)
-          match e.source with
-          | `Root None -> ()
-          | `Seq (e', d) -> (
-            let gap = get_max_delay d in
-            if res.(e'.id) = -event_distance_max then
-              update_dist e @@ -event_distance_max
-            else (
-              update_dist e @@ res.(e'.id) + gap;
-              (* we can look at other paths *)
-              let other_path = pick_filter_out min2_outs.(e'.id) e.id in
-              if other_path <> -event_distance_max then
-                update_dist e @@ other_path + gap
-            )
-          )
-          | `Later (e1, e2) ->
-            if not pred then
-              update_dist e @@ Int.max (res.(e1.id)) (res.(e2.id))
-          | `Branch (_, {branches_val; _}) ->
-            update_dist e
-              @@
-              List.fold_left
-                (fun v e -> Int.max v res.(e.id))
-                (- event_distance_max) branches_val
-          | `Root (Some (e', br_side)) ->
-            update_dist e res.(e'.id);
-            let first_br_to = List.hd br_side.owner_branch.branches_to in
-            update_dist e @@ pick_filter_out min2_outs.(e'.id) first_br_to.id
-        )
-      )
-    );
-  res
 let event_is_msg_end msg e =
   List.exists (fun ac_span ->
     match ac_span.d with
@@ -673,25 +548,6 @@ let events_get_order events lookup_message e1 e2 =
   | 1, -1 -> Before
   | _ -> Unreachable
 
-let events_get_worst_order events lookup_message e1 e2 =
-  let to_sign v =
-    if v = -event_distance_max then -2
-    else if v < 0 then -1
-    else if v > 0 then 1
-    else 0
-  in
-  let mx_dist1 = (events_worst_max_dist events lookup_message e1).(e2.id) |> to_sign in
-  let mx_dist2 = (events_worst_max_dist events lookup_message e2).(e1.id) |> to_sign in
-  match mx_dist1, mx_dist2 with
-  | -2, _ | _, -2 -> Unreachable
-  | 0, 0 -> AlwaysEq
-  | 1, 1 | -1, -1 -> Unordered
-  | -1, 0 | 0, 1 -> AfterEq
-  | -1, 1 -> After
-  | 1, 0 | 0, -1 -> BeforeEq
-  | 1, -1 -> Before
-  | _ -> Unreachable
-
 let graph_owned_regs g =
   let res = ref [] in
   List.iter (fun e ->
@@ -706,3 +562,104 @@ let graph_owned_regs g =
 
 let message_is_immediate msg is_send =
   (is_send && msg.recv_sync <> Dynamic) || (not is_send && msg.send_sync <> Dynamic)
+
+let transform_event_graph (g:event_graph): event_graph_prime =
+  (* Create a map from event id to children *)
+  let children_map = Hashtbl.create (List.length g.events) in
+  
+  (* Initialize empty child lists for all events *)
+  List.iter (fun (e : event) -> Hashtbl.add children_map e.id []) g.events;
+  
+  (* For each event, add it as a child to its parents based on event_source *)
+  List.iter (fun (e : event) ->
+    let add_child_to_parent parent_id =
+      let current_children = Hashtbl.find children_map parent_id in
+      let new_child = { cid = e.id; edge = e.source } in
+      Hashtbl.replace children_map parent_id (new_child :: current_children)
+    in
+    
+    match e.source with
+    | `Root None -> () (* Root has no parents *)
+    | `Root (Some (parent, _)) -> add_child_to_parent parent.id
+    | `Seq (parent, _) -> add_child_to_parent parent.id
+    | `Later (parent1, parent2) -> 
+        add_child_to_parent parent1.id;
+        add_child_to_parent parent2.id
+    | `Branch (_, {branches_val; _}) ->
+        (* For branch nodes, each branch value is a parent *)
+        List.iter (fun (parent : event) -> add_child_to_parent parent.id) branches_val
+  ) g.events;
+  
+  (* Create the transformed events *)
+  let events_prime = List.map (fun (e : event) ->
+    let children = Hashtbl.find children_map e.id |> List.rev in
+    { ev_id = e.id; child = children }
+  ) g.events in
+
+  { event_nodes = events_prime }
+
+
+
+
+(* Check if there exists a path from event with id 'from_id' to event with id 'to_id' *)
+let exists_path_prime (graph_prime : event_graph_prime) (from_id : int) (to_id : int) : bool =
+  let visited = Hashtbl.create (List.length graph_prime.event_nodes) in
+  let event_map = 
+    List.fold_left (fun acc ev -> Hashtbl.add acc ev.ev_id ev; acc) 
+                   (Hashtbl.create (List.length graph_prime.event_nodes)) 
+                   graph_prime.event_nodes in
+
+  let rec dfs current_id =
+    if current_id = to_id then true
+    else if Hashtbl.mem visited current_id then false
+    else (
+      Hashtbl.add visited current_id ();
+      match Hashtbl.find_opt event_map current_id with
+      | None -> false
+      | Some event_prime -> List.exists (fun (child : event_child) -> dfs child.cid) event_prime.child
+    )
+  in
+  dfs from_id
+
+(* Get all events reachable from the given event id *)
+let get_all_reachable_prime (graph_prime : event_graph_prime) (from_id : int) : int list =
+  let visited = Hashtbl.create (List.length graph_prime.event_nodes) in
+  let reachable = ref [] in
+  let event_map = 
+    List.fold_left (fun acc ev -> Hashtbl.add acc ev.ev_id ev; acc) 
+                   (Hashtbl.create (List.length graph_prime.event_nodes)) 
+                   graph_prime.event_nodes in
+
+  let rec dfs current_id =
+    if not (Hashtbl.mem visited current_id) then (
+      Hashtbl.add visited current_id ();
+      reachable := current_id :: !reachable;
+      match Hashtbl.find_opt event_map current_id with
+      | None -> ()
+      | Some event_prime -> List.iter (fun (child : event_child) -> dfs child.cid) event_prime.child
+    )
+  in
+  dfs from_id;
+  List.rev !reachable
+
+(* Find all paths from 'from_id' to 'to_id' (returns list of path as list of event ids) *)
+let find_all_paths_prime (graph_prime : event_graph_prime) (from_id : int) (to_id : int) : int list list =
+  let event_map = 
+    List.fold_left (fun acc ev -> Hashtbl.add acc ev.ev_id ev; acc) 
+                   (Hashtbl.create (List.length graph_prime.event_nodes)) 
+                   graph_prime.event_nodes in
+
+  let rec find_paths current_id path visited =
+    if current_id = to_id then [List.rev (current_id :: path)]
+    else if List.mem current_id visited then []
+    else (
+      match Hashtbl.find_opt event_map current_id with
+      | None -> []
+      | Some event_prime -> 
+          List.fold_left (fun acc (child : event_child) ->
+            let new_paths = find_paths child.cid (current_id :: path) (current_id :: visited) in
+            acc @ new_paths
+          ) [] event_prime.child
+    )
+  in
+  find_paths from_id [] []

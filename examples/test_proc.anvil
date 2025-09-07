@@ -11,7 +11,5 @@ proc test_proc(){
         else{
             cycle 5
         }
-
-
     }
 }

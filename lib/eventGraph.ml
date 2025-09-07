@@ -226,3 +226,16 @@ exception LifetimeCheckError of Except.error_message
 
 let event_graph_error_default text span = let open Except in EventGraphError [Text text; codespan_local span]
 
+
+type event_child = {
+  cid : int;
+  edge : event_source;
+}
+type event_prime = {
+  ev_id : int;
+  child : event_child list;
+}
+
+type event_graph_prime = {
+  event_nodes : event_prime list;
+}

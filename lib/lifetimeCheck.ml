@@ -209,7 +209,19 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
   if config.verbose then (
     Printf.eprintf "==== Lifetime Check Details ====\n";
     EventGraphOps.print_graph g;
-    EventGraphOps.print_dot_graph g Out_channel.stderr
+    EventGraphOps.print_dot_graph g Out_channel.stderr;
+    (* let g' = GraphAnalysis.transform_event_graph g in *)
+    (* EventGraphOps.print_dot_graph_from_event_graph_prime g' Out_channel.stderr;
+    let path = GraphAnalysis.find_all_paths_prime g' 0 10 in
+    List.iter (fun p ->
+      Printf.eprintf "Path: ";
+      List.iter (fun id -> Printf.eprintf "%d " id) p;
+      Printf.eprintf "\n"
+    ) path;
+    let reachable = GraphAnalysis.get_all_reachable_prime g' 5 in 
+    Printf.eprintf "All reachable from 5: ";
+    List.iter (fun id -> Printf.eprintf "%d " id) reachable;
+    Printf.eprintf "\n" *)
   );
 
   GraphAnalysis.events_prepare_outs g.events;
@@ -604,6 +616,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
 
 
   let gate_check (config : Config.compile_config) (_ci : cunit_info) (g : event_graph) =
+
   if config.verbose then
     (
     List.iter (fun gc ->
