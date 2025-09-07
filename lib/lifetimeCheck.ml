@@ -692,15 +692,16 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                     let trigger_event_ids = List.map (fun ge -> (fst ge).id) trigger.g_events in
                     let all_trigger_path = GraphAnalysis.filter_paths_with_event paths trigger_event_ids in
                     
-                    
-                    Printf.eprintf "All trigger paths: ";
-                    List.iter (fun id -> Printf.eprintf "%d " id) trigger_event_ids;
-                    Printf.eprintf "\n";
-                    List.iter (fun p ->
-                      Printf.eprintf "Path: ";
-                    List.iter (fun id -> Printf.eprintf "%d " id) p;
-                    Printf.eprintf "\n"
-                  ) all_trigger_path;
+                    if(config.verbose) then(
+                        Printf.eprintf "Gate OR check triggers (Event ids) for the group %s are: " (fst gc.gid);
+                        List.iter (fun id -> Printf.eprintf "%d " id) trigger_event_ids;
+                        Printf.eprintf "\n All possible paths between two triggers are: \n";
+                        List.iter (fun p ->
+                          Printf.eprintf "Path: ";
+                        List.iter (fun id -> Printf.eprintf "%d " id) p;
+                        Printf.eprintf "\n"
+                      ) all_trigger_path;
+                    );
                     let found_all = List.for_all (fun p ->
                       List.for_all (fun gmem ->
                         List.exists (fun ge ->

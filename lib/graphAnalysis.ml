@@ -669,25 +669,30 @@ let filter_paths_with_event (paths: int list list) (event_ids: int list) : int l
           fun p -> List.exists(fun ge -> List.mem ge p)event_ids
   ) paths
   in 
-  filter_path
-  (* filter_path
-  now start the path from where event id matches *)
-  (* let trim_path p =
-    match List.find_opt (fun ge -> List.mem ge p) event_ids with
-    | None -> []  (* This case should not happen due to prior filtering *)
-    | Some first_event ->
-        let rec aux acc = function
-          | [] -> List.rev acc
-          | x::xs ->
-              if x = first_event then List.rev (x::acc)
-              else aux (x::acc) xs
-        in
-        aux [] p
+  let split_path_on_events p =
+    let rec aux acc current = function
+      | [] -> if current = [] then List.rev acc else List.rev (List.rev current :: acc)
+      | x :: xs ->
+          if List.mem x event_ids then
+            if current = [] then aux acc [x] xs
+            else aux (List.rev current :: acc) [x] xs
+          else
+            aux acc (x :: current) xs
+    in
+    let segments = aux [] [] p |> List.filter (fun seg -> seg <> []) in
+    segments
   in
-  let trimmed_paths = List.map trim_path filter_path in
-  Printf.eprintf "The trimmed paths are  of len %d \n" (List.length trimmed_paths);
-  List.iter(fun p -> Printf.eprintf "original path : " ;List.iter (fun ge -> Printf.printf "%d " ge) p; Printf.eprintf "\n") paths;
+  let acc = ref [] in
+  List.iter (fun p -> acc := split_path_on_events p @ !acc) filter_path;
+  let trimmed_paths = !acc in
+  (* filter for duplicates *)
+  let unique_paths = Hashtbl.create (List.length trimmed_paths) in
+  List.iter (fun p -> Hashtbl.replace unique_paths p ()) trimmed_paths;
+  let trimmed_paths = Hashtbl.fold (fun k _ acc -> k :: acc) unique_paths [] in
+(* 
+  Printf.eprintf "The trimmed paths are  of len %d \n" (List.length (List.hd trimmed_paths));
+  List.iter(fun p -> Printf.eprintf "original path : " ;List.iter (fun ge -> Printf.eprintf "%d " ge) p; Printf.eprintf "\n") paths;
   List.iter(
-    fun p -> Printf.eprintf "trimmed path : " ;List.iter (fun ge -> Printf.printf "%d " ge) p; Printf.eprintf "\n"
-  ) trimmed_paths;
-  trimmed_paths *)
+    fun p -> Printf.eprintf "trimmed path : " ;List.iter (fun ge -> Printf.eprintf "%d " ge) p; Printf.eprintf "\n"
+  ) trimmed_paths; *)
+  trimmed_paths
