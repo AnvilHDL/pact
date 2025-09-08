@@ -27,7 +27,7 @@ proc test_gate_cache(ep : left cache_ch, mem_ep : right mem_ch){
         } else {
             send mem_ep.req(x);
             let y = recv mem_ep.resp >>
-            (set mem[addr] := y >>
+            (set mem[addr] := y;
             set tag[addr] := x[5+:11]) >>
             send ep.miss(*mem[addr])
         } >>

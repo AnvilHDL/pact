@@ -664,6 +664,7 @@ let find_all_paths_prime (graph_prime : event_graph_prime) (from_id : int) (to_i
   in
   find_paths from_id [] []
 
+(* cuts the path till reaching the event*)
 let filter_paths_with_event (paths: int list list) (event_ids: int list) : int list list =
   let filter_path = List.filter (
           fun p -> List.exists(fun ge -> List.mem ge p)event_ids
@@ -695,4 +696,39 @@ let filter_paths_with_event (paths: int list list) (event_ids: int list) : int l
   List.iter(
     fun p -> Printf.eprintf "trimmed path : " ;List.iter (fun ge -> Printf.eprintf "%d " ge) p; Printf.eprintf "\n"
   ) trimmed_paths; *)
+  trimmed_paths
+
+(* cuts the path and returns segment in between the events*)
+let filter_paths_between_events (paths : int list list) (event_ids : int list) : int list list =
+  let filter_path = List.filter (
+          fun p -> List.exists (fun ge -> List.mem ge event_ids) p
+  ) paths
+  in 
+  let extract_segment_split p = 
+    let start = ref false in
+    let rec aux acc current = function
+    (* if empty and start is false discard the current segment and return the collection *)
+      | [] -> List.rev acc 
+      | x :: xs ->
+        if List.mem x event_ids then
+          if not !start then (
+            start := true;
+            aux acc [x] xs
+          ) else (
+            (* end of segment *)
+            let new_acc = List.rev (x :: current) :: acc in
+            aux new_acc [] xs
+          )
+      else aux acc (x :: current) xs
+  in
+  aux [] [] p
+  in
+  let acc = ref [] in
+  List.iter (fun p -> acc := extract_segment_split p @ !acc) filter_path;
+  let trimmed_paths = !acc in
+  (* filter for duplicates *)
+  let unique_paths = Hashtbl.create (List.length trimmed_paths) in
+  List.iter (fun p -> Hashtbl.replace unique_paths p ()) trimmed_paths;
+  let trimmed_paths = Hashtbl.fold (fun k _ acc -> k :: acc) unique_paths [] in
+
   trimmed_paths

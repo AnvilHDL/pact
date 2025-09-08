@@ -132,3 +132,5 @@ val find_all_paths_prime : (EventGraph.event_graph_prime) -> int -> int -> int l
 val get_all_reachable_prime : (EventGraph.event_graph_prime) -> int -> int list
 
 val filter_paths_with_event : int list list -> int list -> int list list
+
+val filter_paths_between_events : int list list -> int list -> int list list

@@ -637,6 +637,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     (
       match gc.gqual with
       | GateAnd ->
+        (* E G (e1 ^ e2) *)
             if Option.is_none gc.trigger then (
             let base_len = List.length (List.hd gc.gmem).g_events in
             List.iter (fun gmem ->
@@ -660,7 +661,43 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
             ) gc.gmem
             )
             else (
-              Printf.eprintf "Gate AND with trigger will be implemented soon\n"
+              (* A G (trigger -> And(a1<->a2|a2<->a3...)) *)
+              let trig  = Option.get gc.trigger in
+              let trig_ids = List.map (fun ge -> (fst ge).id) trig.g_events in
+
+              let all_trigger_path = GraphAnalysis.filter_paths_between_events paths trig_ids in
+              if(config.verbose) then(
+                Printf.eprintf "Gate AND check triggers (Event ids) for the group %s are: " (fst gc.gid);
+                List.iter (fun id -> Printf.eprintf "%d " id) trig_ids;
+                Printf.eprintf "\n All possible paths between two triggers are: \n";
+                EventGraphOps.print_paths all_trigger_path;
+                Printf.eprintf "\n"
+              );
+
+              List.iter (fun gmem ->
+                Printf.eprintf "Group member %s with events: " (string_of_gvar gmem.mid);
+                List.iter (fun ge ->
+                  Printf.eprintf "%d " (fst ge).id
+                ) gmem.g_events;
+                Printf.eprintf "\n"
+              ) gc.gmem;
+              let found = List.for_all (fun p ->
+                List.for_all (fun gmem ->
+                  List.exists (fun ge ->
+                    List.mem (fst ge).id p
+                  ) gmem.g_events
+                ) gc.gmem
+              )all_trigger_path in
+              if found |> not then
+                raise (LifetimeCheckError [
+                  Text ("Potential Violation of Control Group with trigger (Atomicity) for group " ^ (fst gc.gid) ^ " by event ");
+                  Except.codespan_local (List.hd trig.g_events |> snd);
+                  Text ("Trigger " ^ (Lang.string_of_gvar trig.mid) ^ " is not followed by all members of the group");
+                  Except.codespan_local (snd gc.gid)
+                ]
+                ) (* To Do find the exact error location *)
+
+
             )
       | GateXor -> 
         List.iter (fun gmem ->
