@@ -17,7 +17,9 @@ proc test_gate_cache(ep : left cache_ch, mem_ep : right mem_ch){
     control<&> when <mem_ep.resp>{
         := tag ; :=mem
     }miss_control;//implies AG (mem_ep.resp -> AF (RegMut(tag) and RegMut(mem)))
-
+    control<||> when <ep.rd_req>{
+        ep.hit; ep.miss
+    }rd_control;//implies AG (ep.rd_req -> AF (ep.hit || ep.miss)) 
     loop{
         let x = recv ep.rd_req >>
         let addr = x[0+:5] >>
