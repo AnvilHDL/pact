@@ -1,0 +1,47 @@
+chan arbiter_ch {
+    left req : (logic[16]@#1),//. --> grant,
+    right grant : (logic@#1)   
+}
+
+proc arbiter(
+            ep1 : left arbiter_ch, 
+            ep2 : left arbiter_ch,
+            ep3 : left arbiter_ch,
+            ep4 : left arbiter_ch
+            )
+{
+    control<^> {
+        ep1.grant; ep2.grant; ep3.grant; ep4.grant
+    }grant_exclusivity;
+    control<||> when <ep1.req>{
+        ep1.grant
+    }grant_control1;
+    control<||> when <ep2.req>{
+        ep2.grant
+    }grant_control2;
+    control<||> when <ep4.req>{
+        ep4.grant
+    }grant_control4;
+    control<||> when <ep3.req>{
+        ep3.grant
+    }grant_control3;
+
+    loop{
+        try req1 = recv ep1.req {
+            send ep1.grant(1'd1)
+        }
+        else try req2 = recv ep2.req {
+            send ep2.grant(1'd1)
+        }
+        else try req3 = recv ep3.req {
+            send ep3.grant(1'd1)
+        } >>
+        try req4 = recv ep4.req {
+            send ep4.grant(1'd1)
+        }
+        else{
+            ()
+        } >>
+        cycle 1
+    }
+}
