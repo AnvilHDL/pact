@@ -575,8 +575,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       reg_borrows = [];
       dtype = `Logic;
     } in
-    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ctx.current e.span  in
-    graph.gate_context <- gc;
     graph.wires <- wires;
 
     (* TODO: dedup *)
@@ -589,6 +587,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     } in
 
     let (br_side_true, ctx_true) = BuildContext.branch_side graph ctx branch_info 0 in
+    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ctx_true.current e.span  in
+    graph.gate_context <- gc;
     let td1 = visit_expr graph ci ctx_true e1 in
     let (br_side_false, ctx_false) = BuildContext.branch_side graph ctx branch_info 1 in
     let td2 = visit_expr graph ci ctx_false e2 in
@@ -624,8 +624,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       reg_borrows = [];
       dtype = `Logic; 
     } in
-    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ctx.current e.span in
-    graph.gate_context <- gc;
     graph.wires <- wires;
 
     (* TODO: dedup *)
@@ -658,6 +656,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let td2 = visit_expr graph ci ctx_false e2 in
 
     branch_info.branches_to <- [ctx_true.current; ctx_false.current];
+    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ctx_true.current e.span in
+    graph.gate_context <- gc;
     branch_info.branches_val <- [td1.lt.live; td2.lt.live];
 
     BuildContext.branch_merge ctx [ctx_true_no_binding; ctx_false];

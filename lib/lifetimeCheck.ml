@@ -728,7 +728,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
             
                     let trigger = Option.get gc.trigger in
                     let trigger_event_ids = List.map (fun ge -> (fst ge).id) trigger.g_events in
-                    let all_trigger_path = GraphAnalysis.filter_paths_with_event paths trigger_event_ids in
+                    let all_trigger_path = GraphAnalysis.filter_paths_between_events paths trigger_event_ids in
                     
                     if(config.verbose) then(
                         Printf.eprintf "Gate OR check triggers (Event ids) for the group %s are: " (fst gc.gid);

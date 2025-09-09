@@ -672,7 +672,7 @@ match_arm:
 message_def:
   dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
   left_sync_mode_opt = message_sync_mode_spec?;
-  right_sync_mode_opt = recv_message_sync_mode_spec?
+  right_sync_mode_opt = recv_message_sync_mode_spec?// progress_contract = progress_contract?
   {
     let (send_sync_mode_opt, recv_sync_mode_opt) =
       match dir with
@@ -691,6 +691,11 @@ message_def:
     } : Lang.message_def
   }
 ;
+
+// progress_contract:
+// | ARROW_LONG; msgs = separated_list(OR, IDENT)
+//   { msgs }
+
 //To Do: Support for multiple message types
 recv_message_sync_mode_spec:
   MINUS; sync = message_sync_mode_spec
