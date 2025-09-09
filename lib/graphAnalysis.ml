@@ -732,3 +732,16 @@ let filter_paths_between_events (paths : int list list) (event_ids : int list) :
   let trimmed_paths = Hashtbl.fold (fun k _ acc -> k :: acc) unique_paths [] in
 
   trimmed_paths
+
+
+let filter_paths_with_multiple_events (paths: int list list) (event_ids: int list list) : int list list =
+  (* Check if a path contains multiple events from the event pool of event ids list list *)
+  let filter_path = List.filter (
+          fun p -> 
+            let count = List.fold_left (fun acc event_pool ->
+              if List.exists (fun ge -> List.mem ge p) event_pool then acc + 1 else acc
+            ) 0 event_ids in
+            count >= 2
+  ) paths
+  in 
+  filter_path

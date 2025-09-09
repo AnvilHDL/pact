@@ -637,7 +637,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     (
       match gc.gqual with
       | GateAnd ->
-        (* E G (e1 ^ e2) *)
+        (* A G (e1 <-> e2) *)
             if Option.is_none gc.trigger then (
             let base_len = List.length (List.hd gc.gmem).g_events in
             List.iter (fun gmem ->
@@ -673,14 +673,15 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                 EventGraphOps.print_paths all_trigger_path;
                 Printf.eprintf "\n"
               );
-
+              if(config.verbose) then(
               List.iter (fun gmem ->
                 Printf.eprintf "Group member %s with events: " (string_of_gvar gmem.mid);
                 List.iter (fun ge ->
                   Printf.eprintf "%d " (fst ge).id
                 ) gmem.g_events;
                 Printf.eprintf "\n"
-              ) gc.gmem;
+              ) gc.gmem
+              );
               let found = List.for_all (fun p ->
                 List.for_all (fun gmem ->
                   List.exists (fun ge ->

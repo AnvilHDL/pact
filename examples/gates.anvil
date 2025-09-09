@@ -13,23 +13,23 @@ proc gates(ep : left ch){
     reg mem : logic[32][8];
     reg tag : logic[32][11];
     control<&>{
-        := mem; :=tag
+        := mem; :=tag // Need to make it useful
     }write_ctrl_grp;
     control<&>{
-        ep.hit; *mem
+        ep.hit; *mem //Useless
     }hit_ctrl_grp;
     control<^>{
-        *mem; :=mem
+        *mem; :=mem //Useless
     }mem_rd_write_ctrl_grp;
     control<^>{
-        *tag; :=tag
+        *tag; :=tag //Useless
     }tag_rd_write_ctrl_grp;
     control <||> when <ep.rd_req>{
-        ep.hit; ep.miss
+        ep.hit; ep.miss //Real Deal
     }liveness_ctrl_grp;
-    control<&><[p]>{
-        :=mem[p]; :=tag[p]
-    }
+    // control<&><[p]>{
+    //     :=mem[p]; :=tag[p]
+    // }
 
 
     loop{
