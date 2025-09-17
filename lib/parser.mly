@@ -10,7 +10,7 @@
 %token COLON                (* : *)
 %token DOUBLE_COLON         (* :: *)
 %token KEYWORD_FUNCTION    (* func *)
-%token KEYWORD_SESSION      (* session *)
+%token KEYWORD_PROTOCOL    (* protocol *)
 %token KEYWORD_CALL                (* call *)
 %token SHARP                (* # *)
 %token EQUAL                (* = *)
@@ -315,7 +315,7 @@ channel_class_def:
   }
 ;
 progress_contract:
-| KEYWORD_SESSION; DOUBLE_COLON; prog_type = node(session_type); SEMICOLON
+| KEYWORD_PROTOCOL; DOUBLE_COLON; prog_type = node(session_type); SEMICOLON
   { prog_type }
 
 

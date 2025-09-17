@@ -855,3 +855,24 @@ let rec get_lv lval =
   | Indexed (lval, _) -> get_lv lval
   | Indirected (lv,_) -> get_lv lv
 in get_lv lv
+
+
+let rec add_msg_ep_to_protocol ep = function
+  | StyMsg id_node ->
+      let id = id_node.d in
+      let id_with_ep = String.concat ep ["::"; id] in
+      { id_node with d = StyMsg {id_node with d = id_with_ep} }
+  | StySeq (p1, p2) ->
+      {
+        span = { st = p1.span.st; ed = p2.span.ed };
+        d = StySeq (
+          add_msg_ep_to_protocol ep p1.d,
+          add_msg_ep_to_protocol ep p2.d
+        )
+      }
+  | StyChoice ps ->
+      let new_ps = List.map (fun p -> add_msg_ep_to_protocol ep p.d) ps in
+      {
+        span = if new_ps = [] then code_span_dummy else { st = (List.hd new_ps).span.st; ed = (List.rev new_ps |> List.hd).span.ed };
+        d = StyChoice new_ps
+      }

@@ -195,6 +195,7 @@ and event_graph = {
   mutable is_general_recursive : bool; (** is this a general recursive graph? *)
   mutable comb : bool;
   mutable gate_context : gate_class list;
+  mutable protocols : Lang.protocol Lang.ast_node list;
 }
 
 type proc_graph = {

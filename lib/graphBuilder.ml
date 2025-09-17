@@ -1134,6 +1134,19 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       } in
         Hashtbl.add shared_vars_info sv.d.ident r
       ) body.shared_vars;
+      let endpoint_collection = List.map (fun (p:endpoint_def ast_node) -> (p.d.name, p.d.channel_class)) proc.args in
+      let channel_local_sty = List.map (fun p -> (match (MessageCollection.lookup_channel_class ci.channel_classes (snd p)) with Some c -> c.local_sty | None -> None))endpoint_collection in
+
+      let protocol_list =
+        List.map2 (fun (ep_name, _) sty_opt ->
+          match sty_opt with
+          | Some sty -> Some (Lang.add_msg_ep_to_protocol ep_name (Lang.data_of_ast_node sty))
+          | None -> None
+        ) endpoint_collection channel_local_sty
+      in
+      let protocol_list_filtered = List.filter Option.is_some protocol_list |> List.map Option.get in
+
+
       let proc_threads = List.mapi (fun i ((e, reset_by) : expr_node * message_specifier option) ->
         let graph = {
           thread_id = i;
@@ -1149,6 +1162,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           thread_codespan = e.span;
           comb = false;
           gate_context = control_groups;
+          protocols = protocol_list_filtered;
         } in
         (* Bruteforce treatment: just run twice *)
         let graph_opt = if (not config.disable_lt_checks) || config.two_round_graph then (

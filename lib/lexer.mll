@@ -80,6 +80,7 @@ rule read =
   | "eternal" { KEYWORD_ETERNAL }
   | "type"    { KEYWORD_TYPE }
   | "set"     { KEYWORD_SET }
+  | "protocol" { KEYWORD_PROTOCOL }
   | "match"   { KEYWORD_MATCH }
   | "dyn"     { KEYWORD_DYN }
   | "sync"    { KEYWORD_SYNC }
