@@ -10,6 +10,7 @@
 %token COLON                (* : *)
 %token DOUBLE_COLON         (* :: *)
 %token KEYWORD_FUNCTION    (* func *)
+%token KEYWORD_SESSION      (* session *)
 %token KEYWORD_CALL                (* call *)
 %token SHARP                (* # *)
 %token EQUAL                (* = *)
@@ -58,6 +59,8 @@
 %token KEYWORD_LET          (* let *)
 %token KEYWORD_SEND         (* send *)
 %token KEYWORD_RECV         (* recv *)
+%token ARROW_LONG              (* --> *)
+%token EXCLAMATION          (* ! *)
 %token KEYWORD_IN          (* in *)
 %token KEYWORD_ETERNAL      (* eternal *)
 %token KEYWORD_TYPE         (* type *)
@@ -91,10 +94,12 @@
 %right LEFT_ABRACK RIGHT_ABRACK LEFT_ABRACK_EQ RIGHT_ABRACK_EQ
 %right DOUBLE_GT SEMICOLON
 %right KEYWORD_LET KEYWORD_SET KEYWORD_PUT
+%right ARROW_LONG
 %left DOUBLE_AND DOUBLE_OR
 %left EXCL_EQ DOUBLE_EQ
 %left XOR AND OR PLUS MINUS
 %left DOUBLE_LEFT_ABRACK DOUBLE_RIGHT_ABRACK
+%left ASTERISK
 %left PERIOD
 %left LEFT_BRACKET
 %nonassoc TILDE UMINUS UAND UOR KEYWORD_IN
@@ -287,26 +292,45 @@ field_def:
 
 // For channel declaration for each pair of process
 channel_class_def:
-| KEYWORD_CHAN; ident = IDENT; LEFT_BRACE; messages = separated_list(COMMA, message_def); RIGHT_BRACE
+| KEYWORD_CHAN; ident = IDENT; LEFT_BRACE; messages = separated_list(COMMA, message_def); prog_cont=progress_contract?;RIGHT_BRACE
   {
     {
       name = ident;
       messages = messages;
       params = [];
-      span = {st = $startpos; ed = $endpos}
+  span = {st = $startpos; ed = $endpos};
+  local_sty = match prog_cont with Some(p) -> Some p | None -> None
     } : Lang.channel_class_def
   }
 | KEYWORD_CHAN; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
-  LEFT_BRACE; messages = separated_list(COMMA, message_def); RIGHT_BRACE
+  LEFT_BRACE; messages = separated_list(COMMA, message_def);prog_cont=progress_contract?; RIGHT_BRACE
   {
     {
       name = ident;
       messages = messages;
       params = params;
-      span = {st = $startpos; ed = $endpos}
+  span = {st = $startpos; ed = $endpos};
+  local_sty = match prog_cont with Some(p) -> Some p | None -> None
     } : Lang.channel_class_def
   }
 ;
+progress_contract:
+| KEYWORD_SESSION; DOUBLE_COLON; prog_type = node(session_type); SEMICOLON
+  { prog_type }
+
+
+//rd_req ->* ( (hit -> (#0)rd_data) ^ (miss -> (#0)rd_data) )
+session_type:
+| id = node(IDENT)
+  { Lang.StyMsg id }
+| s=node(session_type);ARROW_LONG;e=node(session_type)
+  { Lang.StySeq (s, e) }
+| LEFT_BRACE;s= separated_list(XOR, node(session_type));RIGHT_BRACE
+  { Lang.StyChoice s }
+| LEFT_PAREN; s=node(session_type); RIGHT_PAREN
+  { Lang.data_of_ast_node s }
+
+
 //For passing the list of channels that are nessacary to communicate with the instantiation of the process
 proc_def_arg_list:
   l = separated_list(COMMA, node(proc_def_arg))
@@ -672,7 +696,7 @@ match_arm:
 message_def:
   dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
   left_sync_mode_opt = message_sync_mode_spec?;
-  right_sync_mode_opt = recv_message_sync_mode_spec?// progress_contract = progress_contract?
+  right_sync_mode_opt = recv_message_sync_mode_spec?
   {
     let (send_sync_mode_opt, recv_sync_mode_opt) =
       match dir with

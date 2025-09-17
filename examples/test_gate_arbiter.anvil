@@ -29,11 +29,11 @@ proc arbiter(
     loop{
         try req1 = recv ep1.req {
             send ep1.grant(1'd1)
-        }
-        else try req2 = recv ep2.req {
+        } >>
+        try req2 = recv ep2.req {
             send ep2.grant(1'd1)
-        }
-        else try req3 = recv ep3.req {
+        } >>
+        try req3 = recv ep3.req {
             send ep3.grant(1'd1)
         } >>
         try req4 = recv ep4.req {

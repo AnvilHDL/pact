@@ -225,8 +225,13 @@ type channel_class_def = {
   messages: message_def list;
   params: param list;  (** List of generic parameters *)
   span: code_span; (** code span of the channel class definition *)
+  local_sty: protocol ast_node option; (** local session type, if any *)
 }
 
+and protocol =
+| StyMsg of identifier ast_node
+| StySeq of protocol ast_node * protocol ast_node
+| StyChoice of protocol ast_node list
 (** The visibility of a channel. *)
 type channel_visibility =
 | BothForeign (** not visible locally, must be passed to other processes *)
