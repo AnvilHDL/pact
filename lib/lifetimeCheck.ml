@@ -760,14 +760,104 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     )
       ) g.gate_context
 
+type protocol_node = {
+  msg_id : message_specifier;
+  mutable next : message_specifier list; (* outgoing edges *)
+}
+
+type protocol_graph = {
+  protocol_nodes : protocol_node list
+}
+ 
+
+let rec protocol_graph_from_protocol (p : protocol) (g : protocol_graph) =
+  match p with
+  | StyMsg id_node -> 
+      (* Convert identifier to message_specifier *)
+      let msg_spec = id_node.d in
+      let exists = List.find_opt (fun n -> n.msg_id = msg_spec) g.protocol_nodes in
+      (match exists with
+      | Some _ -> g
+      | None ->
+        let new_node = {msg_id = msg_spec; next = []} in
+        {protocol_nodes = new_node :: g.protocol_nodes})
+  | StySeq (p1, p2) ->
+    let g1 = protocol_graph_from_protocol p1.d g in
+    let g2 = protocol_graph_from_protocol p2.d g in
+    List.iter (fun n1 ->
+      List.iter (fun n2 ->
+        if n1.next = [] then
+          n1.next <- [n2.msg_id]
+      ) g2.protocol_nodes
+    ) g1.protocol_nodes;
+    {protocol_nodes = g1.protocol_nodes @ g2.protocol_nodes}
+  | StyChoice ps ->
+    let gs = List.map (fun p -> protocol_graph_from_protocol p.d g) ps in
+    let all_nodes = List.flatten (List.map (fun g -> g.protocol_nodes) gs) in
+    {protocol_nodes = all_nodes}
+
+
+let print_protocol_graph (g: protocol_graph) =
+
+  let node_map = Hashtbl.create (List.length g.protocol_nodes) in
+  List.iter (fun node ->
+    Hashtbl.add node_map (node.msg_id.endpoint ^ "." ^ node.msg_id.msg) node
+  ) g.protocol_nodes;
+
+  let visited = Hashtbl.create (List.length g.protocol_nodes) in
+  
+  let rec print_node node =
+    let node_key = string_of_msg_spec node.msg_id in
+    if Hashtbl.mem visited node_key then
+      Printf.sprintf "(%s)" node_key
+    else (
+      Hashtbl.add visited node_key ();
+      match node.next with
+      | [] -> node_key (* leaf node *)
+      | [child] -> 
+        let child_node = Hashtbl.find_opt node_map (string_of_msg_spec child) in
+        (match child_node with
+         | Some cn -> Printf.sprintf "%s -> %s" node_key (print_node cn)
+         | None -> Printf.sprintf "%s -> %s" node_key (string_of_msg_spec child))
+      | children ->
+        (* multiple children: node -> {child1 ^ child2 ^ ...} *)
+        let child_strs = List.map (fun child ->
+          let child_node = Hashtbl.find_opt node_map (string_of_msg_spec child) in
+          match child_node with
+          | Some cn -> print_node cn
+          | None -> string_of_msg_spec child
+        ) children in
+        Printf.sprintf "%s -> {%s}" node_key (String.concat " ^ " child_strs)
+    )
+  in
+
+  let all_child_msgs = List.concat_map (fun node -> node.next) g.protocol_nodes in
+  let root_nodes = List.filter (fun node ->
+    not (List.exists (fun child_msg -> 
+      child_msg.endpoint = node.msg_id.endpoint && 
+      child_msg.msg = node.msg_id.msg
+    ) all_child_msgs)
+  ) g.protocol_nodes in
+  
+  let graph_strings = List.map print_node root_nodes in
+  Printf.eprintf "Protocol Graph: %s\n" (String.concat " | " graph_strings)
+  
+  
 let check_session (g : event_graph) =
   let protocols = g.protocols in
   let protocol_satisfied = Hashtbl.create (Hashtbl.length protocols) in
+
+  let _protocol_graphs = List.map (fun (_pname, p) ->
+     protocol_graph_from_protocol p.d {protocol_nodes = []}
+  ) (Hashtbl.to_seq protocols |> List.of_seq) in
+
+  print_protocol_graph (List.hd _protocol_graphs);
 
   Hashtbl.iter (fun _pname _pd -> Hashtbl.add protocol_satisfied _pname (false,false)) protocols;
   
   GraphAnalysis.events_prepare_outs g.events;
   let session_graph = GraphAnalysis.create_session_graph g in
-  
+
   GraphAnalysis.print_session_graph session_graph;
+
 

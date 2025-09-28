@@ -321,8 +321,8 @@ progress_contract:
 
 //rd_req ->* ( (hit -> (#0)rd_data) ^ (miss -> (#0)rd_data) )
 session_type:
-| id = node(IDENT)
-  { Lang.StyMsg id }
+| id = IDENT
+  { Lang.StyMsg (Lang.ast_node_of_data (fst $loc) (snd $loc) ({endpoint = ""; msg = id} : Lang.message_specifier)) }
 | s=node(session_type);ARROW_LONG;e=node(session_type)
   { Lang.StySeq (s, e) }
 | LEFT_BRACE;s= separated_list(XOR, node(session_type));RIGHT_BRACE

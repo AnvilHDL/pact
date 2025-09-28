@@ -47,7 +47,7 @@ type message_specifier = {
 }
 
 let string_of_msg_spec (msg_spec : message_specifier) : string =
-  msg_spec.endpoint ^ "::" ^ msg_spec.msg
+  msg_spec.endpoint ^ "." ^ msg_spec.msg
 
 (** A delay pattern that matches a set of delays. *)
 type delay_pat = [
@@ -229,7 +229,7 @@ type channel_class_def = {
 }
 
 and protocol =
-| StyMsg of identifier ast_node
+| StyMsg of message_specifier ast_node
 | StySeq of protocol ast_node * protocol ast_node
 | StyChoice of protocol ast_node list
 (** The visibility of a channel. *)
@@ -860,7 +860,7 @@ in get_lv lv
 let rec add_msg_ep_to_protocol ep = function
   | StyMsg id_node ->
       let id = id_node.d in
-      let id_with_ep = String.concat "." [ep; id] in
+      let id_with_ep = { id with endpoint = ep } in
       { id_node with d = StyMsg {id_node with d = id_with_ep} }
   | StySeq (p1, p2) ->
       {
@@ -879,7 +879,7 @@ let rec add_msg_ep_to_protocol ep = function
 
 let string_of_protocol p =
   let rec aux = function
-    | StyMsg id_node -> id_node.d
+    | StyMsg id_node -> string_of_msg_spec id_node.d
     | StySeq (p1, p2) -> "(" ^ aux p1.d ^ " -> " ^ aux p2.d ^ ")"
     | StyChoice ps ->
         let ps_strs = List.map (fun p -> aux p.d) ps in
