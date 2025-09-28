@@ -1,0 +1,13 @@
+chan local_ch{
+    left req : (logic@#1),
+    right ack : (logic@#1),
+    right reset : (logic@#1)
+    protocol :: req --> ack;
+}
+proc test_local(ep : left local_ch){
+    loop{
+        let r = recv ep.req  >> 
+        send ep.ack(1'd1) >>
+        cycle 1
+    }
+}

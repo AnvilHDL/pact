@@ -860,7 +860,7 @@ in get_lv lv
 let rec add_msg_ep_to_protocol ep = function
   | StyMsg id_node ->
       let id = id_node.d in
-      let id_with_ep = String.concat ep ["::"; id] in
+      let id_with_ep = String.concat "." [ep; id] in
       { id_node with d = StyMsg {id_node with d = id_with_ep} }
   | StySeq (p1, p2) ->
       {
@@ -876,3 +876,13 @@ let rec add_msg_ep_to_protocol ep = function
         span = if new_ps = [] then code_span_dummy else { st = (List.hd new_ps).span.st; ed = (List.rev new_ps |> List.hd).span.ed };
         d = StyChoice new_ps
       }
+
+let string_of_protocol p =
+  let rec aux = function
+    | StyMsg id_node -> id_node.d
+    | StySeq (p1, p2) -> "(" ^ aux p1.d ^ " -> " ^ aux p2.d ^ ")"
+    | StyChoice ps ->
+        let ps_strs = List.map (fun p -> aux p.d) ps in
+        "{" ^ String.concat " ^ " ps_strs ^ "}"
+  in
+  aux p.d

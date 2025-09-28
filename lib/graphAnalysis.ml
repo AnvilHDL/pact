@@ -745,3 +745,146 @@ let filter_paths_with_multiple_events (paths: int list list) (event_ids: int lis
   ) paths
   in 
   filter_path
+
+
+type session_node = {
+  session_msg : Lang.message_specifier;
+  mutable session_childs : Lang.message_specifier list;
+  event_id : int; (* the event where this message action occurs *)
+}
+
+type session_graph = {
+  session_nodes : session_node list;
+}
+
+
+let extract_message_from_action action =
+  match action with
+  | DebugPrint _ | DebugFinish | RegAssign _ | PutShared _ -> None
+  | ImmediateSend (msg, _) -> Some (msg) (* true = send *)
+  | ImmediateRecv msg -> Some (msg) (* false = receive *)
+
+
+let extract_message_from_sustained_action sa =
+  match sa.ty with
+  | Send (msg, _) -> Some (msg) (* true = send *)
+  | Recv msg -> Some (msg) (* false = receive *)
+
+
+
+let create_session_graph (g: event_graph) : session_graph = 
+  let visited_events = Hashtbl.create (List.length g.events) in
+  let all_nodes = ref [] in
+
+  (* Process the current event to extract message actions *)
+  let process_event event =
+    let action_nodes = List.fold_left (fun acc action ->
+      match extract_message_from_action action.d with
+      | Some (msg) ->
+        let node = { session_msg = msg; session_childs = []; event_id = event.id } in
+        node :: acc
+      | None -> acc
+    ) [] event.actions in
+    
+    let sustained_nodes = List.fold_left (fun acc sa ->
+      match extract_message_from_sustained_action sa.d with
+      | Some (msg) ->
+        let node = { session_msg = msg; session_childs = []; event_id = event.id } in
+        node :: acc
+      | None -> acc
+    ) [] event.sustained_actions in
+    
+    action_nodes @ sustained_nodes
+  in
+
+  (* Traverse over graphs bfs add children as session nodes *)
+  let rec bfs current_event =
+    if not (Hashtbl.mem visited_events current_event.id) then (
+      Hashtbl.add visited_events current_event.id ();
+      let nodes = process_event current_event in
+      all_nodes := nodes @ !all_nodes;
+      List.iter bfs current_event.outs
+    )
+  in
+  
+  (* Find root events and start BFS from them *)
+  let root_events = List.filter (fun e ->
+    match e.source with
+    | `Root _ -> true
+    | _ -> false
+  ) g.events in
+  
+  List.iter bfs root_events;
+  
+  (* Build connections between nodes based on event ordering *)
+  let event_to_nodes = Hashtbl.create (List.length !all_nodes) in
+  List.iter (fun node ->
+    let current_nodes = Hashtbl.find_opt event_to_nodes node.event_id |> Option.value ~default:[] in
+    Hashtbl.replace event_to_nodes node.event_id (node :: current_nodes)
+  ) !all_nodes;
+  
+  (* For each node, connect it to nodes in successor events *)
+  List.iter (fun node ->
+    let current_event = List.find (fun e -> e.id = node.event_id) g.events in
+    (* Use direct outgoing edges to connect to successor nodes *)
+    List.iter (fun succ_event ->
+      match Hashtbl.find_opt event_to_nodes succ_event.id with
+      | Some succ_nodes ->
+        List.iter (fun succ_node ->
+          if not (List.mem succ_node.session_msg node.session_childs) then
+            node.session_childs <- succ_node.session_msg :: node.session_childs
+        ) succ_nodes
+      | None -> ()
+    ) current_event.outs
+  ) !all_nodes;
+  
+  { session_nodes = !all_nodes }
+
+
+
+let print_session_graph (sg: session_graph) =
+
+  let node_map = Hashtbl.create (List.length sg.session_nodes) in
+  List.iter (fun node ->
+    Hashtbl.add node_map (node.session_msg.endpoint ^ "." ^ node.session_msg.msg) node
+  ) sg.session_nodes;
+  
+  let visited = Hashtbl.create (List.length sg.session_nodes) in
+  let msg_to_string msg = msg.endpoint ^ "." ^ msg.msg in
+  
+  let rec print_node node =
+    let node_key = msg_to_string node.session_msg in
+    if Hashtbl.mem visited node_key then
+      Printf.sprintf "(%s)" node_key
+    else (
+      Hashtbl.add visited node_key ();
+      match node.session_childs with
+      | [] -> node_key (* leaf node *)
+      | [child] -> 
+        let child_node = Hashtbl.find_opt node_map (msg_to_string child) in
+        (match child_node with
+         | Some cn -> Printf.sprintf "%s -> %s" node_key (print_node cn)
+         | None -> Printf.sprintf "%s -> %s" node_key (msg_to_string child))
+      | children ->
+        (* multiple children: node -> {child1 ^ child2 ^ ...} *)
+        let child_strs = List.map (fun child ->
+          let child_node = Hashtbl.find_opt node_map (msg_to_string child) in
+          match child_node with
+          | Some cn -> print_node cn
+          | None -> msg_to_string child
+        ) children in
+        Printf.sprintf "%s -> {%s}" node_key (String.concat " ^ " child_strs)
+    )
+  in
+  
+  let all_child_msgs = List.concat_map (fun node -> node.session_childs) sg.session_nodes in
+  let root_nodes = List.filter (fun node ->
+    not (List.exists (fun child_msg -> 
+      child_msg.endpoint = node.session_msg.endpoint && 
+      child_msg.msg = node.session_msg.msg
+    ) all_child_msgs)
+  ) sg.session_nodes in
+  
+  let graph_strings = List.map print_node root_nodes in
+  Printf.eprintf "Session Graph: %s\n" (String.concat " | " graph_strings)
+  

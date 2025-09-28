@@ -136,3 +136,18 @@ val filter_paths_with_event : int list list -> int list -> int list list
 val filter_paths_between_events : int list list -> int list -> int list list
 
 val filter_paths_with_multiple_events : int list list -> int list list -> int list list
+
+type session_node = {
+  session_msg : Lang.message_specifier;
+  mutable session_childs : Lang.message_specifier list;
+  event_id : int; (** the event where this message action occurs *)
+}
+
+type session_graph = {
+  session_nodes : session_node list;
+}
+
+
+val create_session_graph : EventGraph.event_graph -> session_graph
+
+val print_session_graph : session_graph -> unit

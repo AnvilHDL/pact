@@ -759,3 +759,15 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       | _ -> ()
     )
       ) g.gate_context
+
+let check_session (g : event_graph) =
+  let protocols = g.protocols in
+  let protocol_satisfied = Hashtbl.create (Hashtbl.length protocols) in
+
+  Hashtbl.iter (fun _pname _pd -> Hashtbl.add protocol_satisfied _pname (false,false)) protocols;
+  
+  GraphAnalysis.events_prepare_outs g.events;
+  let session_graph = GraphAnalysis.create_session_graph g in
+  
+  GraphAnalysis.print_session_graph session_graph;
+

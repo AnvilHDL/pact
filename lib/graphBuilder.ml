@@ -1140,12 +1140,15 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       let protocol_list =
         List.map2 (fun (ep_name, _) sty_opt ->
           match sty_opt with
-          | Some sty -> Some (Lang.add_msg_ep_to_protocol ep_name (Lang.data_of_ast_node sty))
+          | Some sty -> Some (ep_name, (Lang.add_msg_ep_to_protocol ep_name (Lang.data_of_ast_node sty)))
           | None -> None
         ) endpoint_collection channel_local_sty
       in
       let protocol_list_filtered = List.filter Option.is_some protocol_list |> List.map Option.get in
-
+      (* create hash table for fast lookup of endpoint name with protocol *)
+      let protocol_map = Hashtbl.create (List.length protocol_list_filtered) in
+      List.iter (fun (ep_name, proto) -> Hashtbl.add protocol_map ep_name proto) protocol_list_filtered;
+      if (config.verbose) then Printf.eprintf "[Info] Protocol list for process %s: %s\n" module_name (String.concat ", " (List.map(fun f -> Lang.string_of_protocol (snd f)) protocol_list_filtered));
 
       let proc_threads = List.mapi (fun i ((e, reset_by) : expr_node * message_specifier option) ->
         let graph = {
@@ -1162,7 +1165,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           thread_codespan = e.span;
           comb = false;
           gate_context = control_groups;
-          protocols = protocol_list_filtered;
+          protocols = protocol_map;
         } in
         (* Bruteforce treatment: just run twice *)
         let graph_opt = if (not config.disable_lt_checks) || config.two_round_graph then (
@@ -1189,6 +1192,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
             (* discard after type checking *)
             let ctx = (BuildContext.create_empty graph shared_vars_info false) in
             let td = visit_expr graph ci ctx e in
+            LifetimeCheck.check_session graph;
             graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
             graph.is_general_recursive <- graph.last_event_id <> td.lt.live.id;
             let g' = GraphOpt.optimize config false ci graph in
