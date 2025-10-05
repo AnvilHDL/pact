@@ -44,6 +44,7 @@
 %token KEYWORD_LOOP         (* loop *)
 %token KEYWORD_PROC         (* proc *)
 %token KEYWORD_WHEN         (* when *)
+%token KEYWORD_INTERFACE      (* Interface *)
 %token DOLLAR               (* $ *)       
 %token KEYWORD_CHAN         (* chan *)
 %token KEYWORD_LEFT         (* left *)
@@ -60,7 +61,6 @@
 %token KEYWORD_SEND         (* send *)
 %token KEYWORD_RECV         (* recv *)
 %token ARROW_LONG              (* --> *)
-%token EXCLAMATION          (* ! *)
 %token KEYWORD_IN          (* in *)
 %token KEYWORD_ETERNAL      (* eternal *)
 %token KEYWORD_TYPE         (* type *)
@@ -120,6 +120,8 @@ cunit:
   { Lang.cunit_add_func_def c func_def }
 | ty = type_def; c = cunit
   { Lang.cunit_add_type_def c ty }
+| sess = session_def; c = cunit
+  { Lang.cunit_add_session_def c sess }
 | cc = channel_class_def; c = cunit
   { Lang.cunit_add_channel_class c cc }
 | im = import_directive; c = cunit
@@ -271,6 +273,39 @@ type_def:
     { name = name; body = `Record (List.rev fields); params = Option.value ~default:[] params } : Lang.type_def
   }
 ;
+
+session_def:
+| KEYWORD_INTERFACE; name = IDENT; LEFT_PAREN; params = proc_def_arg_list; RIGHT_PAREN; EQUAL ; body = node(local_session_type); SEMICOLON
+  {
+    { name = name; body = body; params = params } : Lang.session_def
+  }
+;
+
+local_session_type:
+| act = atomic_action_with_gap
+  { Lang.StyAtom act }
+| LEFT_BRACE; atom_actions = separated_nonempty_list(COMMA, atomic_action); RIGHT_BRACE
+  { Lang.StyAtomSets atom_actions }
+| act = local_session_type; SEMICOLON; rest = node(local_session_type)
+  { Lang.StySeq (act, rest.d) }
+| act1 = local_session_type; PLUS; act2 = local_session_type
+  { Lang.StyChoice [act1; act2] }
+| act3 = local_session_type; AND; act4 = local_session_type
+  { Lang.StyChoiceDual [act3; act4] }
+| LEFT_PAREN; act5 = local_session_type; RIGHT_PAREN
+  { act5 }
+
+atomic_action_with_gap:
+| SHARP; n = INT
+  { Lang.AtomDelay n }
+| act = atomic_action
+  { act }
+  
+atomic_action:
+| id = IDENT
+  { Lang.AtomMsg id }
+| act1 = atomic_action; XOR; act2 = atomic_action
+  { Lang.AtomXchoice [act1; act2] }
 
 
 variant_def:

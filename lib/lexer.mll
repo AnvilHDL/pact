@@ -33,6 +33,7 @@ rule read =
   | "--"      { DOUBLE_MINUS }
   | '^'       { XOR }
   | "control" { KEYWORD_CONTROL }
+  | "interface" { KEYWORD_INTERFACE }
   | "-->"     { ARROW_LONG }
   | "when"    { KEYWORD_WHEN }
   | "$"       { DOLLAR }

@@ -115,7 +115,7 @@ let compile out config =
             (* hacky *)
             {cunit_file_name = Some file_name;
             channel_classes = all_channel_classes; type_defs = all_type_defs;
-            procs = [proc]; imports = []; _extern_procs = [];
+            session_defs = []; procs = [proc]; imports = []; _extern_procs = [];
             func_defs = all_func_defs;
             macro_defs = all_macro_defs} in
           let graph_collection =

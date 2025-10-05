@@ -92,6 +92,20 @@ let sig_lifetime_const : sig_lifetime =
 (** Direction of an endpoint. *)
 type endpoint_direction = Left | Right
 
+(** Atomic actions for session types *)
+type atomic_action =
+  | AtomMsg of identifier (** atomic message action *)
+  | AtomDelay of int (** atomic delay action *)
+  | AtomXchoice of atomic_action list (** exclusive choice between atomic actions *)
+
+(** Session types - separate from protocol types *)
+and session_type =
+  | StySeq of session_type * session_type (** sequence *)
+  | StyChoice of session_type list (** choice *)
+  | StyChoiceDual of session_type list (** dual choice (AND) *)
+  | StyAtomSets of atomic_action list (** set of atomic actions *)
+  | StyAtom of atomic_action (** single atomic action *)
+
 (** A data type. *)
 type data_type = [
   | `Logic
@@ -134,6 +148,13 @@ and type_def = {
   name: identifier;
   body: data_type;
   params: param list; (** list of parameters *)
+}
+
+(** A session type definition ([session name = body])*)
+and session_def = {
+  name: identifier;
+  body: session_type ast_node;
+  params: endpoint_def ast_node list; (** list of session parameters *)
 }
 
 (** Unit type. Basically an empty tuple. *)
@@ -534,6 +555,7 @@ type compilation_unit = {
   cunit_file_name : string option; (** filename in which the compilation unit resides *)
   channel_classes: channel_class_def list;
   type_defs: type_def list;
+  session_defs: session_def list;
   macro_defs: macro_def list;
   func_defs : func_def list;
   procs: proc_def list;
@@ -543,7 +565,7 @@ type compilation_unit = {
 
 let cunit_empty : compilation_unit =
   {cunit_file_name = None; channel_classes = []; type_defs = [];
-  procs = []; imports = []; _extern_procs = []; macro_defs = [];func_defs = []}
+  session_defs = []; procs = []; imports = []; _extern_procs = []; macro_defs = [];func_defs = []}
 
 let cunit_add_channel_class
   (c : compilation_unit) (cc : channel_class_def) : compilation_unit =
@@ -551,6 +573,9 @@ let cunit_add_channel_class
 
 let cunit_add_type_def (c : compilation_unit) (ty : type_def) : compilation_unit =
   {c with type_defs = ty::c.type_defs}
+
+let cunit_add_session_def (c : compilation_unit) (sess : session_def) : compilation_unit =
+  {c with session_defs = sess::c.session_defs}
 
 let cunit_add_func_def (c : compilation_unit) (f : func_def) : compilation_unit =
   {c with func_defs = f::c.func_defs}
