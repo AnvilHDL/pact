@@ -95,16 +95,18 @@ type endpoint_direction = Left | Right
 (** Atomic actions for session types *)
 type atomic_action =
   | AtomMsg of identifier (** atomic message action *)
-  | AtomDelay of int (** atomic delay action *)
-  | AtomXchoice of atomic_action list (** exclusive choice between atomic actions *)
+  | AtomXchoice of atomic_action*atomic_action (** exclusive choice between atomic actions *)
 
-(** Session types - separate from protocol types *)
+and atomic_action_with_gap =
+  | AtomDelay of int (** atomic delay action *)
+  | AtomicAct of atomic_action
+
 and session_type =
   | StySeq of session_type * session_type (** sequence *)
   | StyChoice of session_type list (** choice *)
   | StyChoiceDual of session_type list (** dual choice (AND) *)
   | StyAtomSets of atomic_action list (** set of atomic actions *)
-  | StyAtom of atomic_action (** single atomic action *)
+  | StyAtom of atomic_action_with_gap (** single atomic action *)
 
 (** A data type. *)
 type data_type = [
@@ -246,13 +248,9 @@ type channel_class_def = {
   messages: message_def list;
   params: param list;  (** List of generic parameters *)
   span: code_span; (** code span of the channel class definition *)
-  local_sty: protocol ast_node option; (** local session type, if any *)
+  local_sty: session_type ast_node option; (** local session type, if any *)
 }
 
-and protocol =
-| StyMsg of message_specifier ast_node
-| StySeq of protocol ast_node * protocol ast_node
-| StyChoice of protocol ast_node list
 (** The visibility of a channel. *)
 type channel_visibility =
 | BothForeign (** not visible locally, must be passed to other processes *)
@@ -882,33 +880,48 @@ let rec get_lv lval =
   | Indirected (lv,_) -> get_lv lv
 in get_lv lv
 
+let rec add_ep_to_atomic_action ep = function
+  | AtomMsg id -> AtomMsg (Printf.sprintf "%s.%s" ep id)
+  | AtomXchoice (a1, a2) ->
+      AtomXchoice (add_ep_to_atomic_action ep a1, add_ep_to_atomic_action ep a2)
+  
+
 
 let rec add_msg_ep_to_protocol ep = function
-  | StyMsg id_node ->
-      let id = id_node.d in
-      let id_with_ep = { id with endpoint = ep } in
-      { id_node with d = StyMsg {id_node with d = id_with_ep} }
+  | StyAtom (AtomicAct atm) ->
+      StyAtom (AtomicAct (add_ep_to_atomic_action ep atm))
+  | StyAtom (AtomDelay n) ->
+      StyAtom (AtomDelay n)
+  | StyAtomSets acts ->
+      StyAtomSets (List.map (add_ep_to_atomic_action ep) acts)
   | StySeq (p1, p2) ->
-      {
-        span = { st = p1.span.st; ed = p2.span.ed };
-        d = StySeq (
-          add_msg_ep_to_protocol ep p1.d,
-          add_msg_ep_to_protocol ep p2.d
-        )
-      }
+      StySeq (add_msg_ep_to_protocol ep p1, add_msg_ep_to_protocol ep p2)
   | StyChoice ps ->
-      let new_ps = List.map (fun p -> add_msg_ep_to_protocol ep p.d) ps in
-      {
-        span = if new_ps = [] then code_span_dummy else { st = (List.hd new_ps).span.st; ed = (List.rev new_ps |> List.hd).span.ed };
-        d = StyChoice new_ps
-      }
+      StyChoice (List.map (add_msg_ep_to_protocol ep) ps)
+  | StyChoiceDual ps ->
+      StyChoiceDual (List.map (add_msg_ep_to_protocol ep) ps)
+
+let rec string_of_atomic_action = function
+  | AtomMsg id -> id
+  | AtomXchoice (a1, a2) ->
+      Printf.sprintf "%s^%s" (string_of_atomic_action a1) (string_of_atomic_action a2)
+  
+let string_of_atomic_action_with_gap = function
+  | AtomicAct act -> string_of_atomic_action act
+  | AtomDelay n -> Printf.sprintf "#<%d>" n
+
 
 let string_of_protocol p =
-  let rec aux = function
-    | StyMsg id_node -> string_of_msg_spec id_node.d
-    | StySeq (p1, p2) -> "(" ^ aux p1.d ^ " -> " ^ aux p2.d ^ ")"
-    | StyChoice ps ->
-        let ps_strs = List.map (fun p -> aux p.d) ps in
-        "{" ^ String.concat " ^ " ps_strs ^ "}"
+let rec aux p =
+  match p with
+  | StySeq (p1, p2) ->
+      "(" ^ aux p1 ^ " --> " ^ aux p2 ^ ")"
+  | StyChoice ps ->
+      "( " ^ String.concat " + " (List.map aux ps) ^ " )"
+  | StyChoiceDual ps ->
+      "( " ^ String.concat " & " (List.map aux ps) ^ " )"
+  | StyAtomSets acts ->
+      "{" ^ String.concat " , " (List.map string_of_atomic_action acts) ^ "}"
+  | StyAtom act -> string_of_atomic_action_with_gap act
   in
   aux p.d

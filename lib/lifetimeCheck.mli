@@ -3,4 +3,3 @@ val lifetime_check : Config.compile_config -> EventGraph.cunit_info -> EventGrap
 val gate_check : Config.compile_config -> EventGraph.cunit_info -> EventGraph.event_graph -> unit
 
 (** Generate and print session graph for analyzing message passing patterns *)
-val check_session : EventGraph.event_graph -> unit

@@ -1138,9 +1138,9 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       let channel_local_sty = List.map (fun p -> (match (MessageCollection.lookup_channel_class ci.channel_classes (snd p)) with Some c -> c.local_sty | None -> None))endpoint_collection in
 
       let protocol_list =
-        List.map2 (fun (ep_name, _) sty_opt ->
+        List.map2 (fun (ep_name, _) (sty_opt: session_type ast_node option) ->
           match sty_opt with
-          | Some sty -> Some (ep_name, (Lang.add_msg_ep_to_protocol ep_name (Lang.data_of_ast_node sty)))
+          | Some sty -> Some (ep_name, {d = (Lang.add_msg_ep_to_protocol ep_name sty.d); span = sty.span} )
           | None -> None
         ) endpoint_collection channel_local_sty
       in
@@ -1192,7 +1192,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
             (* discard after type checking *)
             let ctx = (BuildContext.create_empty graph shared_vars_info false) in
             let td = visit_expr graph ci ctx e in
-            LifetimeCheck.check_session graph;
+            (* LifetimeCheck.check_session graph; *)
             graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
             graph.is_general_recursive <- graph.last_event_id <> td.lt.live.id;
             let g' = GraphOpt.optimize config false ci graph in

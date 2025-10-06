@@ -195,7 +195,7 @@ and event_graph = {
   mutable is_general_recursive : bool; (** is this a general recursive graph? *)
   mutable comb : bool;
   mutable gate_context : gate_class list;
-  mutable protocols : (string, (Lang.protocol Lang.ast_node)) Hashtbl.t;
+  mutable protocols : (string, (Lang.session_type Lang.ast_node)) Hashtbl.t;
 }
 
 type proc_graph = {

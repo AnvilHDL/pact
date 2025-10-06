@@ -60,7 +60,6 @@
 %token KEYWORD_LET          (* let *)
 %token KEYWORD_SEND         (* send *)
 %token KEYWORD_RECV         (* recv *)
-%token ARROW_LONG              (* --> *)
 %token KEYWORD_IN          (* in *)
 %token KEYWORD_ETERNAL      (* eternal *)
 %token KEYWORD_TYPE         (* type *)
@@ -94,7 +93,6 @@
 %right LEFT_ABRACK RIGHT_ABRACK LEFT_ABRACK_EQ RIGHT_ABRACK_EQ
 %right DOUBLE_GT SEMICOLON
 %right KEYWORD_LET KEYWORD_SET KEYWORD_PUT
-%right ARROW_LONG
 %left DOUBLE_AND DOUBLE_OR
 %left EXCL_EQ DOUBLE_EQ
 %left XOR AND OR PLUS MINUS
@@ -350,13 +348,13 @@ atomic_action_with_gap:
 | SHARP; n = INT
   { Lang.AtomDelay n }
 | act = atomic_action
-  { act }
+  { Lang.AtomicAct act }
   
 atomic_action:
 | id = IDENT
   { Lang.AtomMsg id }
 | act1 = atomic_action; XOR; act2 = atomic_action
-  { Lang.AtomXchoice [act1; act2] }
+  { Lang.AtomXchoice (act1, act2) }
 
 
 variant_def:
@@ -401,20 +399,8 @@ channel_class_def:
   }
 ;
 progress_contract:
-| KEYWORD_PROTOCOL; DOUBLE_COLON; prog_type = node(session_type); SEMICOLON
+| KEYWORD_PROTOCOL; DOUBLE_COLON; prog_type = node(local_session_type);
   { prog_type }
-
-
-//rd_req ->* ( (hit -> (#0)rd_data) ^ (miss -> (#0)rd_data) )
-session_type:
-| id = IDENT
-  { Lang.StyMsg (Lang.ast_node_of_data (fst $loc) (snd $loc) ({endpoint = ""; msg = id} : Lang.message_specifier)) }
-| s=node(session_type);ARROW_LONG;e=node(session_type)
-  { Lang.StySeq (s, e) }
-| LEFT_BRACE;s= separated_list(XOR, node(session_type));RIGHT_BRACE
-  { Lang.StyChoice s }
-| LEFT_PAREN; s=node(session_type); RIGHT_PAREN
-  { Lang.data_of_ast_node s }
 
 
 //For passing the list of channels that are nessacary to communicate with the instantiation of the process

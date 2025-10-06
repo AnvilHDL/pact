@@ -759,18 +759,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       | _ -> ()
     )
       ) g.gate_context
-
-type protocol_node = {
-  msg_id : message_specifier;
-  mutable next : message_specifier list; (* outgoing edges *)
-}
-
-type protocol_graph = {
-  protocol_nodes : protocol_node list
-}
- 
-
-let rec protocol_graph_from_protocol (p : protocol) (g : protocol_graph) =
+(* let rec protocol_graph_from_protocol (p : session_type) (g : protocol_graph) =
   match p with
   | StyMsg id_node -> 
       (* Convert identifier to message_specifier *)
@@ -841,9 +830,9 @@ let print_protocol_graph (g: protocol_graph) =
   
   let graph_strings = List.map print_node root_nodes in
   Printf.eprintf "Protocol Graph: %s\n" (String.concat " | " graph_strings)
+   *)
   
-  
-let check_session (g : event_graph) =
+(* let check_session (g : event_graph) =
   let protocols = g.protocols in
   let protocol_satisfied = Hashtbl.create (Hashtbl.length protocols) in
 
@@ -860,4 +849,4 @@ let check_session (g : event_graph) =
 
   GraphAnalysis.print_session_graph session_graph;
 
-
+ *)

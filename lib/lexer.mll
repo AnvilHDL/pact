@@ -34,7 +34,6 @@ rule read =
   | '^'       { XOR }
   | "control" { KEYWORD_CONTROL }
   | "interface" { KEYWORD_INTERFACE }
-  | "-->"     { ARROW_LONG }
   | "when"    { KEYWORD_WHEN }
   | "$"       { DOLLAR }
   | "&&"      { DOUBLE_AND }
