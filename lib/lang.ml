@@ -527,7 +527,8 @@ type proc_def_body_maybe_extern =
 type proc_def = {
   name: string;
   (* arguments are endpoints passed from outside *)
-  args: endpoint_def ast_node list; (** endpoints passed from outside *)
+  interface : identifier ast_node option; (** optional interface name *)
+  mutable args: endpoint_def ast_node list; (** endpoints passed from outside *)
   body: proc_def_body_maybe_extern; (** process body *)
   params: param list; (** compile-time parameters *)
 }

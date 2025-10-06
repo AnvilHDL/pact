@@ -142,39 +142,90 @@ import_directive:
 
 proc_def:
 | KEYWORD_PROC; ident = IDENT;
-  LEFT_PAREN; args = proc_def_arg_list; RIGHT_PAREN;
+  LEFT_PAREN; RIGHT_PAREN;
   LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
   {
     {
       name = ident;
+      interface = None;
+      args = [];
+      params = [];
+      body = let open Lang in Native body
+    } : Lang.proc_def
+  }
+| KEYWORD_PROC; ident = IDENT;
+  LEFT_PAREN; args = proc_def_arg_list_nonempty; RIGHT_PAREN;
+  LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
+  {
+    {
+      name = ident;
+      interface = None;
       args = args;
       params = [];
       body = let open Lang in Native body
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
-  LEFT_PAREN; args = proc_def_arg_list; RIGHT_PAREN;
+  LEFT_PAREN; RIGHT_PAREN;
   LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
   {
     {
       name = ident;
+      interface = None;
+      args = [];
+      params = params;
+      body = let open Lang in Native body
+    } : Lang.proc_def
+  }
+| KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
+  LEFT_PAREN; args = proc_def_arg_list_nonempty; RIGHT_PAREN;
+  LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
+  {
+    {
+      name = ident;
+      interface = None;
       args = args;
       params = params;
       body = let open Lang in Native body
     } : Lang.proc_def
   }
-| KEYWORD_PROC; ident = IDENT; LEFT_PAREN; args = proc_def_arg_list; RIGHT_PAREN;
+| KEYWORD_PROC; ident = IDENT;
+  LEFT_PAREN; args = proc_def_arg_list_nonempty; RIGHT_PAREN;
   KEYWORD_EXTERN; LEFT_PAREN; mod_name = STR_LITERAL; RIGHT_PAREN;
   LEFT_BRACE; body = proc_def_body_extern; RIGHT_BRACE
   {
     {
       name = ident;
+      interface = None;
       args = args;
       params = [];
       body = let open Lang in Extern (mod_name, body)
     } : Lang.proc_def
   }
-;
+| KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
+  LEFT_PAREN; intf = node(IDENT); RIGHT_PAREN;
+  LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
+  {
+    {
+      name = ident;
+      interface = Some intf;
+      args = [];
+      params = params;
+      body = let open Lang in Native body
+    } : Lang.proc_def
+  }
+| KEYWORD_PROC; ident = IDENT;
+  LEFT_PAREN; intf = node(IDENT); RIGHT_PAREN;
+  LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
+  {
+    {
+      name = ident;
+      interface = Some intf;
+      args = [];
+      params = [];
+      body = let open Lang in Native body
+    } : Lang.proc_def
+  }
 
 proc_def_body:
 |
@@ -371,27 +422,37 @@ proc_def_arg_list:
   l = separated_list(COMMA, node(proc_def_arg))
   { l }
 ;
+
+proc_def_arg_list_nonempty:
+  l = separated_nonempty_list(COMMA, node(proc_def_arg))
+  { l }
+;
 // To Do: Can be renamed to inherited channel or something
 proc_def_arg:
-  foreign = foreign_tag; ident = IDENT; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
+| ident = IDENT; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
   {
     {
       name = ident;
       channel_class = fst chan_class;
       channel_params = snd chan_class;
       dir = chan_dir;
-      foreign = foreign; (* These are ignored for now.
-                        Instead we just look at which endpoints are used in spawn *)
+      foreign = false;
+      opp = None;
+    } : Lang.endpoint_def
+  }
+| KEYWORD_FOREIGN; ident = IDENT; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
+  {
+    {
+      name = ident;
+      channel_class = fst chan_class;
+      channel_params = snd chan_class;
+      dir = chan_dir;
+      foreign = true;
       opp = None;
     } : Lang.endpoint_def
   }
 ;
 
-// To Ask: What does this do
-foreign_tag:
-| { false }
-| KEYWORD_FOREIGN { true }
-;
 // Specifies the dirn of comm (inp or out)
 channel_direction:
 | KEYWORD_LEFT
@@ -401,21 +462,52 @@ channel_direction:
 ;
 // channels are instantantiated with endpoint aquisition by native channel inside the proc
 channel_def:
-| left_foreign = foreign_tag; left_endpoint = IDENT; DOUBLE_MINUS;
-  right_foreign = foreign_tag; right_endpoint = IDENT; COLON;
+| left_endpoint = IDENT; DOUBLE_MINUS;
+  right_endpoint = IDENT; COLON;
   chan_class = channel_class_concrete
   {
-    let visibility = match left_foreign, right_foreign with
-      | true, true -> Lang.BothForeign
-      | false, true -> Lang.RightForeign
-      | _ -> Lang.LeftForeign
-    in
     {
       channel_class = fst chan_class;
       channel_params = snd chan_class;
       endpoint_left = left_endpoint;
       endpoint_right = right_endpoint;
-      visibility = visibility;
+      visibility = Lang.LeftForeign;
+    } : Lang.channel_def
+  }
+| KEYWORD_FOREIGN; left_endpoint = IDENT; DOUBLE_MINUS;
+  right_endpoint = IDENT; COLON;
+  chan_class = channel_class_concrete
+  {
+    {
+      channel_class = fst chan_class;
+      channel_params = snd chan_class;
+      endpoint_left = left_endpoint;
+      endpoint_right = right_endpoint;
+      visibility = Lang.RightForeign;
+    } : Lang.channel_def
+  }
+| left_endpoint = IDENT; DOUBLE_MINUS;
+  KEYWORD_FOREIGN; right_endpoint = IDENT; COLON;
+  chan_class = channel_class_concrete
+  {
+    {
+      channel_class = fst chan_class;
+      channel_params = snd chan_class;
+      endpoint_left = left_endpoint;
+      endpoint_right = right_endpoint;
+      visibility = Lang.RightForeign;
+    } : Lang.channel_def
+  }
+| KEYWORD_FOREIGN; left_endpoint = IDENT; DOUBLE_MINUS;
+  KEYWORD_FOREIGN; right_endpoint = IDENT; COLON;
+  chan_class = channel_class_concrete
+  {
+    {
+      channel_class = fst chan_class;
+      channel_params = snd chan_class;
+      endpoint_left = left_endpoint;
+      endpoint_right = right_endpoint;
+      visibility = Lang.BothForeign;
     } : Lang.channel_def
   }
 ;

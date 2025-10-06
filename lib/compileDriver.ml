@@ -76,6 +76,7 @@ let compile out config =
   );
   (* collect all channel class and type definitions *)
   let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits in
+  let all_session_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
   let all_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.type_defs) !cunits in
   let all_procs = List.concat_map (fun (file_name, cunit) -> let open Lang in List.map (fun p -> (file_name, p)) cunit.procs) !cunits in
   let all_func_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.func_defs) !cunits in
@@ -115,7 +116,7 @@ let compile out config =
             (* hacky *)
             {cunit_file_name = Some file_name;
             channel_classes = all_channel_classes; type_defs = all_type_defs;
-            session_defs = []; procs = [proc]; imports = []; _extern_procs = [];
+            session_defs = all_session_defs; procs = [proc]; imports = []; _extern_procs = [];
             func_defs = all_func_defs;
             macro_defs = all_macro_defs} in
           let graph_collection =

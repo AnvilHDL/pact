@@ -8,7 +8,7 @@ chan local_ch{
 interface test_local (ep : left local_ch) = (req;ack;reset);
 
 
-proc test_local(ep : left local_ch){
+proc test_local(test_local){
     loop{
         let r = recv ep.req  >> 
         send ep.ack(1'd1) >>

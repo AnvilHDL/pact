@@ -1222,6 +1222,23 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     func_defs =func_defs;
     weak_typecasts = wty
   } in
+
+  let lookup_interface (interfaces : session_def list) (intf : identifier) : session_def option =
+    List.find_opt (fun (s:session_def) -> s.name = intf) interfaces
+  in
+
+  let add_proc_args (proc : proc_def) =
+    if Option.is_some proc.interface then
+      let intf = Option.get proc.interface in
+      let session = lookup_interface cunit.session_defs intf.d
+        |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
+      let session_params = session.params in
+      proc.args <- session_params
+
+    in
+
+  List.iter add_proc_args cunit.procs;
+
   let graphs = List.map (build_proc config sched module_name param_values ci ) cunit.procs in
   {
     event_graphs = graphs;
