@@ -94,8 +94,8 @@ type endpoint_direction = Left | Right
 
 (** Atomic actions for session types *)
 type atomic_action =
-  | AtomMsg of identifier (** atomic message action *)
-  | AtomXchoice of atomic_action*atomic_action (** exclusive choice between atomic actions *)
+  | AtomBMsg of identifier (** atomic blocking message action *)
+  | AtomNBMsg of identifier (** atomic non-blocking message action *)
 
 and atomic_action_with_gap =
   | AtomDelay of int (** atomic delay action *)
@@ -103,12 +103,18 @@ and atomic_action_with_gap =
 
 and session_type =
   | StySeq of session_type * session_type (** sequence *)
-  | StyChoice of session_type list (** choice *)
-  | StyChoiceDual of session_type list (** dual choice (AND) *)
-  | StyAtomSets of atomic_action list (** set of atomic actions *)
+  | StyChoice of session_type * session_type (** internal choice (+ operator) *)
+  | StyChoiceDual of offering_session_type list (** dual choice (AND operator) *)
   | StyAtom of atomic_action_with_gap (** single atomic action *)
+  | StyParallel of session_type * session_type (** parallel composition of session types *)
+  | StyFuture of session_type (** future operator (F) **)
 
-(** A data type. *)
+and offering_session_type = {
+  trigger: atomic_action;
+  continuation: session_type option;
+}
+
+(** A data type. *) 
 type data_type = [
   | `Logic
   | `Array of data_type * int maybe_param
@@ -880,31 +886,22 @@ let rec get_lv lval =
   | Indirected (lv,_) -> get_lv lv
 in get_lv lv
 
-let rec add_ep_to_atomic_action ep = function
-  | AtomMsg id -> AtomMsg (Printf.sprintf "%s.%s" ep id)
-  | AtomXchoice (a1, a2) ->
-      AtomXchoice (add_ep_to_atomic_action ep a1, add_ep_to_atomic_action ep a2)
+let add_ep_to_atomic_action ep = function
+  | AtomBMsg id -> AtomBMsg (Printf.sprintf "%s.%s" ep id)
+  | AtomNBMsg id -> AtomNBMsg (Printf.sprintf "%s.%s" ep id)
   
 
 
-let rec add_msg_ep_to_protocol ep = function
+(* let rec add_msg_ep_to_protocol ep = function
   | StyAtom (AtomicAct atm) ->
       StyAtom (AtomicAct (add_ep_to_atomic_action ep atm))
-  | StyAtom (AtomDelay n) ->
-      StyAtom (AtomDelay n)
-  | StyAtomSets acts ->
-      StyAtomSets (List.map (add_ep_to_atomic_action ep) acts)
-  | StySeq (p1, p2) ->
-      StySeq (add_msg_ep_to_protocol ep p1, add_msg_ep_to_protocol ep p2)
-  | StyChoice ps ->
-      StyChoice (List.map (add_msg_ep_to_protocol ep) ps)
-  | StyChoiceDual ps ->
-      StyChoiceDual (List.map (add_msg_ep_to_protocol ep) ps)
+  | StySeq (p1, p2) -> *)
 
-let rec string_of_atomic_action = function
-  | AtomMsg id -> id
-  | AtomXchoice (a1, a2) ->
-      Printf.sprintf "%s^%s" (string_of_atomic_action a1) (string_of_atomic_action a2)
+let string_of_atomic_action atomic_action =
+  match atomic_action with
+  | AtomBMsg id -> id
+  | AtomNBMsg id -> Printf.sprintf "NB( %s )" id
+
   
 let string_of_atomic_action_with_gap = function
   | AtomicAct act -> string_of_atomic_action act
@@ -915,13 +912,20 @@ let string_of_protocol p =
 let rec aux p =
   match p with
   | StySeq (p1, p2) ->
-      "(" ^ aux p1 ^ " --> " ^ aux p2 ^ ")"
-  | StyChoice ps ->
-      "( " ^ String.concat " + " (List.map aux ps) ^ " )"
+      "(" ^ aux p1 ^ " >> " ^ aux p2 ^ ")"
+  | StyChoice (p1, p2) ->
+      "( " ^ aux p1 ^ " + " ^ aux p2 ^ " )"
   | StyChoiceDual ps ->
-      "( " ^ String.concat " & " (List.map aux ps) ^ " )"
-  | StyAtomSets acts ->
-      "{" ^ String.concat " , " (List.map string_of_atomic_action acts) ^ "}"
+      "( " ^ String.concat " & " (List.map aux2 ps) ^ " )"
   | StyAtom act -> string_of_atomic_action_with_gap act
-  in
-  aux p.d
+  | StyFuture p_inner ->
+      "F( " ^ aux p_inner ^ " )"
+  | StyParallel (p1, p2) ->
+      "( " ^ aux p1 ^ " || " ^ aux p2 ^ " )"
+and aux2 p =
+  match p with
+  | {trigger; continuation} ->
+    match continuation with
+    | None -> string_of_atomic_action trigger
+    | Some p_continuation -> string_of_atomic_action trigger ^ " ; " ^ aux p_continuation
+in aux p

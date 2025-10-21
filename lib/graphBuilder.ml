@@ -1140,7 +1140,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       let protocol_list =
         List.map2 (fun (ep_name, _) (sty_opt: session_type ast_node option) ->
           match sty_opt with
-          | Some sty -> Some (ep_name, {d = (Lang.add_msg_ep_to_protocol ep_name sty.d); span = sty.span} )
+          | Some sty -> Some (ep_name, sty) 
           | None -> None
         ) endpoint_collection channel_local_sty
       in
@@ -1148,7 +1148,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       (* create hash table for fast lookup of endpoint name with protocol *)
       let protocol_map = Hashtbl.create (List.length protocol_list_filtered) in
       List.iter (fun (ep_name, proto) -> Hashtbl.add protocol_map ep_name proto) protocol_list_filtered;
-      if (config.verbose) then Printf.eprintf "[Info] Protocol list for process %s: %s\n" module_name (String.concat ", " (List.map(fun f -> Lang.string_of_protocol (snd f)) protocol_list_filtered));
+      if (config.verbose) then Printf.eprintf "[Info] Protocol list for process %s: %s\n" module_name (String.concat ", " (List.map(fun f -> Lang.string_of_protocol (snd f).d) protocol_list_filtered));
 
       let proc_threads = List.mapi (fun i ((e, reset_by) : expr_node * message_specifier option) ->
         let graph = {

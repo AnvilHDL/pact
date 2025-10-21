@@ -80,6 +80,7 @@
 %token KEYWORD_STRUCT       (* struct *)
 %token KEYWORD_ENUM         (* enum *)
 %token KEYWORD_WITH         (* with *)
+%token KEYWORD_F         (* F *)
 %token KEYWORD_TRY          (* try *)
 %token <int>INT             (* int literal *)
 %token <string>IDENT        (* identifier *)
@@ -101,6 +102,8 @@
 %left PERIOD
 %left LEFT_BRACKET
 %nonassoc TILDE UMINUS UAND UOR KEYWORD_IN
+%nonassoc KEYWORD_F
+%left DOUBLE_COLON
 %start <Lang.compilation_unit> cunit
 %%
 
@@ -331,30 +334,47 @@ session_def:
 ;
 
 local_session_type:
-| act = atomic_action_with_gap
-  { Lang.StyAtom act }
-| LEFT_BRACE; atom_actions = separated_nonempty_list(COMMA, atomic_action); RIGHT_BRACE
-  { Lang.StyAtomSets atom_actions }
-| act = local_session_type; SEMICOLON; rest = node(local_session_type)
-  { Lang.StySeq (act, rest.d) }
-| act1 = local_session_type; PLUS; act2 = local_session_type
-  { Lang.StyChoice [act1; act2] }
-| act3 = local_session_type; AND; act4 = local_session_type
-  { Lang.StyChoiceDual [act3; act4] }
-| LEFT_PAREN; act5 = local_session_type; RIGHT_PAREN
-  { act5 }
-
-atomic_action_with_gap:
 | SHARP; n = INT
-  { Lang.AtomDelay n }
+  { Lang.StyAtom (Lang.AtomDelay n) }
 | act = atomic_action
-  { Lang.AtomicAct act }
-  
+  { Lang.StyAtom (Lang.AtomicAct act) }
+| act1 = local_session_type ;DOUBLE_GT; act2 = local_session_type
+  { Lang.StySeq (act1, act2) }
+| act1 = local_session_type ;PLUS; act2 = local_session_type
+  { Lang.StyChoice (act1, act2) }
+| offering_list = offering_choice_list
+  { Lang.StyChoiceDual offering_list }
+| act1 = local_session_type; DOUBLE_OR; act2 = local_session_type
+  { Lang.StyParallel (act1, act2) }
+| LEFT_PAREN; sty = local_session_type; RIGHT_PAREN
+  { sty }
+| KEYWORD_F; sty = local_session_type %prec KEYWORD_F
+  { Lang.StyFuture sty }
+
+
+offering_choice_list:
+| act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; rest = offering_choice_list
+  { { Lang.trigger = act; Lang.continuation = Some cont } :: rest }
+| act = atomic_action; DOUBLE_COLON; AND; rest = offering_choice_list
+  { { Lang.trigger = act; Lang.continuation = None } :: rest }
+| act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; last = offering_choices
+  { [{ Lang.trigger = act; Lang.continuation = Some cont }; last] }
+| act = atomic_action; DOUBLE_COLON; AND; last = offering_choices
+  { [{ Lang.trigger = act; Lang.continuation = None }; last] }
+
+offering_choices:
+| act = atomic_action
+  { { Lang.trigger = act; Lang.continuation = None } : Lang.offering_session_type }
+| act = atomic_action; DOUBLE_COLON; cont = local_session_type %prec DOUBLE_COLON
+  { { Lang.trigger = act; Lang.continuation = Some cont } : Lang.offering_session_type }
+
+
 atomic_action:
 | id = IDENT
-  { Lang.AtomMsg id }
-| act1 = atomic_action; XOR; act2 = atomic_action
-  { Lang.AtomXchoice (act1, act2) }
+  { Lang.AtomBMsg id }
+| SHARP;id = IDENT
+  { Lang.AtomNBMsg id }
+
 
 
 variant_def:
