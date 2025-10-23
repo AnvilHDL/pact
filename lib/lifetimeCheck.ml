@@ -786,7 +786,7 @@ let extract_atomic_actions (ev : event) (default_span : Lang.code_span) : (Lang.
   
   delay_actions @ immediate_actions @ sustained_actions
 
-let equivalence_of_action (a1 : Lang.atomic_action_with_gap) (a2 : Lang.atomic_action_with_gap) : (bool * int option) =
+let equivalence_of_action (a1 : Lang.atomic_action_with_gap) (a2 : Lang.atomic_action_with_gap) : (bool * (int option)) =
   match (a1, a2) with
   | (Lang.AtomicAct act1, Lang.AtomicAct act2) ->
       (match (act1, act2) with
@@ -816,7 +816,14 @@ if verbose then Printf.eprintf "Checking event %d for atomic action %s | present
 (** Check if event has any communication action that conflicts with expected action *)
 let event_has_wrong_action (ev : event) (expected : Lang.atomic_action_with_gap) (default_span : code_span) : (Lang.atomic_action_with_gap * Lang.code_span) option =
   let actions = extract_atomic_actions ev default_span in
-  List.find_opt (fun (a, _) -> fst (equivalence_of_action a expected)) actions
+  let satisfy_act = List.find_opt (fun (a, _) -> fst (equivalence_of_action a expected)) actions in
+  match satisfy_act with
+  | Some _ -> None
+  | None ->
+      let conflicting_act = List.find_opt (fun (a, _) -> not (fst (equivalence_of_action a expected))) actions in
+      match conflicting_act with
+      | Some (act, span) -> Some (act, span)
+      | None -> None
 
 (** Advance session type based on event actions, returning (updated_type, error_opt) *)
 let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config : Config.compile_config) (default_span : Lang.code_span)
@@ -837,7 +844,11 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
               (Lang.string_of_atomic_action_with_gap wrong_act) in
             (Some sty, Some (err_msg, span))
         | None ->
-            (Some sty, None) (* Session not yet satisfied, but no error *)
+            let err_msg = Printf.sprintf
+              "Session type mismatch: expected '%s' but no matching action found"
+              (Lang.string_of_atomic_action_with_gap (Lang.AtomicAct atom)) in
+            (Some sty, Some (err_msg, default_span))
+            
       )
   
   | Lang.StyAtom (Lang.AtomDelay n) ->
@@ -910,12 +921,16 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
 
 (** Check session type conformance for entire event graph *)
 let check_session (config : Config.compile_config) (g : event_graph) =
+  let last_node_id = (List.length g.events) - 1 in
+
+  
   if config.verbose then (
   Printf.eprintf "\n[Session Type Check] Starting session type  ....\n";
   Printf.eprintf "Checking graph with %d events...\n" (List.length g.events);
   EventGraphOps.print_graph g;
   );
   match g.interface_protocol with
+  (* dont check at last node *)
   | None -> () (* No session type to check *)
   | Some protocol_node ->
       if config.verbose then
@@ -930,59 +945,66 @@ let check_session (config : Config.compile_config) (g : event_graph) =
 
       let session_states = IntHashtbl.create (List.length g.events) in
       
-      let explore_graph start_ev initial_sty =
+      let explore_graph start_ev initial_sty  =
         Queue.add (start_ev, initial_sty) bfs_queue;
         IntHashtbl.add visited start_ev.id true;
         IntHashtbl.add session_states start_ev.id initial_sty;
         
         while not (Queue.is_empty bfs_queue) do
           let (ev, current_sty) = Queue.pop bfs_queue in
-          
           (* Update event's session type *)
-          ev.session_type <- Some {protocol_node with Lang.d = current_sty};
-          
-          (* Compute next session type based on this event's actions *)
-          let (next_sty_opt, error_opt) = session_judgement {protocol_node with Lang.d = current_sty} ev config g.thread_codespan in
-          
-          (* Check for errors *)
-          (match error_opt with
-          | Some (err_msg, err_span) ->
-              raise (Except.TypeError [
-                Text "Session type violation: ";
-                Text err_msg;
-                Except.codespan_local err_span
-              ])
-          | None -> ()
-          );
-          (* Update event's session type *)
-          (* Handle branching: for internal choice and parallel, branches may have different session states *)
-          (match ev.source with
-          | `Branch (_, branch_info) ->
-              (* Branch event: distribute session type to all branches *)
-              List.iter (fun branch_ev ->
-                if not (IntHashtbl.mem visited branch_ev.id) then (
-                  let branch_sty = match next_sty_opt with
-                  | None -> protocol_node.Lang.d (* Completed, restart or no more *)
-                  | Some s -> s
-                  in
-                  IntHashtbl.add visited branch_ev.id true;
-                  IntHashtbl.add session_states branch_ev.id branch_sty;
-                  Queue.add (branch_ev, branch_sty) bfs_queue
-                )
-              ) branch_info.branches_to
-          | _ ->
-              (* Normal event: propagate to successors *)
-              List.iter (fun succ_ev ->
-                if not (IntHashtbl.mem visited succ_ev.id) then (
-                  let succ_sty = match next_sty_opt with
-                  | None -> protocol_node.Lang.d (* Session completed or should error *)
-                  | Some s -> s
-                  in
-                  IntHashtbl.add visited succ_ev.id true;
-                  IntHashtbl.add session_states succ_ev.id succ_sty;
-                  Queue.add (succ_ev, succ_sty) bfs_queue
-                )
-              ) ev.outs
+          if ev.id = last_node_id then
+            ()
+          else (
+            ev.session_type <- Some {protocol_node with Lang.d = current_sty};
+            
+            (* Compute next session type based on this event's actions *)
+            let (next_sty_opt, error_opt) = session_judgement {protocol_node with Lang.d = current_sty} ev config g.thread_codespan in
+            
+            (* Check for errors *)
+            (match error_opt with
+            | Some (err_msg, err_span) ->
+                raise (Except.TypeError [
+                  Text "Session type violation: ";
+                  Text err_msg;
+                  Except.codespan_local err_span
+                ])
+            | None -> ()
+            );
+            (* Update event's session type *)
+            (* Handle branching: for internal choice and parallel, branches may have different session states *)
+            (match ev.source with
+            | `Branch (_, branch_info) ->
+                (* Branch event: distribute session type to all branches *)
+                List.iter (fun branch_ev ->
+                  if not (IntHashtbl.mem visited branch_ev.id) then (
+                    let branch_sty = match next_sty_opt with
+                    | None -> protocol_node.Lang.d (* Completed, restart or no more *)
+                    | Some s -> s
+                    in
+                    IntHashtbl.add visited branch_ev.id true;
+                    IntHashtbl.add session_states branch_ev.id branch_sty;
+                    Queue.add (branch_ev, branch_sty) bfs_queue
+                  )
+                ) branch_info.branches_to
+            | _ ->
+                (* Normal event: propagate to successors *)
+                List.iter (fun succ_ev ->
+                  if not (IntHashtbl.mem visited succ_ev.id) then (
+                    let succ_sty = match next_sty_opt with
+                    | None -> 
+                        (* Session completed - restart with original protocol for loop *)
+                        if config.verbose then
+                          Printf.eprintf "Session type completed at event %d, restarting protocol for event %d\n" ev.id succ_ev.id;
+                        protocol_node.Lang.d
+                    | Some s -> s
+                    in
+                    IntHashtbl.add visited succ_ev.id true;
+                    IntHashtbl.add session_states succ_ev.id succ_sty;
+                    Queue.add (succ_ev, succ_sty) bfs_queue
+                  )
+                ) ev.outs
+            )
           )
         done;
         
@@ -1007,7 +1029,7 @@ let check_session (config : Config.compile_config) (g : event_graph) =
       in
       
       let root_ev = List.find (fun e -> e.source = `Root None) g.events in
-      explore_graph root_ev protocol_node.Lang.d
+      explore_graph root_ev protocol_node.Lang.d 
 
 
 

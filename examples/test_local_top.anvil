@@ -4,7 +4,7 @@ chan local_ch{
     protocol :: (ep.req >> ep.ack)
 }
 
-interface test_local (ep : left local_ch) = (ep.req >> #3 >> ep.ack >> ep.req);
+interface test_local (ep : left local_ch) = (ep.req >> #3 >> ep.ack >> ep.req >> #1);
 
 
 proc test_local(test_local){
@@ -13,7 +13,17 @@ proc test_local(test_local){
         cycle 2 >>
         cycle 1 >>
         send ep.ack(1'd1) >>
+        let r2 = recv ep.req >>
+        dprint "Received req2: %d" (r2) >>
+        cycle 1 >>
+        let r = recv ep.req  >> 
+        cycle 2 >>
+        cycle 1 >>
+        send ep.ack(1'd1) >>
+        let r2 = recv ep.req >>
+        dprint "Received req2: %d" (r2) >>
         cycle 1
+               
     }
 }
 
