@@ -370,9 +370,9 @@ offering_choices:
 
 
 atomic_action:
-| id = IDENT
+| id = message_specifier
   { Lang.AtomBMsg id }
-| SHARP;id = IDENT
+| SHARP;id = message_specifier
   { Lang.AtomNBMsg id }
 
 

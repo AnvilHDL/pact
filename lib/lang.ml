@@ -94,8 +94,8 @@ type endpoint_direction = Left | Right
 
 (** Atomic actions for session types *)
 type atomic_action =
-  | AtomBMsg of identifier (** atomic blocking message action *)
-  | AtomNBMsg of identifier (** atomic non-blocking message action *)
+  | AtomBMsg of message_specifier (** atomic blocking message action *)
+  | AtomNBMsg of message_specifier (** atomic non-blocking message action *)
 
 and atomic_action_with_gap =
   | AtomDelay of int (** atomic delay action *)
@@ -886,10 +886,10 @@ let rec get_lv lval =
   | Indirected (lv,_) -> get_lv lv
 in get_lv lv
 
-let add_ep_to_atomic_action ep = function
+(* let add_ep_to_atomic_action ep = function
   | AtomBMsg id -> AtomBMsg (Printf.sprintf "%s.%s" ep id)
   | AtomNBMsg id -> AtomNBMsg (Printf.sprintf "%s.%s" ep id)
-  
+   *)
 
 
 (* let rec add_msg_ep_to_protocol ep = function
@@ -899,8 +899,8 @@ let add_ep_to_atomic_action ep = function
 
 let string_of_atomic_action atomic_action =
   match atomic_action with
-  | AtomBMsg id -> id
-  | AtomNBMsg id -> Printf.sprintf "NB( %s )" id
+  | AtomBMsg id -> string_of_msg_spec id
+  | AtomNBMsg id -> "#" ^ string_of_msg_spec id
 
   
 let string_of_atomic_action_with_gap = function

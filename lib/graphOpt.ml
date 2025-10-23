@@ -129,7 +129,7 @@ module CombSimplPass = struct
     let add_event source =
       let new_ev = {actions = []; sustained_actions = []; source; id = graph.last_event_id + 1;
         is_recurse = false;
-        outs = []; graph; preds = Utils.IntSet.empty; removed = false } in
+        outs = []; graph; preds = Utils.IntSet.empty; removed = false; session_type = None} in
       graph.last_event_id <- new_ev.id;
       graph.events <- new_ev::graph.events;
       Dynarray.add_last event_ufs new_ev.id;

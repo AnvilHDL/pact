@@ -44,7 +44,7 @@ module Typing = struct
       let new_preds = Utils.IntSet.add (g.last_event_id + 1) new_preds in
       let n = {actions = []; sustained_actions = []; source; id = g.last_event_id + 1;
         is_recurse = false;
-        outs = []; graph = g; preds = new_preds; removed = false } in
+        outs = []; graph = g; preds = new_preds; removed = false; session_type = None } in
       g.events <- n::g.events;
       g.last_event_id <- n.id;
       n
@@ -1108,6 +1108,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
     channel_classes = ci'.channel_classes;
     macro_defs = macro_defs_extended;
     func_defs = ci'.func_defs;
+    session_defs = ci'.session_defs;
     weak_typecasts = ci'.weak_typecasts;
   } in
 
@@ -1149,6 +1150,15 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       let protocol_map = Hashtbl.create (List.length protocol_list_filtered) in
       List.iter (fun (ep_name, proto) -> Hashtbl.add protocol_map ep_name proto) protocol_list_filtered;
       if (config.verbose) then Printf.eprintf "[Info] Protocol list for process %s: %s\n" module_name (String.concat ", " (List.map(fun f -> Lang.string_of_protocol (snd f).d) protocol_list_filtered));
+      
+      let proc_interface_protocol = 
+        match proc.interface with
+        | Some intf ->
+          let session = List.find_opt (fun (s : session_def) -> s.name = intf.d) ci.session_defs
+            |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
+          Some (session.body)
+        | None -> None
+      in
 
       let proc_threads = List.mapi (fun i ((e, reset_by) : expr_node * message_specifier option) ->
         let graph = {
@@ -1166,6 +1176,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           comb = false;
           gate_context = control_groups;
           protocols = protocol_map;
+          interface_protocol =  proc_interface_protocol;
         } in
         (* Bruteforce treatment: just run twice *)
         let graph_opt = if (not config.disable_lt_checks) || config.two_round_graph then (
@@ -1176,7 +1187,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           tmp_graph.last_event_id <- (EventGraphOps.find_last_event tmp_graph).id;
           tmp_graph.is_general_recursive <- tmp_graph.last_event_id <> td.lt.live.id;
           (* Optimisation *)
-          LifetimeCheck.gate_check config ci tmp_graph;          
+          (* LifetimeCheck.gate_check config ci tmp_graph;           *)
           let tmp_graph = GraphOpt.optimize config true ci tmp_graph in
           if not config.disable_lt_checks then (
             LifetimeCheck.lifetime_check config ci tmp_graph
@@ -1192,7 +1203,9 @@ let build_proc (config : Config.compile_config) sched module_name param_values
             (* discard after type checking *)
             let ctx = (BuildContext.create_empty graph shared_vars_info false) in
             let td = visit_expr graph ci ctx e in
-            (* LifetimeCheck.check_session graph; *)
+            (match proc_interface_protocol with
+            | Some _ -> LifetimeCheck.check_session config graph
+            | None -> Printf.eprintf "[Warning] No interface specified for process %s, skipping session type checks\n" module_name);
             graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
             graph.is_general_recursive <- graph.last_event_id <> td.lt.live.id;
             let g' = GraphOpt.optimize config false ci graph in
@@ -1218,6 +1231,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     file_name = Option.get cunit.cunit_file_name;
     typedefs =typedefs;
     channel_classes = cunit.channel_classes;
+    session_defs = cunit.session_defs;
     macro_defs = macro_defs;
     func_defs =func_defs;
     weak_typecasts = wty

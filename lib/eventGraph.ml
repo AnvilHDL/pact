@@ -18,6 +18,7 @@ type cunit_info = {
   channel_classes : Lang.channel_class_def list;
   func_defs : Lang.func_def list;
   macro_defs : Lang.macro_def list;
+  session_defs : Lang.session_def list;
   weak_typecasts : bool
 }
 
@@ -124,6 +125,7 @@ and event = {
   mutable outs : event list; (** the outbound edges, i.e., the events that directly depend on this event *)
   preds : Utils.int_set; (** set of predecessors, used for fast reachability query. Only used during the graph building process *)
   mutable removed : bool; (** is this event removed? (used in optimisation) *)
+  mutable session_type : Lang.session_type Lang.ast_node option; (** session type at this event *)
 }
 
 and branch_cond =
@@ -196,6 +198,7 @@ and event_graph = {
   mutable comb : bool;
   mutable gate_context : gate_class list;
   mutable protocols : (string, (Lang.session_type Lang.ast_node)) Hashtbl.t;
+  interface_protocol : Lang.session_type Lang.ast_node option;
 }
 
 type proc_graph = {
