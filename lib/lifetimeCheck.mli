@@ -1,6 +1,6 @@
 (** Perform lifetime check on an event graph and throw out {!EventGraph.LifetimeCheckError} if failed. *)
 val lifetime_check : Config.compile_config -> EventGraph.cunit_info -> EventGraph.event_graph -> unit
 val gate_check : Config.compile_config -> EventGraph.cunit_info -> EventGraph.event_graph -> unit
-val check_session : Config.compile_config -> EventGraph.event_graph -> unit
+val check_session : Config.compile_config -> EventGraph.event_graph -> Lang.identifier -> unit
 
 (** Generate and print session graph for analyzing message passing patterns *)

@@ -920,7 +920,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
 
 
 (** Check session type conformance for entire event graph *)
-let check_session (config : Config.compile_config) (g : event_graph) =
+let check_session (config : Config.compile_config) (g : event_graph) module_name =
   let last_node_id = (List.length g.events) - 1 in
 
   
@@ -959,7 +959,19 @@ let check_session (config : Config.compile_config) (g : event_graph) =
             ev.session_type <- Some {protocol_node with Lang.d = current_sty};
             
             (* Compute next session type based on this event's actions *)
-            let (next_sty_opt, error_opt) = session_judgement {protocol_node with Lang.d = current_sty} ev config g.thread_codespan in
+
+            (* for branch continue to next one by taking the session type as it is *)
+            let check_is_branch_event (ev : event) : bool =
+              List.exists (fun src ->
+                match src.source with
+                | `Root(Some (_)) -> true
+                | `Branch (_, _) -> true
+                | _ -> false
+              ) ev.outs
+            in
+            let (next_sty_opt, error_opt) = if check_is_branch_event ev then Some current_sty, None
+            else  session_judgement {protocol_node with Lang.d = current_sty} ev config g.thread_codespan 
+          in
             
             (* Check for errors *)
             (match error_opt with
@@ -1010,7 +1022,7 @@ let check_session (config : Config.compile_config) (g : event_graph) =
         
         (* Verify that all events were visited and session is complete or consistent *)
         List.iter (fun ev ->
-          if not (IntHashtbl.mem visited ev.id) then
+          if not (IntHashtbl.mem visited ev.id) && ev.id <> last_node_id then
             Printf.eprintf "[Warning]: Event %d was not reachable during session type check\n" ev.id
         ) g.events;
         
@@ -1029,7 +1041,14 @@ let check_session (config : Config.compile_config) (g : event_graph) =
       in
       
       let root_ev = List.find (fun e -> e.source = `Root None) g.events in
-      explore_graph root_ev protocol_node.Lang.d 
+      explore_graph root_ev protocol_node.Lang.d ;
+      if config.verbose then
+        Printf.eprintf "[Session Type Check] Session type check completed successfully.\n";
+
+        let file_handler = Out_channel.open_text (Printf.sprintf "%sgraph.dot" module_name) in
+      EventGraphOps.print_graph_with_session_types g file_handler;
+      Out_channel.close file_handler;
+
 
 
 

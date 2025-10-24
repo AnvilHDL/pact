@@ -81,6 +81,56 @@ let print_dot_graph g out =
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH IN DOT FORMAT\n"
 
+
+let print_graph_with_session_types g out =
+  Printf.fprintf out "// BEGIN GRAPH WITH SESSION TYPES IN DOT FORMAT\n";
+  Printf.fprintf out "// can render to PDF with 'dot -Tpdf -O <filename>'\n";
+  Printf.fprintf out "digraph {\n";
+  let escape_dot_string s =
+    String.concat "" (List.map (fun c ->
+      match c with
+      | '"' -> "\\\""
+      | '\\' -> "\\\\"
+      | _ -> String.make 1 c
+    ) (List.of_seq (String.to_seq s)))
+  in
+  let ev_node_name ev = 
+    if Option.is_some ev.session_type then 
+      Printf.sprintf "\"event%d\\n(%s)\"" ev.id (escape_dot_string (Lang.string_of_protocol (Option.get ev.session_type).d))
+    else 
+      Printf.sprintf "event%d" ev.id 
+  in
+  let print_edge e1 e2 label =
+    Printf.fprintf out "  %s -> %s [label = \"%s\"];\n"
+      (ev_node_name e1)
+      (ev_node_name e2)
+      label
+  in
+  List.iter (fun ev ->
+    if ev.is_recurse then
+      Printf.fprintf out "  %s [peripheries=2];\n" @@ ev_node_name ev;
+    match ev.source with
+    | `Later (e1, e2) ->
+      print_edge e1 ev "L";
+      print_edge e2 ev "L"
+    | `Seq (ev', a) ->
+      let label = match a with
+      | `Cycles n -> Printf.sprintf "#%d" n
+      | `Send _ -> "S"
+      | `Recv _ -> "R"
+      | `Sync _ -> "G"
+      in
+      print_edge ev' ev label
+    | `Branch (_, br_info) ->
+      List.iter (fun e ->
+        print_edge e ev "B"
+      ) br_info.branches_val
+    | `Root None -> ()
+    | `Root (Some (ev', br_side_info)) ->
+      print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+  ) g.events;
+  Printf.fprintf out "}\n";
+  Printf.fprintf out "// END GRAPH WITH SESSION TYPES IN DOT FORMAT\n"
 let print_dot_graph_from_event_graph_prime (g: event_graph_prime) out =
   Printf.fprintf out "// BEGIN Prime GRAPH IN DOT FORMAT";
   Printf.fprintf out "// can render to PDF with 'dot -Tpdf -O <filename>'\n";
