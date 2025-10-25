@@ -29,8 +29,8 @@ type wire_collection = WireCollection.t
 type atomic_delay = [
   | `Cycles of int (** elapse of a specific number of cycles *)
   | `Send of Lang.message_specifier (** sending of a message *)
-  (* | `Choice of (Lang.message_specifier list)  *)
   | `Recv of Lang.message_specifier (** receiving of a message *)
+  | `Choice of Lang.message_specifier list (** making a choice among multiple messages *)
   | `Sync of Lang.identifier (** synchronising on a local shared value *)
 ]
 

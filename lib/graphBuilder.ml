@@ -7,6 +7,17 @@ let unwrap_or_err err_msg err_span opt =
   | Some d -> d
   | None -> raise (event_graph_error_default err_msg err_span)
 
+let do_sanity_check_offer (msg_list : (message_specifier * message_def) list) (span : code_span)  =
+
+List.iter (fun ((msg_spec : message_specifier), message_def) ->
+  if message_def.dir == Out && message_def.handshake_mode != ValidReady then
+    raise (Except.TypeError [Text ("In offer: Outbound message " ^ msg_spec.msg ^ " must use ready/ack handshake");
+      Except.codespan_local span])
+  else if message_def.dir == Inp && message_def.handshake_mode != ValidAck then
+    raise (Except.TypeError [Text ("In offer: Inbound message " ^ msg_spec.msg ^ " must use probe/ack handshake");
+      Except.codespan_local span])
+  ) msg_list
+
 module Typing = struct
   type binding = {
     binding_val : timed_data;
@@ -76,6 +87,9 @@ module Typing = struct
     let ev = event_create g (`Later (current, td.lt.live)) in
     {td with lt = {td.lt with live = ev}}
 
+  let offer_condition g (ctx : build_context) (m_list : message_specifier list) : timed_data =
+  let live_event = event_create g (`Seq (ctx.current, `Choice m_list)) in
+    {w = None; lt = {live = live_event; dead = [(live_event, `Eternal)]}; reg_borrows = []; dtype = unit_dtype}
   let immediate_data _g (w : wire option) dtype (current : event) = {w; lt = lifetime_immediate current; reg_borrows = []; dtype}
   let const_data _g (w : wire option) dtype (current : event) = {w; lt = lifetime_const current; reg_borrows = []; dtype}
   let merged_data g (w : wire option) dtype (current : event) (tds : timed_data list) =
@@ -286,6 +300,12 @@ let rec recurse_unfold expr_full_node expr_node =
       SharedAssign (ident, unfold e')
     | List es ->
       List (List.map unfold es)
+    | XOffer arms ->
+      XOffer (
+        List.map (fun (arm_type, e_body) ->
+          (arm_type, unfold e_body)
+        ) arms
+      )
     | Recurse -> failwith "Shouldn't reach here!"
     in
     {expr_node with d = expr'}
@@ -329,6 +349,11 @@ let rec lvalue_info_of graph (ci:cunit_info) ctx span lval =
       lval_range = {lval_info'.lval_range with subreg_range_interval = (le_n, len)};
       lval_dtype = dtype
     }
+
+
+
+
+
 and visit_expr (graph : event_graph) (ci : cunit_info)
                     (ctx : build_context) (e : expr_node) : timed_data =
   let binop_td_const = binop_td_const graph ci ctx
@@ -870,15 +895,137 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     graph.gate_context <- gc;
     ntd
-  (* | Offer offer_pack ->
-    List.iter(
-      fun (offer_arm, e) ->
-        match offer_arm with
+  | XOffer offer_arms ->
+    (* Create branches for each offer arm - all can start in parallel *)
+    (* create a special condition node *)
+
+
+    let offer_msg_list = List.map (fun (offer_arm, _) ->
+      match offer_arm with
+      | OfferSend send_pack -> send_pack.send_msg_spec
+      | OfferRecv (_, recv_pack) -> recv_pack.recv_msg_spec
+    ) offer_arms in
+
+    let msg_defs = List.map (fun msg_spec ->
+      MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
+      |> unwrap_or_err "Invalid message specifier in offer" e.span
+    ) offer_msg_list in
+
+    let msg_list = List.combine offer_msg_list msg_defs in
+
+
+    do_sanity_check_offer msg_list e.span;
+
+    let cond_td = Typing.offer_condition graph ctx offer_msg_list in
+    let ctx = BuildContext.wait graph ctx cond_td.lt.live in
+    (* At this point one of the messages must have been received *)
+    (* Now we match 1'd1 with respective valid ready port of branch conditions *)
+    let (new_wires, cond_w) = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (1, 1)) graph.wires in
+    graph.wires <- new_wires;
+
+let wire_list =
+      List.fold_left (fun acc (msg_spec, msg_def) ->
+        if msg_def.dir = Inp then
+          let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
+          graph.wires <- wires';
+          let td = Typing.immediate_data graph (Some msg_valid_port) `Logic ctx.current in
+          acc @ [td]
+        else
+          let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
+          graph.wires <- wires';
+          let td = Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current in
+          acc @ [td]
+      ) [] msg_list in
+
+    
+    let branch_count = List.length offer_arms in
+    let branch_info = {
+      branch_cond_v = {w = Some cond_w; lt = EventGraphOps.lifetime_const ctx.current; reg_borrows = []; dtype = unit_dtype};
+      branch_cond = MatchCases wire_list;
+      branch_count = branch_count;
+      branches_to = [];
+      branches_val = [];
+    } in
+
+    (* Process each offer arm in its own branch *)
+    let branch_contexts_and_tds = List.mapi (fun idx (offer_arm, arm_expr) ->
+      let (br_side, ctx_branch) = BuildContext.branch_side graph ctx branch_info idx in
+      
+      let td_result = match offer_arm with
         | OfferSend send_pack ->
-          ()
+            let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
+              |> unwrap_or_err "Invalid message specifier in offer send" e.span in
+            if msg.dir <> Out then
+              raise (event_graph_error_default "Mismatching message direction!" e.span);
+            
+            let td_data = visit_expr graph ci ctx_branch send_pack.send_data in
+            let msg_dtype = (List.hd msg.sig_types).dtype in
+            let err_string = Printf.sprintf "In offer send: Invalid data type for message %s: expected %s but got %s"
+              send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td_data.dtype) in
+            check_dtype err_string (Some msg_dtype) td_data.dtype e.span ci.file_name ci.weak_typecasts;
+            
+            let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_branch.current in
+            let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live e.span in
+            ctx_branch.current.sustained_actions <-
+              ({until = ntd.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data)} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
+            graph.gate_context <- gc;
+            let ctx' = BuildContext.wait graph ctx_branch ntd.lt.live in
+            visit_expr graph ci ctx' arm_expr
+
         | OfferRecv (id, recv_pack) ->
-          ()
-    ) offer_pack *)
+            let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
+              |> unwrap_or_err "Invalid message specifier in offer receive" e.span in
+            if msg.dir <> Inp then
+              raise (event_graph_error_default "Mismatching message direction!" e.span);
+            
+            let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
+            graph.wires <- wires';
+            let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx_branch.current in
+            let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live e.span in
+            ctx_branch.current.sustained_actions <-
+              ({until = ntd.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
+            graph.gate_context <- gc;
+            
+            (* Bind the received value and continue *)
+            let ctx_with_binding = BuildContext.add_binding ctx_branch id ntd in
+            let ctx' = BuildContext.wait graph ctx_with_binding ntd.lt.live in
+            visit_expr graph ci ctx' arm_expr
+      in
+      
+      (br_side, ctx_branch, td_result)
+    ) offer_arms in
+
+    (* Collect branch information *)
+    let branch_sides = List.map (fun (br_side, _, _) -> br_side) branch_contexts_and_tds in
+    let branch_ctxs = List.map (fun (_, ctx_b, _) -> ctx_b) branch_contexts_and_tds in
+    let branch_tds = List.map (fun (_, _, td) -> td) branch_contexts_and_tds in
+    
+    branch_info.branches_to <- List.map (fun (ctx_b : BuildContext.t) -> ctx_b.current) branch_ctxs;
+    branch_info.branches_val <- List.map (fun td -> td.lt.live) branch_tds;
+    
+    BuildContext.branch_merge ctx branch_ctxs;
+    
+    let ctx_br = BuildContext.branch graph ctx branch_info in
+    List.iter (fun br_side -> br_side.branch_event <- Some ctx_br.current) branch_sides;
+    
+    (* Merge lifetimes and borrows from all branches *)
+    let merged_dead = List.fold_left Utils.list_unordered_join [] (List.map (fun td -> td.lt.dead) branch_tds) in
+    let merged_borrows = List.fold_left Utils.list_unordered_join [] (List.map (fun td -> td.reg_borrows) branch_tds) in
+    let lt = {live = ctx_br.current; dead = merged_dead} in
+    
+    (* Determine result wire and dtype *)
+    let result_w = match branch_tds with
+      | [] -> None
+      | hd::_ -> hd.w
+    in
+    let result_dtype = match branch_tds with
+      | [] -> unit_dtype
+      | hd::_ -> hd.dtype
+    in
+    
+    {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype}
+
+
 
     
   | Recv recv_pack ->

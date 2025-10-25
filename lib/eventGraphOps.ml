@@ -35,6 +35,7 @@ let print_graph (g: event_graph) =
       | `Cycles n -> Printf.sprintf "C %d" n
       | `Send _ -> "S"
       | `Recv _ -> "R"
+      | `Choice _-> "IC"
       | `Sync s -> Printf.sprintf "S %s" s
       in
       Printf.eprintf "> %d: seq %d %s\n" ev.id ev'.id c
@@ -67,6 +68,7 @@ let print_dot_graph g out =
       | `Cycles n -> Printf.sprintf "#%d" n
       | `Send _ -> "S"
       | `Recv _ -> "R"
+      | `Choice _ -> "IC"
       | `Sync _ -> "G"
       in
       print_edge ev' ev label
@@ -117,6 +119,7 @@ let print_graph_with_session_types g out =
       let label = match a with
       | `Cycles n -> Printf.sprintf "#%d" n
       | `Send _ -> "S"
+      | `Choice _ -> "IC"
       | `Recv _ -> "R"
       | `Sync _ -> "G"
       in
@@ -150,6 +153,7 @@ let print_dot_graph_from_event_graph_prime (g: event_graph_prime) out =
         (match l with
         | `Cycles n -> print_edge ev.ev_id child.cid (Printf.sprintf "#%d" n)
         | `Send _ -> print_edge ev.ev_id child.cid "S"
+        | `Choice _ -> print_edge ev.ev_id child.cid "IC"
         | `Recv _ -> print_edge ev.ev_id child.cid "R"
         | `Sync _ -> print_edge ev.ev_id child.cid "G"
         )

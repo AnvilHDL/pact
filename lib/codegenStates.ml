@@ -29,7 +29,7 @@ let collect_reg_states g =
           let sn = EventStateFormatter.format_counter g.thread_id e.id in
           [(Printf.sprintf "logic[%d:0]" (width - 1), sn)]
         )
-      | `Send _ | `Recv _ | `Sync _ ->
+      | `Send _ | `Recv _ | `Choice _ | `Sync _ ->
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
     )
@@ -131,7 +131,43 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
               Printf.sprintf "assign %s = %s || %s_q;" cn cn' sn;
               Printf.sprintf "assign %s_n = 1'b0;" sn
             ] |> print_lines
-          ) 
+          )
+        | `Choice msg_list ->
+          (*For this we want to wait till or of the valid/ready port becomes 1 *)
+          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+          (* Collect all the handshake signals to OR together *)
+          let handshake_signals = List.filter_map (fun (msg : Lang.message_specifier) ->
+            let msg_def = lookup_msg_def msg |> Option.get in
+            (* Check message direction: Out (send) or Inp (recv) *)
+            match msg_def.dir with
+            | Out -> 
+              (* Output message (Send): wait for ready port *)
+              if CodegenPort.message_has_ready_port msg_def then
+                Some (CodegenFormat.format_msg_ready_signal_name 
+                  (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+              else None
+            | Inp ->
+              (* Input message (Recv): wait for valid port *)
+              if CodegenPort.message_has_valid_port msg_def then
+                Some (CodegenFormat.format_msg_valid_signal_name 
+                  (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+              else None
+          ) msg_list in
+          
+          if handshake_signals <> [] then (
+            let or_condition = String.concat " || " handshake_signals in
+            [
+              Printf.sprintf "assign %s = (%s || %s_q) && (%s);" cn cn' sn or_condition;
+              Printf.sprintf "assign %s_n = (%s || %s_q) && !(%s);" sn cn' sn or_condition
+            ] |> print_lines
+          ) else (
+            (* No handshake signals, complete immediately *)
+            [
+              Printf.sprintf "assign %s = %s || %s_q;" cn cn' sn;
+              Printf.sprintf "assign %s_n = 1'b0;" sn
+            ] |> print_lines
+          )
+          
         | `Recv msg ->
           let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
           let msg_def = lookup_msg_def msg |> Option.get in

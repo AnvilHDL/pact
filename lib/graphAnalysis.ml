@@ -133,7 +133,7 @@ let event_succ_distance non_succ_dist msg_dist_f later_dist_f either_dist_f even
       (
         match ad with
         | `Cycles n' -> d1 + n'
-        | `Send _ | `Recv _ | `Sync _ -> msg_dist_f d1
+        | `Send _ | `Recv _ | `Choice _ | `Sync _ -> msg_dist_f d1
       )
     | `Root (Some (ev1, _)) ->
       (* We need to check carefully to decide if we are sure
@@ -259,7 +259,7 @@ let events_pred_min_dist ev =
           (* if we want max delay of pred we change send recv to <max> *)
           match d with
           | `Cycles n -> n
-          | `Send _ | `Recv _
+          | `Send _ | `Recv _ | `Choice _
           | `Sync _ -> 0
         in
         update_dist e' (v + gap)
@@ -349,6 +349,15 @@ let events_max_dist events lookup_message ev =
         | Static _ | Dependent _ -> 0
         | _ -> event_distance_max
       )
+    | `Choice mlist ->
+      List.fold_left (fun mx m ->
+        let msg_def = lookup_message m |> Option.get in
+        let d = match msg_def.recv_sync with
+          | Static _ | Dependent _ -> 0
+          | _ -> event_distance_max
+        in
+        Int.max mx d
+      ) 0 mlist 
     | `Recv m ->
       let msg_def = lookup_message m |> Option.get in
       (
@@ -361,7 +370,7 @@ let events_max_dist events lookup_message ev =
   let get_min_delay =
     function
     | `Cycles n -> n
-    | `Send _ | `Recv _ | `Sync _ -> 0
+    | `Send _ | `Recv _ | `Sync _ | `Choice _ -> 0
   in
   let min2_outs = Array.make n
     ((event_distance_max, 0), (event_distance_max, 0))

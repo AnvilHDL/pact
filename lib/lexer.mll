@@ -35,7 +35,7 @@ rule read =
   | "control" { KEYWORD_CONTROL }
   | "interface" { KEYWORD_INTERFACE }
   | "when"    { KEYWORD_WHEN }
-  (* | "offer"   { KEYWORD_OFFER } *)
+  | "offer"   { KEYWORD_OFFER }
   | "$"       { DOLLAR }
   | "&&"      { DOUBLE_AND }
   | '&'       { AND }
