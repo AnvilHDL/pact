@@ -12,6 +12,9 @@ let format_msg_valid_signal_name (endpoint_name : identifier) (message_name : id
 let format_msg_ack_signal_name (endpoint_name : identifier) (message_name : identifier) : string =
   Printf.sprintf "_%s_%s_ack" endpoint_name message_name
 
+let format_msg_ready_signal_name (endpoint_name : identifier) (message_name : identifier) : string =
+  Printf.sprintf "_%s_%s_ready" endpoint_name message_name
+
 
 let format_wirename (thread_id : int) (id : int) : string = Printf.sprintf "thread_%d_wire$%d" thread_id id
 

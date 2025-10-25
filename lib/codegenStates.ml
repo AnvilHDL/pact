@@ -117,12 +117,19 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
               Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn ack_n;
               Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ack_n
             ] |> print_lines
+          ) 
+         else if CodegenPort.message_has_ready_port msg_def then (
+            let ready_n = CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
+            [
+              Printf.sprintf "assign %s = (%s || %s_q) && !%s;" cn cn' sn ready_n;
+              Printf.sprintf "assign %s_n = (%s || %s_q) && %s;" sn cn' sn ready_n
+            ] |> print_lines
           ) else (
             [
               Printf.sprintf "assign %s = %s || %s_q;" cn cn' sn;
               Printf.sprintf "assign %s_n = 1'b0;" sn
             ] |> print_lines
-          )
+          ) 
         | `Recv msg ->
           let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
           let msg_def = lookup_msg_def msg |> Option.get in
@@ -346,10 +353,19 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     let print_recv activated msg =
         let msg_def = lookup_msg_def msg |> Option.get in
         let has_ack_port = CodegenPort.message_has_ack_port msg_def in
+        let has_ready_port = CodegenPort.message_has_ready_port msg_def in
+
+        if has_ready_port then
+          insert_to recv_or_assigns
+            (CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+            has_ready_port
+            activated
+        else
         insert_to recv_or_assigns
           (CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
           has_ack_port
           activated
+        
     in
     let print_send activated msg td =
       let w = Option.get td.w in

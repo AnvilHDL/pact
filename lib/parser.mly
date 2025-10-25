@@ -81,6 +81,7 @@
 %token KEYWORD_ENUM         (* enum *)
 %token KEYWORD_WITH         (* with *)
 %token KEYWORD_F         (* F *)
+// %token KEYWORD_OFFER        (* offer *)
 %token KEYWORD_TRY          (* try *)
 %token <int>INT             (* int literal *)
 %token <string>IDENT        (* identifier *)
@@ -678,6 +679,8 @@ expr:
   { Lang.Debug Lang.DebugFinish }
 | LEFT_BRACKET; li = separated_list(COMMA, node(expr)); RIGHT_BRACKET
   { Lang.List li }
+// | KEYWORD_OFFER;  LEFT_BRACE; offer_list = separated_list(COMMA, node(offer_arm)); RIGHT_BRACE
+//   { Lang.Offer offer_list }
 ;
 
 expr_in_parenthese:
@@ -809,6 +812,13 @@ match_arm:
   { (pattern, Some body_opt) }
 ;
 
+offer_arm:
+| KEYWORD_SEND; send_pack = send_pack; EQ_GT body = node(expr)
+  { (Lang.OfferSend send_pack, body) }
+| id = IDENT; EQUAL; KEYWORD_RECV; recv_pack = node(recv_pack); EQ_GT body = node(expr)
+  { (Lang.OfferRecv (id, recv_pack), body) }
+;  
+
 // match_arm:
 // | OR_GT; pattern = match_pattern; body_opt = match_arm_body?
 //   { (pattern, body_opt) }
@@ -827,7 +837,7 @@ match_arm:
 ;
 //Definition of messages: To Do: Doesnt support custom lifetime types, just sync?
 message_def:
-  dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
+| dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
   left_sync_mode_opt = message_sync_mode_spec?;
   right_sync_mode_opt = recv_message_sync_mode_spec?
   {
@@ -843,6 +853,33 @@ message_def:
       dir = dir;
       send_sync = send_sync_mode;
       recv_sync = recv_sync_mode;
+      handshake_mode = Lang.ValidAck;
+      sig_types = data;
+      span = {st = $startpos; ed = $endpos}
+    } : Lang.message_def
+  }
+| dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
+DOUBLE_LEFT_ABRACK;
+  {
+    {
+      name = ident;
+      dir = dir;
+      send_sync = Lang.Dynamic;
+      recv_sync = Lang.Dynamic;
+      handshake_mode = Lang.ValidReady;
+      sig_types = data;
+      span = {st = $startpos; ed = $endpos}
+    } : Lang.message_def
+  }
+| dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
+DOUBLE_GT;
+  {
+    {
+      name = ident;
+      dir = dir;
+      send_sync = Lang.Dynamic;
+      recv_sync = Lang.Dynamic;
+      handshake_mode = Lang.ValidAck;
       sig_types = data;
       span = {st = $startpos; ed = $endpos}
     } : Lang.message_def

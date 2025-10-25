@@ -7,7 +7,10 @@ type t = {
 }
 
 let message_has_valid_port (msg : message_def) : bool = msg.send_sync = Dynamic
-let message_has_ack_port (msg : message_def) : bool = msg.recv_sync = Dynamic
+let message_has_ack_port (msg : message_def) : bool = (msg.recv_sync = Dynamic) && (msg.handshake_mode = ValidAck)
+
+let message_has_ready_port (msg : message_def) : bool = (msg.recv_sync = Dynamic) && (msg.handshake_mode = ValidReady)
+
 
 let gather_ports_from_endpoint (channel_classes : channel_class_def list) (endpoint : endpoint_def) : t list =
   let cc = Option.get (MessageCollection.lookup_channel_class channel_classes endpoint.channel_class) in
@@ -28,10 +31,13 @@ let gather_ports_from_endpoint (channel_classes : channel_class_def list) (endpo
         valid_port::res
       else res
     in
-    if message_has_ack_port msg then
-      let ack_port = {name = CodegenFormat.format_msg_ack_signal_name endpoint.name msg.name; dir = reverse msg_data_dir; dtype = `Logic} in
-      ack_port::res
-    else res
+      if message_has_ack_port msg then
+        let ack_port = {name = CodegenFormat.format_msg_ack_signal_name endpoint.name msg.name; dir = reverse msg_data_dir; dtype = `Logic} in
+         ack_port::res
+     else if message_has_ready_port msg then
+      let ready_port = {name = CodegenFormat.format_msg_ready_signal_name endpoint.name msg.name; dir = reverse msg_data_dir; dtype = `Logic} in
+      ready_port::res
+    else res 
   in List.concat_map gen_endpoint_ports cc.messages
 
 let gather_ports (channel_classes : channel_class_def list) (endpoints : endpoint_def list) : t list =

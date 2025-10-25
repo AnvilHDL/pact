@@ -27,6 +27,7 @@ module Wire = struct
     | MessagePort of Lang.message_specifier * int (* index of the port *)
     | MessageValidPort of Lang.message_specifier (* New wire source for message valid port *)
     | MessageAckPort of Lang.message_specifier (* New wire source for message ack port *)
+    | MessageReadyPort of Lang.message_specifier (* New wire source for message ready port *)
     | Update of t * (int * int * t) list (** update to existing value *)
     | Concat of t list
     | Slice of t * t MaybeConst.maybe_int_const * int (** third component is size *)
@@ -196,6 +197,14 @@ module Wire = struct
       size = 1;
       is_const = false;
     }
+  let new_msg_ready_port id thread_id _typedefs msg_spec =
+    {
+      id;
+      thread_id;
+      source = MessageReadyPort msg_spec;
+      size = 1;
+      is_const = false;
+    }
 end
 
 type wire = Wire.t
@@ -281,4 +290,9 @@ let add_msg_ack_port thread_id (typedefs : TypedefMap.t)
   (msg_spec : Lang.message_specifier) (wc : t) : t * wire =
   let id = wc.wire_last_id + 1 in
   let w = Wire.new_msg_ack_port id thread_id typedefs msg_spec in
+  (add_wire wc w, w)
+let add_msg_ready_port thread_id (typedefs : TypedefMap.t)
+  (msg_spec : Lang.message_specifier) (wc : t) : t * wire =
+  let id = wc.wire_last_id + 1 in
+  let w = Wire.new_msg_ready_port id thread_id typedefs msg_spec in
   (add_wire wc w, w)

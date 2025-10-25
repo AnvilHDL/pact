@@ -1,0 +1,28 @@
+chan ch{
+    left req : (logic@#1) >> ,
+    right res : (logic@#1) <<
+}
+proc foo(ep : left ch){
+    loop{
+        let x = recv ep.req >>
+        dprint "[foo]Received: %d\n"  (x) >>
+        send ep.res(x + 1'd1) >>
+        dprint "[foo]Sent response: %d\n" (x + 1'd1) >>
+        cycle 1
+    }
+}
+
+
+proc test_readyack_top(){
+    chan  ep_le -- ep_ri : ch;
+    spawn foo(ep_le);
+    loop{
+        send ep_ri.req(1'd1) >>
+        dprint "[top]Sent request\n" () >>
+        let y = recv ep_ri.res >>
+        dprint "[top]Received response: %d\n" (y) >>
+        cycle 1 >>
+        dfinish >>
+        cycle 1
+    }
+}

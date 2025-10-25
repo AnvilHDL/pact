@@ -238,12 +238,19 @@ type message_sync_mode =
   | Static of int * int (** (init offset, static interval) *)
   | Dependent of string * int (** relative to another message (msg, delay) **)
 
+type handshake_modes =
+  | ValidAck  (** valid/ack handshake *)
+  | ValidReady (** valid/ready handshake *)
+
+
+
 (** A message type definition, as part of a channel definition. *)
 type message_def = {
   name: identifier;
   dir: message_direction;
   send_sync: message_sync_mode; (** how to synchronise when data is available *)
   recv_sync: message_sync_mode; (** how to synchronise when data is acknowledged *)
+  handshake_mode: handshake_modes; 
   sig_types: sig_type_chan_local list; (** the signal types of the values carried in the message *)
   span: code_span; (** code span of the message definition *)
 }
@@ -427,6 +434,7 @@ and expr =
   | Ready of message_specifier (** [ready(a, b)] *)
   | Probe of message_specifier (** [probe(a, b)] *)
   | Match of expr_node * ((expr_node * expr_node option) list)
+  (* | Offer of ( (offer_arm_type * expr_node) list) *)
   | Read of lvalue (** reading a value from a register (leading to a borrow) *)
   | Debug of debug_op
   | Send of send_pack
@@ -435,6 +443,10 @@ and expr =
   | List of expr_node list (** array/list of expressions *)
   | Recurse
 and expr_node = expr ast_node
+
+and offer_arm_type =
+  | OfferSend of send_pack
+  | OfferRecv of identifier * recv_pack
 
 (** A "location" that can be assigned to. *)
 and lvalue =
@@ -766,6 +778,12 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (expr: ex
       ident,
       subst e
     )
+  (* | Offer arms ->
+    Offer (
+      List.map (fun (arm_type, e_opt) ->
+        (arm_type, Option.map subst e_opt)
+      ) arms
+    )  *)
   | Recurse | Literal _ | Cycle _
   | Identifier _ | Ready _ | Probe _
   | Read _ | Recv _

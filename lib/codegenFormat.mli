@@ -4,6 +4,7 @@ val format_msg_prefix : string -> string -> string
 val format_msg_data_signal_name : string -> string -> int -> string
 val format_msg_valid_signal_name : string -> string -> string
 val format_msg_ack_signal_name : string -> string -> string
+val format_msg_ready_signal_name : string -> string -> string
 val format_wirename : int -> int -> string
 val format_dtype : TypedefMap.t -> (Lang.macro_def list)-> Lang.data_type -> string
 val format_literal : Lang.literal -> string

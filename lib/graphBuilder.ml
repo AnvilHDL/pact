@@ -566,9 +566,15 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     )
   | TrySend (send_pack, e1, e2) ->
     (* data to send *)
+    let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
+      |> unwrap_or_err "Invalid message specifier in try send" e.span in
     let td_send_data = visit_expr graph ci ctx send_pack.send_data in
-
-    let wires, w_cond = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires in
+    let wires, w_cond =
+      if msg.handshake_mode <> Lang.ValidAck then
+        WireCollection.add_msg_ack_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
+      else
+        WireCollection.add_msg_ack_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
+    in
     let td_cond = {
       w = Some w_cond;
       lt = {live = ctx.current; dead = [(ctx.current, `Cycles 1)]};
@@ -847,6 +853,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       (* mismatching direction *)
       raise (event_graph_error_default "Mismatching message direction!" e.span)
     );
+    (* evaluates send pack to data *)
     let td = visit_expr graph ci ctx send_pack.send_data in
     let msg_dtype = (List.hd msg.sig_types).dtype in
     (* if td.dtype <> msg_dtype then
@@ -863,6 +870,17 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     graph.gate_context <- gc;
     ntd
+  (* | Offer offer_pack ->
+    List.iter(
+      fun (offer_arm, e) ->
+        match offer_arm with
+        | OfferSend send_pack ->
+          ()
+        | OfferRecv (id, recv_pack) ->
+          ()
+    ) offer_pack *)
+
+    
   | Recv recv_pack ->
     let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
       |> unwrap_or_err "Invalid message specifier in receive" e.span in

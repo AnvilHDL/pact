@@ -75,6 +75,9 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
         if CodegenPort.message_has_ack_port msg then
           gen_connect (Format.format_msg_ack_signal_name arg_endpoint.name msg.name)
             (Format.format_msg_ack_signal_name endpoint_name_local msg.name)
+        else if CodegenPort.message_has_ready_port msg then
+          gen_connect (Format.format_msg_ready_signal_name arg_endpoint.name msg.name)
+            (Format.format_msg_ready_signal_name endpoint_name_local msg.name)
         else ();
         let print_data_con = fun fmt idx _ ->
           if(is_spawn_comb) then (  
@@ -98,6 +101,9 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
         if CodegenPort.message_has_ack_port msg then
           gen_connect_post (Format.format_msg_ack_signal_name arg_endpoint.name msg.name)
             (Format.format_msg_ack_signal_name endpoint_name_local msg.name)
+        else if CodegenPort.message_has_ready_port msg then
+          gen_connect_post (Format.format_msg_ready_signal_name arg_endpoint.name msg.name)
+            (Format.format_msg_ready_signal_name endpoint_name_local msg.name)
         else ();
         let len = List.length msg.sig_types in
         let print_data_con_last = fun fmt idx _ ->
@@ -232,6 +238,13 @@ let codegen_wire_assignment printer (graphs : event_graph_collection) (g : event
         if CodegenPort.message_has_valid_port m then
           CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
         else "1'b1"
+      | MessageReadyPort msg ->
+        let m = Option.get @@ lookup_msg_def msg in
+        if CodegenPort.message_has_valid_port m then
+          CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
+        else "1'b1"
+        
+        
       | Cases _ | Update _ -> failwith "Something went wrong!"
     in
     CodegenPrinter.print_line printer
