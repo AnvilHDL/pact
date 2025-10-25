@@ -112,6 +112,7 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
           let msg_def = lookup_msg_def msg |> Option.get in
           if CodegenPort.message_has_ack_port msg_def then (
+            (* Valid-Ack: sender asserts valid and waits for ack to come back *)
             let ack_n = CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
             [
               Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn ack_n;
@@ -119,10 +120,11 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             ] |> print_lines
           ) 
          else if CodegenPort.message_has_ready_port msg_def then (
+            (* Valid-Ready: sender waits for ready, then asserts valid *)
             let ready_n = CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
             [
-              Printf.sprintf "assign %s = (%s || %s_q) && !%s;" cn cn' sn ready_n;
-              Printf.sprintf "assign %s_n = (%s || %s_q) && %s;" sn cn' sn ready_n
+              Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn ready_n;
+              Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ready_n
             ] |> print_lines
           ) else (
             [
@@ -133,7 +135,15 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
         | `Recv msg ->
           let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
           let msg_def = lookup_msg_def msg |> Option.get in
-          if CodegenPort.message_has_valid_port msg_def then (
+          if CodegenPort.message_has_ready_port msg_def then (
+            (* Valid-Ready: assert ready and wait for valid to come back *)
+            let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
+            [
+              Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn vld_n;
+              Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
+            ] |> print_lines
+          ) else if CodegenPort.message_has_valid_port msg_def then (
+            (* Valid-Ack: wait for valid then assert ack *)
             let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
             [
               Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn vld_n;

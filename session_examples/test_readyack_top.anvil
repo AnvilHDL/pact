@@ -4,8 +4,10 @@ chan ch{
 }
 proc foo(ep : left ch){
     loop{
+        cycle 10 >>
         let x = recv ep.req >>
         dprint "[foo]Received: %d\n"  (x) >>
+        cycle 10 >>
         send ep.res(x + 1'd1) >>
         dprint "[foo]Sent response: %d\n" (x + 1'd1) >>
         cycle 1
