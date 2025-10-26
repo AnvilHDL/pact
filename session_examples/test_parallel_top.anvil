@@ -1,0 +1,52 @@
+chan ch {
+    left req : (logic@#1),
+    left ack : (logic@#1)
+}
+
+
+interface test_parallel_interface (ep : left ch) = ((ep.req >> ep.ack) || (ep.ack >> ep.req)) >> #1 ;
+
+proc test_parallel_top(test_parallel_interface){
+    reg cyc : logic[8];
+    loop{
+        (
+        (
+            let r1 = recv ep.req  >>
+            let r2 = recv ep.ack  >>
+            dprint "[Cycle %d] Parallel thread 0 try received req: %d and ack: %d" (*cyc, r1, r2)
+        )
+        ;
+        (
+            let r2 = recv ep.ack  >>
+            let r1 = recv ep.req  >>
+            dprint "[Cycle %d] Parallel thread 1 received req: %d and ack: %d" (*cyc, r1, r2)
+        )
+        )
+        >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+} 
+
+// proc test_parallel_top(){
+//     chan ep_le -- ep_ri : ch;
+//     spawn test_parallel(ep_le);
+//     reg cyc : logic[8];
+//     loop{
+//         send ep_ri.req(1'd1) >>
+//         dprint "[Cycle %d] Top sent req" (*cyc) >>
+//         cycle 2 >>
+//         send ep_ri.ack(1'd1) >>
+//         dprint "[Cycle %d] Top sent ack" (*cyc) >>
+//         cycle 2
+//     }
+//     loop{
+//         cycle 10 >> 
+//         dfinish
+//     }
+//     loop{
+//         set cyc := *cyc + 8'd1
+//     }
+// }

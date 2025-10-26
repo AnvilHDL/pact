@@ -495,7 +495,10 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
           let binding = Typing.context_lookup ctx'.typing_ctx ident |> Option.get in
           (* no need to wait if the value is current *)
           if td1.lt.live.id <> ctx.current.id && not binding.binding_used then (
-            raise (event_graph_error_default "Value is potentially not awaited!" e1.span)
+            (* raise (event_graph_error_default "Value is potentially not awaited!" e1.span) *)
+            Printf.eprintf "[Warning] Value bound to %s is potentially not awaited!\n" ident;
+            (Lang.print_code_span ~indent:2 ~trunc:(-5) stderr ci.file_name e1.span)
+          ;
           );
           td
       | Let _ -> raise (event_graph_error_default "Discarding expression results!" e.span)

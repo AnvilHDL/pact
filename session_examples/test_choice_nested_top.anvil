@@ -6,7 +6,7 @@ chan local_ch{
 }
 
 
-interface test_choice (ep : left local_ch) = (ep.req >> F ((#ep.ack) + (ep.reset >> (ep.ack+ ep.reset))) >> #1);
+interface test_choice (ep : left local_ch) = (ep.req >> #3>> ((#ep.ack) + (ep.reset >> ((ep.ack >> ep.reset)+ (ep.reset >> ep.ack)))) >> #1);
 
 interface test_dual_choice (ep : right local_ch) = (ep.req >> F (#ep.ack + ep.reset));
 
@@ -20,6 +20,15 @@ proc test_choice(test_choice){
             dprint "Sent ack" (1'd0)
         } else {
             send ep.reset(1'd0) >>
+            if(1'd1){
+                send ep.ack(1'd1) >>
+                send ep.reset(1'd1) >>
+                dprint "Sent ack after reset" (1'd0)
+            } else {
+                send ep.reset(1'd0) >>
+                send ep.ack(1'd1) >>
+                dprint "Sent reset after reset" (1'd0)
+            } >>
             dprint "Sent reset" (1'd0)
         } >>
         cycle 1
