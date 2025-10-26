@@ -1369,7 +1369,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
             let ctx = (BuildContext.create_empty graph shared_vars_info false) in
             let td = visit_expr graph ci ctx e in
             (match proc_interface_protocol with
-            | Some _ -> SessionCheck.check_session config graph module_name
+            | Some _ -> if(i == 0 ) then SessionCheck.check_session config graph module_name else Printf.eprintf "[Warning] Skipping session type checks for thread %d in process %s\n" i module_name
             | None -> Printf.eprintf "[Warning] No interface specified for process %s, skipping session type checks\n" module_name);
             graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
             graph.is_general_recursive <- graph.last_event_id <> td.lt.live.id;
