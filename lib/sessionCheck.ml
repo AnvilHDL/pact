@@ -44,7 +44,7 @@ let update_sty (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type)
       raise (Except.TypeError [Text (Printf.sprintf "Event with id %d not found in graph during session type update" ev_id); Except.codespan_local graph.thread_codespan])
     else
       let ev = Option.get ev_opt in
-      (* Printf.eprintf "Updating event %d session type to %s\n" ev.id (Lang.string_of_protocol new_sty); *)
+      Printf.eprintf "Updating event %d session type to %s\n" ev.id (Lang.string_of_protocol new_sty);
       ev.session_type <- Some {d= new_sty; span = default_span}
 
 let update_sty_seq (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type) (default_span : code_span)=
@@ -289,17 +289,31 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
       )
   
   | Lang.StyFuture s ->
-      (* Future: session can be satisfied at any later point, so don't error yet *)
-      let (_id, s_cont, _err) = session_judgement {st with d = s} ev config default_span graph in
+    let actions = extract_atomic_actions ev default_span in
+      let delay_act = match List.find_opt (fun (a, _) -> match a with
+        | Lang.AtomDelay _ -> true
+        | _ -> false
+      ) actions with
+        | Some (a, span) -> Some (a, span)
+        | None -> None
+      in
+
+      if Option.is_some delay_act && List.length actions == 1 then
+        (-1, Some (Lang.StyFuture s), None)
+      else            
+      let (_id, s_cont, err) = session_judgement {st with d = s} ev config default_span graph in
+      if Option.is_some err then
+        (-1, Some sty, err)
+      else
       (match s_cont with
       | None -> (-1, None, None) (* Future satisfied *)
       | Some s' ->
-          let remaining = Lang.StyFuture s' in
-          List.iter (fun succ_ev ->
+          (* let remaining = s' in *)
+          (* List.iter (fun succ_ev ->
             update_sty graph succ_ev.id remaining default_span
-          ) ev.outs;
-          (* update_sty graph id (Lang.StyFuture s') default_span; *)
-          (-1, Some (Lang.StyFuture s'), None)
+          ) ev.outs; *)
+          (* update_sty graph _id s' default_span; *)
+          (_id, Some s', None)
       )
   
   | Lang.StyChoiceDual offerings ->
