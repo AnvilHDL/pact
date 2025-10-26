@@ -198,6 +198,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
               (id,Some s2, None)
           | Some s1' ->
               (* s1 partially completed, propagate seq(s1', s2) *)
+              Printf.eprintf "Sequence continuation at event %d: s1' = %s, s2 = %s\n" ev.id (Lang.string_of_protocol s1') (Lang.string_of_protocol s2);
               let remaining = Lang.StySeq (s1', s2) in
               if id < 0 then
               List.iter (fun succ_ev ->
@@ -365,9 +366,6 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
             )
         in
         let new_sty = build_choice_from_offerings offerings in
-        List.iter (fun succ_ev ->
-          update_sty graph succ_ev.id new_sty default_span
-        ) ev.outs;
         (-1,Some new_sty, None)
       ) else
         (
