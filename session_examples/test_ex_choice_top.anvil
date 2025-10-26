@@ -1,0 +1,41 @@
+chan ch {
+    left req : (logic@#1),
+    left ack : (logic@#1)
+}
+
+interface tryand_interfcace (ep : left ch) = &(ep.req, ep.ack) >> #1 ;
+proc tryand(tryand_interfcace){
+    reg cyc : logic[8];
+    loop{
+       offer{
+            x= recv ep.req => dprint "[Cycle %d] try received req: %d" (*cyc, x),
+            x = recv ep.ack => dprint "[Cycle %d] try received ack: %d" (*cyc, x)
+        } >> 
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc test_ex_choice_top(){
+    chan ep_le -- ep_ri : ch;
+    spawn tryand(ep_le);
+    reg cyc : logic[8];
+    
+    loop{
+        send ep_ri.req(1'd1) >>
+        dprint "[Cycle %d] Top sent req" (*cyc) >>
+        cycle 2 >>
+        send ep_ri.ack(1'd1) >>
+        dprint "[Cycle %d] Top sent ack" (*cyc) >>
+        cycle 2
+    }
+    loop{
+        cycle 10 >> 
+        dfinish
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}

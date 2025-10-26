@@ -104,7 +104,6 @@
 %left LEFT_BRACKET
 %nonassoc TILDE UMINUS UAND UOR KEYWORD_IN
 %nonassoc KEYWORD_F
-%left DOUBLE_COLON
 %start <Lang.compilation_unit> cunit
 %%
 
@@ -343,7 +342,7 @@ local_session_type:
   { Lang.StySeq (act1, act2) }
 | act1 = local_session_type ;PLUS; act2 = local_session_type
   { Lang.StyChoice (act1, act2) }
-| offering_list = offering_choice_list
+| AND; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyChoiceDual offering_list }
 | act1 = local_session_type; DOUBLE_OR; act2 = local_session_type
   { Lang.StyParallel (act1, act2) }
@@ -352,22 +351,28 @@ local_session_type:
 | KEYWORD_F; sty = local_session_type %prec KEYWORD_F
   { Lang.StyFuture sty }
 
+offering_arm: 
+| trig  = atomic_action; COLON; cont = local_session_type
+  { { Lang.trigger = trig; Lang.continuation = Some cont } : Lang.offering_session_type }
 
-offering_choice_list:
-| act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; rest = offering_choice_list
-  { { Lang.trigger = act; Lang.continuation = Some cont } :: rest }
-| act = atomic_action; DOUBLE_COLON; AND; rest = offering_choice_list
-  { { Lang.trigger = act; Lang.continuation = None } :: rest }
-| act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; last = offering_choices
-  { [{ Lang.trigger = act; Lang.continuation = Some cont }; last] }
-| act = atomic_action; DOUBLE_COLON; AND; last = offering_choices
-  { [{ Lang.trigger = act; Lang.continuation = None }; last] }
+| trig = atomic_action;
+  { { Lang.trigger = trig; Lang.continuation = None } : Lang.offering_session_type }
 
-offering_choices:
-| act = atomic_action
-  { { Lang.trigger = act; Lang.continuation = None } : Lang.offering_session_type }
-| act = atomic_action; DOUBLE_COLON; cont = local_session_type %prec DOUBLE_COLON
-  { { Lang.trigger = act; Lang.continuation = Some cont } : Lang.offering_session_type }
+// offering_choice_list:
+// | act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; rest = offering_choice_list
+//   { { Lang.trigger = act; Lang.continuation = Some cont } :: rest }
+// | act = atomic_action; DOUBLE_COLON; AND; rest = offering_choice_list
+//   { { Lang.trigger = act; Lang.continuation = None } :: rest }
+// | act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; last = offering_choices
+//   { [{ Lang.trigger = act; Lang.continuation = Some cont }; last] }
+// | act = atomic_action; DOUBLE_COLON; AND; last = offering_choices
+//   { [{ Lang.trigger = act; Lang.continuation = None }; last] }
+
+// offering_choices:
+// | act = atomic_action
+//   { { Lang.trigger = act; Lang.continuation = None } : Lang.offering_session_type }
+// | act = atomic_action; DOUBLE_COLON; cont = local_session_type %prec DOUBLE_COLON
+//   { { Lang.trigger = act; Lang.continuation = Some cont } : Lang.offering_session_type }
 
 
 atomic_action:
