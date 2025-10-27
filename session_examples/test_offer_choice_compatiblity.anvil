@@ -5,8 +5,8 @@ chan ch {
 }
 
 
-interface foo1_intfc (ep : right ch) = ep.req >> ((#4 >> ep.reset) + (#2 >> ep.ack)) >> #1;
-interface foo2_intfc (ep : left ch) = ep.req >> &(ep.reset,ep.ack) >> #1;
+interface foo1_intfc (ep : right ch) = ep.req >> ((#4 >> ep.reset >> ep.ack) + (#2 >> ep.ack >> ep.reset)) >> #1;
+interface foo2_intfc (ep : left ch) = ep.req >> &(ep.reset : F ep.ack,ep.ack : F ep.reset) >> #1;
 
 
 proc foo1 (foo1_intfc){
@@ -18,10 +18,12 @@ proc foo1 (foo1_intfc){
             cycle 1 >>
             cycle 1 >>
             send ep.reset(1'd0) >>
+            let ack = recv ep.ack >>
             dprint "[Cycle %d] [foo1] Sent reset" (*cyc)
         }else{
             cycle 2 >>
             let ack = recv ep.ack >>
+            send ep.reset(1'd0) >>
             dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack)
         } 
         >>
@@ -38,10 +40,17 @@ proc foo2 (foo2_intfc){
         let req = recv ep.req >>
         offer{
             reset = recv ep.reset => (
-                dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset)
+                dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset) >>
+                cycle 2 >>
+                cycle 1 >>
+                send ep.ack(1'd1) >>
+                dprint "[Cycle %d] [foo2] Sent ack: 1'd1\n" (*cyc)
             ),
             send ep.ack(1'd1) => (
-                dprint "[Cycle %d] [foo2] Received req: %d and sent ack: 1'd1\n" (*cyc, req)
+                cycle 2 >>
+                cycle 1 >>
+                let reset = recv ep.reset >>
+                dprint "[Cycle %d] [foo2] Received req: %d | reset = %d and sent ack:  1'd1\n" (*cyc, req, reset)
             )
         }
         >>
