@@ -512,13 +512,19 @@ type control_gate = {
   gate_id : identifier ast_node;
   gate_class: gate_qualifier;
   gate_elements: gate_vars list;
-  trigger : gate_vars option;  (* optional trigger variable *)
+  trigger_cond : gate_vars option;  (* optional trigger variable *)
+}
+
+type interface_spawn = {
+  intfc_id : identifier;
+  intfc_args : identifier list;
 }
 
 (** Process body. *)
 type proc_def_body = {
   (* new channels available to this process *)
   channels: channel_def ast_node list;
+  interfaces: (identifier ast_node) list;  (* interface instantiations *)
   (* processes spawned by this process *)
   spawns: spawn_def ast_node list;
   regs: reg_def ast_node list;

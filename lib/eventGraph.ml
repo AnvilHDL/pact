@@ -177,7 +177,7 @@ and gate_mem = {
 and gate_class = {
   gid : (Lang.identifier * Lang.code_span);
   gqual : Lang.gate_qualifier;
-  trigger : gate_mem option;
+  trigger_cond : gate_mem option;
   gmem : gate_mem list
 }
 

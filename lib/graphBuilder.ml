@@ -1242,7 +1242,7 @@ let build_control_group (gates : Lang.control_gate) =
   {
     gid = (gates.gate_id.d, gates.gate_id.span);
     gqual = gates.gate_class;
-    trigger = if Option.is_some gates.trigger then Some (let t= (Option.get gates.trigger) in {mid = t; g_events = []}) else None;
+    trigger_cond = if Option.is_some gates.trigger_cond then Some (let t= (Option.get gates.trigger_cond) in {mid = t; g_events = []}) else None;
     gmem = List.map (fun gm -> {mid = gm; g_events = []}) gates.gate_elements;
   }
 (* Builds the graph representation for each process To Do: Add support for commands outside loop (be executed once or continuosly)*)
@@ -1420,6 +1420,35 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     in
 
   List.iter add_proc_args cunit.procs;
+
+
+  (* check for type compatibility *)
+
+  List.iter (fun (proc : proc_def) ->
+    match proc.body with
+    | Extern _ -> ()
+    | Native p ->
+      if List.length p.interfaces = 0 then
+        ()
+      else if List.length p.interfaces != 2  then
+        raise (Except.UnimplementedError [Text "The compatiblity check currently only supports two interfaces!"; Except.codespan_local (List.hd p.interfaces).span])
+      else
+      (
+          let intf1 = lookup_interface cunit.session_defs (List.nth p.interfaces 0).d in 
+          let intf2 = lookup_interface cunit.session_defs (List.nth p.interfaces 1).d in
+          if Option.is_none intf1 || Option.is_none intf2 then
+            raise (Except.TypeError [Text "Undefined interface in compatiblity check!"; Except.codespan_local (List.hd p.interfaces).span]);
+          let intf1 = Option.get intf1 in
+          let intf2 = Option.get intf2 in
+          let result, err = SessionCompatiblity.check_compatibility intf1.body.d intf2.body.d intf1.name intf2.name config.verbose in
+          if not result then
+            raise (Except.TypeError [Text ("Incompatibility detected between interfaces " ^ intf1.name ^ " and " ^ intf2.name ^ ": " ^ err); 
+              Except.codespan_local intf1.body.span; 
+              Except.codespan_local intf2.body.span]
+            )
+      )
+
+  ) cunit.procs;
 
   let graphs = List.map (build_proc config sched module_name param_values ci ) cunit.procs in
   {

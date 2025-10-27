@@ -27,7 +27,7 @@ ifdef DEBUG
 	python3 debug.py
 endif
 obj_dir/V$(MODULE_NAME): $(MODULE_NAME)_driver.cpp $(MODULE_NAME).anvil.sv
-	verilator --cc --exe --build $(VERILATOR_FLAGS) $^
+	verilator --cc --exe --build $(VERILATOR_FLAGS) $^ > /dev/null 2>&1
 
 $(MODULE_NAME)_driver.cpp: $(TEST_DRIVER)
 	sed "s/Vtop/V$(MODULE_NAME)/g" $< > $@

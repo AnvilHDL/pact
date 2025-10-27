@@ -1,0 +1,51 @@
+chan ch {
+    left req : (logic@#1),
+    left reset : (logic@#1),
+    right ack : (logic@#1)
+}
+
+
+interface foo1_intfc (ep : right ch) = ep.req >> ep.reset >> ep.ack >> #1;
+interface foo2_intfc (ep : left ch) = ep.req >> ep.reset >> ep.ack >> #1;
+
+
+proc foo1 (foo1_intfc){
+    reg cyc : logic[8];
+    loop{
+        send ep.req(1'd1) >>
+        send ep.reset(1'd0) >>
+        let ack = recv ep.ack >>
+        dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo2 (foo2_intfc){
+    reg cyc : logic[8];
+    loop{
+        let req = recv ep.req >>
+        let reset = recv ep.reset >>
+        dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset) >>
+        send ep.ack(1'd1) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+    
+}
+
+proc test_compatiblity(){
+    chan ep_le -- ep_ri : ch;
+    interface (foo1_intfc , foo2_intfc);
+    spawn foo1(ep_ri);
+    spawn foo2(ep_le);
+    loop{
+        cycle 100 >>
+        dfinish
+    }
+}
+    

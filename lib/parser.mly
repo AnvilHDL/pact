@@ -233,6 +233,7 @@ proc_def_body:
   {
     let open Lang in {
       channels = [];
+      interfaces = [];
       spawns = [];
       regs = [];
       threads = [];
@@ -243,11 +244,11 @@ proc_def_body:
 
 | KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
   {
-    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv;trigger  = None})::body.control_gates}
+    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv; trigger_cond = None})::body.control_gates}
   }
 | KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; trigger = triggercon; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
   {
-    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv; trigger = Some trigger})::body.control_gates}
+    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv; trigger_cond = Some trigger})::body.control_gates}
   }
 | KEYWORD_LOOP; reset_by = message_specifier?; LEFT_BRACE; thread_prog = node(expr); RIGHT_BRACE; body=proc_def_body //For thread definitions
   {
@@ -264,6 +265,10 @@ proc_def_body:
   {
     let open Lang in {body with channels = chan_def::(body.channels)}
   }
+| KEYWORD_INTERFACE; LEFT_PAREN; intfcs = separated_list(COMMA, node(IDENT)); RIGHT_PAREN; SEMICOLON; body = proc_def_body
+  {
+    let open Lang in {body with interfaces = intfcs}
+  }
 | KEYWORD_REG; reg_def = node(reg_def); SEMICOLON; body = proc_def_body // For reg definition
   {
     let open Lang in {body with regs = reg_def::(body.regs)}
@@ -277,6 +282,10 @@ proc_def_body:
     let open Lang in {body with shared_vars = shared_var :: body.shared_vars}
   }
 ;
+
+// interface_spawn:
+//   id = IDENT; LEFT_ABRACK; params = separated_list(COMMA, IDENT); RIGHT_ABRACK
+//   { {intfc_id = id; intfc_args =  params} }
 
 proc_def_body_extern:
 | { let open Lang in {named_ports = []; msg_ports = []} }
@@ -358,21 +367,6 @@ offering_arm:
 | trig = atomic_action;
   { { Lang.trigger = trig; Lang.continuation = None } : Lang.offering_session_type }
 
-// offering_choice_list:
-// | act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; rest = offering_choice_list
-//   { { Lang.trigger = act; Lang.continuation = Some cont } :: rest }
-// | act = atomic_action; DOUBLE_COLON; AND; rest = offering_choice_list
-//   { { Lang.trigger = act; Lang.continuation = None } :: rest }
-// | act = atomic_action; DOUBLE_COLON; cont = local_session_type; AND; last = offering_choices
-//   { [{ Lang.trigger = act; Lang.continuation = Some cont }; last] }
-// | act = atomic_action; DOUBLE_COLON; AND; last = offering_choices
-//   { [{ Lang.trigger = act; Lang.continuation = None }; last] }
-
-// offering_choices:
-// | act = atomic_action
-//   { { Lang.trigger = act; Lang.continuation = None } : Lang.offering_session_type }
-// | act = atomic_action; DOUBLE_COLON; cont = local_session_type %prec DOUBLE_COLON
-//   { { Lang.trigger = act; Lang.continuation = Some cont } : Lang.offering_session_type }
 
 
 atomic_action:
@@ -824,22 +818,6 @@ offer_arm:
   { (Lang.OfferRecv (id, recv_pack), body) }
 ;  
 
-// match_arm:
-// | OR_GT; pattern = match_pattern; body_opt = match_arm_body?
-//   { (pattern, body_opt) }
-// ;
-
-// %inline match_pattern:
-//   cstr = IDENT; bind_name_opt = IDENT?
-//   {
-//     { cstr; bind_name = bind_name_opt } : Lang.match_pattern
-//   }
-// ;
-
-// %inline match_arm_body:
-//   POINT_TO; e = node(expr)
-//   { e }
-;
 //Definition of messages: To Do: Doesnt support custom lifetime types, just sync?
 message_def:
 | dir = message_direction; ident = IDENT; COLON; LEFT_PAREN; data = separated_list(COMMA, sig_type_chan_local); RIGHT_PAREN;
