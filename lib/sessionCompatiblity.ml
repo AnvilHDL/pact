@@ -1,5 +1,5 @@
 open Lang
-
+open Except
 
 
 
@@ -52,6 +52,7 @@ type typeAutomaton = {
 
 (* --- Automaton Helper Functions --- *)
 
+
 module TypeAutomaton = struct
   type t = typeAutomaton
 
@@ -72,6 +73,10 @@ module TypeAutomaton = struct
     let state = { id; accepting } in
     Hashtbl.add auto.states id state;
     id
+  
+    let remove_state (auto: t) (state_id: int) : unit =
+      Hashtbl.remove auto.states state_id;
+      auto.transitions <- List.filter (fun t -> t.from_state <> state_id && t.to_state <> state_id) auto.transitions
 
  
   let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) : unit =
@@ -88,6 +93,37 @@ module TypeAutomaton = struct
       let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon } in
       auto.transitions <- trans :: auto.transitions
 end
+
+let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
+  Printf.fprintf out "digraph TypeAutomaton {\n";
+  Hashtbl.iter (fun id state ->
+    let shape = if state.accepting then "doublecircle" else "circle" in
+    Printf.fprintf out "  %d [shape=%s];\n" id shape
+  ) auto.states;
+  
+  List.iter (fun t ->
+    let label_str = 
+      if t.is_epsilon then "ε"
+      else
+        String.concat "," (LabelSet.elements t.label |> List.map (function
+          | Action(ImmediateAction m) -> Printf.sprintf "NB:%s" (Lang.string_of_msg_spec m)
+          | Action(BlockAction m) -> Printf.sprintf "B:%s" (Lang.string_of_msg_spec m)
+          | Delay(CycleDelay n) -> Printf.sprintf "#%d" n
+          | Delay(MessageDelay m) -> Printf.sprintf "#_B:%s" (Lang.string_of_msg_spec m)
+          | OfferingDelay ms -> Printf.sprintf "#EC:[%s]" (String.concat ";" (List.map Lang.string_of_msg_spec ms))
+          | OfferingLabel ms -> Printf.sprintf "#ac:[%s]" (String.concat ";" (List.map Lang.string_of_msg_spec ms))
+          | ChoiceLabel -> "#c"
+          | Future None -> "#F"
+          | Future(Some(ImmediateAction m)) -> Printf.sprintf "#FNB:%s" (Lang.string_of_msg_spec m)
+          | Future(Some(BlockAction m)) -> Printf.sprintf "#FB:%s" (Lang.string_of_msg_spec m)
+          | Terminal -> "#end"
+        ))
+    in
+    Printf.fprintf out "  %d -> %d [label=\"%s\"];\n" t.from_state t.to_state label_str
+  ) auto.transitions;
+
+  Printf.fprintf out "}\n";
+  flush out
 
 
 let check_label_satisfiability (l1: label_kind) (l2: label_kind) : bool =
@@ -112,6 +148,9 @@ let check_label_satisfiability (l1: label_kind) (l2: label_kind) : bool =
   | Delay (MessageDelay _), Delay (CycleDelay _) -> true
   | Delay (MessageDelay m1), Action(ImmediateAction m2) -> m1 <> m2
   | Delay (MessageDelay m1), Action(BlockAction m2) -> m1 <> m2
+  | OfferingDelay _, Delay (CycleDelay _) -> true
+  | OfferingDelay ms1, Delay (MessageDelay m2) -> List.for_all (fun m1 -> m1 <> m2) ms1
+  | Delay (MessageDelay m1) , OfferingDelay ms2 -> List.for_all (fun m2 -> m1 <> m2) ms2
   
   (* #FB_m |-> B_m, self *)
   | Future(Some(BlockAction m1)), Action(BlockAction m2) -> m1 = m2
@@ -139,7 +178,7 @@ let label_equivalence (labels1: LabelSet.t) (labels2: LabelSet.t) : bool =
     ) labels2
 
 
-let rec build_automaton (st: Lang.session_type) : TypeAutomaton.t =
+let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) :  TypeAutomaton.t =
   let auto = TypeAutomaton.create () in
   
   (* Internal recursive builder *)
@@ -165,7 +204,21 @@ let rec build_automaton (st: Lang.session_type) : TypeAutomaton.t =
         | Lang.AtomNBMsg m -> m
       in
       let all_msg_specs = List.map (fun (o : offering_session_type) -> get_msg_spec o.Lang.trigger) offerings in
-      
+      let all_blocking  = List.for_all (fun (o : offering_session_type) ->
+        match o.Lang.trigger with
+        | Lang.AtomBMsg _ -> true
+        | Lang.AtomNBMsg _ -> false
+      ) offerings in
+      let all_non_blocking = List.for_all (fun (o : offering_session_type) ->
+        match o.Lang.trigger with
+        | Lang.AtomBMsg _ -> false
+        | Lang.AtomNBMsg _ -> true
+      ) offerings in
+      if not all_blocking && not all_non_blocking then
+        raise(TypeError [Text ("Mixed blocking and non-blocking offerings in external choice"); Except.codespan_local default_span])
+      else if all_blocking then
+        TypeAutomaton.add_transition auto current current (LabelSet.singleton (OfferingDelay all_msg_specs)) false;
+
       List.iter (fun offer ->
         let branch_s = TypeAutomaton.new_state auto false in
         let label, _is_blocking = match offer.Lang.trigger with
@@ -203,7 +256,7 @@ let rec build_automaton (st: Lang.session_type) : TypeAutomaton.t =
       next_s
 
     | Lang.StyParallel (st1, st2) ->
-      create_synchronous_product auto st1 st2 current
+      create_synchronous_product auto st1 st2 current default_span
       
     | Lang.StyFuture st ->
       (* Add #F epsilon self-loop *)
@@ -212,10 +265,10 @@ let rec build_automaton (st: Lang.session_type) : TypeAutomaton.t =
       build st current
   
 
-  and create_synchronous_product (auto: TypeAutomaton.t) (st1: Lang.session_type) (st2: Lang.session_type) (current_start_node: int) : int =
+  and create_synchronous_product (auto: TypeAutomaton.t) (st1: Lang.session_type) (st2: Lang.session_type) (current_start_node: int) (default_span : code_span) : int =
     (* 1. Build sub-automata for st1 and st2 *)
-    let auto1 = build_automaton st1 in
-    let auto2 = build_automaton st2 in
+    let auto1 = build_automaton st1 default_span   in
+    let auto2 = build_automaton st2 default_span in
     
     (* 2. Build product automaton manually into `auto` *)
     let state_map : ((int * int), int) Hashtbl.t = Hashtbl.create 10 in
@@ -331,7 +384,7 @@ let rec build_automaton (st: Lang.session_type) : TypeAutomaton.t =
 
 
 
-let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t) 
+let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t) (_default_span: Lang.code_span)  (verbose : bool)  
   : (TypeAutomaton.t, string) result =
   
   let product_auto = TypeAutomaton.create () in
@@ -346,10 +399,25 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t)
       Hashtbl.add state_map (s1, s2) new_id;
       new_id
   in
-  
   let initial_product_state = get_state_id (auto1.start_state, auto2.start_state) in
   let product_auto = { product_auto with start_state = initial_product_state } in
-  
+   let remove_unreachable_states () =
+        let reachable = Hashtbl.create 10 in
+        let rec dfs state_id =
+          if not (Hashtbl.mem reachable state_id) then (
+            Hashtbl.add reachable state_id ();
+            List.iter (fun t ->
+              if t.from_state = state_id then
+                dfs t.to_state
+            ) product_auto.transitions
+          )
+        in
+        dfs product_auto.start_state;
+        
+        Hashtbl.iter (fun id _ ->
+          if not (Hashtbl.mem reachable id) then
+            TypeAutomaton.remove_state product_auto id
+        ) product_auto.states in
   let module IntPairSet = Set.Make(struct type t = int * int let compare = Stdlib.compare end) in
   let worklist = ref [(auto1.start_state, auto2.start_state)] in
   let visited = ref (IntPairSet.empty) in
@@ -384,18 +452,19 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t)
             )
           ) trans2
       ) trans1;
-      
-
+      if not !found_match then(
       List.iter (fun t1 ->
-        if t1.is_epsilon then (
-          found_match := true;
-          let to_ps = get_state_id (t1.to_state, s2) in
-          TypeAutomaton.add_transition product_auto ps to_ps t1.label true;
-          if not (IntPairSet.mem (t1.to_state, s2) !visited) then
-            worklist := (t1.to_state, s2) :: !worklist
-        )
-      ) trans1;
-      
+          if t1.is_epsilon then (
+            found_match := true;
+            let to_ps = get_state_id (t1.to_state, s2) in
+            TypeAutomaton.add_transition product_auto ps to_ps t1.label true;
+            if not (IntPairSet.mem (t1.to_state, s2) !visited) then
+              worklist := (t1.to_state, s2) :: !worklist
+          )
+        ) trans1
+      );
+
+      if not !found_match then (
       List.iter (fun t2 ->
         if t2.is_epsilon then (
           found_match := true;
@@ -404,9 +473,10 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t)
           if not (IntPairSet.mem (s1, t2.to_state) !visited) then
             worklist := (s1, t2.to_state) :: !worklist
         )
-      ) trans2;
+      ) trans2
+      );
       
-      (* 3. Check for looping from accepting states  *)
+      if not !found_match then (
       if not (s1_state.accepting && s2_state.accepting) then (
         if s1_state.accepting then (
           (* auto1 is done, check transitions from its start *)
@@ -441,15 +511,29 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t)
                 ) trans2_initial
           ) trans1
         );
+      )
       );
 
-      if not !found_match && not (s1_state.accepting && s2_state.accepting) then (
+     
 
+      if not !found_match && not (s1_state.accepting && s2_state.accepting) then (
+        remove_unreachable_states ();
+          if verbose then (
+            let file = "product_automaton_debug.dot" in
+            let out = open_out file in
+            print_automaton_dot product_auto out;
+            close_out out
+          );
+          raise (Except.TypeError [Text ((Printf.sprintf "No matching transitions found in product automaton  s1 =  %d | s2 = %d | current state = %d  " s1_state.id s2_state.id (get_state_id (s1_state.id, s2_state.id))) ); Except.codespan_local _default_span])
       )
+ 
+
+
     )
   done;
   
 
+  remove_unreachable_states ();
   let reachable_accepting_states = Hashtbl.fold (fun id s acc ->
     (* Check if state is accepting AND was visited/is part of the product graph *)
     if s.accepting && Hashtbl.fold (fun _ v found -> found || v = id) state_map false then
@@ -458,48 +542,26 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t)
       acc
   ) product_auto.states [] in
   
-  if reachable_accepting_states = [] then
+  if reachable_accepting_states = [] then (
+     if verbose then (
+            let file = "product_automaton_debug.dot" in
+            let out = open_out file in
+            print_automaton_dot product_auto out;
+            close_out out
+    );
     Error "No accepting states reachable in product automaton; incompatible session types."
+  )
   else
     Ok product_auto
 
 
-let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
-  Printf.fprintf out "digraph TypeAutomaton {\n";
-  Hashtbl.iter (fun id state ->
-    let shape = if state.accepting then "doublecircle" else "circle" in
-    Printf.fprintf out "  %d [shape=%s];\n" id shape
-  ) auto.states;
-  
-  List.iter (fun t ->
-    let label_str = 
-      if t.is_epsilon then "ε"
-      else
-        String.concat "," (LabelSet.elements t.label |> List.map (function
-          | Action(ImmediateAction m) -> Printf.sprintf "NB:%s" (Lang.string_of_msg_spec m)
-          | Action(BlockAction m) -> Printf.sprintf "B:%s" (Lang.string_of_msg_spec m)
-          | Delay(CycleDelay n) -> Printf.sprintf "#%d" n
-          | Delay(MessageDelay m) -> Printf.sprintf "#_B:%s" (Lang.string_of_msg_spec m)
-          | OfferingDelay ms -> Printf.sprintf "#EC:[%s]" (String.concat ";" (List.map Lang.string_of_msg_spec ms))
-          | OfferingLabel ms -> Printf.sprintf "#ac:[%s]" (String.concat ";" (List.map Lang.string_of_msg_spec ms))
-          | ChoiceLabel -> "#c"
-          | Future None -> "#F"
-          | Future(Some(ImmediateAction m)) -> Printf.sprintf "#FNB:%s" (Lang.string_of_msg_spec m)
-          | Future(Some(BlockAction m)) -> Printf.sprintf "#FB:%s" (Lang.string_of_msg_spec m)
-          | Terminal -> "#end"
-        ))
-    in
-    Printf.fprintf out "  %d -> %d [label=\"%s\"];\n" t.from_state t.to_state label_str
-  ) auto.transitions;
-
-  Printf.fprintf out "}\n";
-  flush out
 
 
-let check_compatibility (type1: Lang.session_type) (type2: Lang.session_type) (module_id1: identifier) (module_id2 : identifier) (verbose : bool)  : bool * string =
 
-  let auto1 = build_automaton type1 in
-  let auto2 = build_automaton type2 in
+let check_compatibility (type1: Lang.session_type ast_node) (type2: Lang.session_type ast_node) (module_id1: identifier) (module_id2 : identifier) (verbose : bool) (default_span : code_span)  : bool * string =
+
+  let auto1 = build_automaton type1.d type1.span in
+  let auto2 = build_automaton type2.d type2.span in
 
   if verbose then begin
     let file1 = Printf.sprintf "automaton_%s.dot" module_id1 in
@@ -514,7 +576,7 @@ let check_compatibility (type1: Lang.session_type) (type2: Lang.session_type) (m
   end;
 
 
-  match create_product_automaton auto1 auto2 with
+  match create_product_automaton auto1 auto2 default_span verbose with
   | Ok _product_auto ->
     if verbose then begin
       Printf.eprintf "Product automaton created successfully.\n";

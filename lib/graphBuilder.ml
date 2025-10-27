@@ -1440,7 +1440,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
             raise (Except.TypeError [Text "Undefined interface in compatiblity check!"; Except.codespan_local (List.hd p.interfaces).span]);
           let intf1 = Option.get intf1 in
           let intf2 = Option.get intf2 in
-          let result, err = SessionCompatiblity.check_compatibility intf1.body.d intf2.body.d intf1.name intf2.name config.verbose in
+          let result, err = SessionCompatiblity.check_compatibility intf1.body intf2.body intf1.name intf2.name config.verbose (List.hd p.interfaces).span in
           if not result then
             raise (Except.TypeError [Text ("Incompatibility detected between interfaces " ^ intf1.name ^ " and " ^ intf2.name ^ ": " ^ err); 
               Except.codespan_local intf1.body.span; 

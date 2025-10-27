@@ -60,6 +60,7 @@ let update_sty_seq (graph : event_graph) (ev_id : int) (new_sty : Lang.session_t
           ev.session_type <- Some {d= new_sty; span = default_span}
       else
         let existing_sty = Option.get ev.session_type in
+          Printf.eprintf "Updating event %d session type (%s) by sequencing with %s \n" ev_id (Lang.string_of_protocol existing_sty.d) (Lang.string_of_protocol new_sty);
         ev.session_type <- Some {d = Lang.StySeq (existing_sty.d, new_sty); span = default_span}
 
 (** Extract atomic actions from an event's actions and sustained actions *)
@@ -221,7 +222,24 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
       (
         match err1, err2 with
         | None, None ->
-            raise (Except.TypeError [Text "Both branches of internal choice satisfied simultaneously"; Except.codespan_local default_span])
+        (
+          match s1_cont, s2_cont with
+          | None, None ->
+              (* Both satisfied *)
+              (-1, None, None)
+          | Some s1', None ->
+              (id1, Some s1', None)
+          | None, Some s2' ->
+              (id2, Some s2', None)
+          | Some s1', Some s2' ->
+            let remaining = Lang.StyChoice (s1', s2') in
+            if id1 != id2 then 
+              let err_msg = "Session type mismatch in choice: different events for continuations" in
+              (-1, Some sty, Some (err_msg, default_span))
+            else
+            (id1, Some remaining, None)
+      )
+
         | Some _ , None ->
             (* s2 satisfied *)
             (match s2_cont with
