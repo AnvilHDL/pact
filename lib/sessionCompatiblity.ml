@@ -459,7 +459,7 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t)
   ) product_auto.states [] in
   
   if reachable_accepting_states = [] then
-    Error "Deadlock: No reachable accepting states in product automaton."
+    Error "No accepting states reachable in product automaton; incompatible session types."
   else
     Ok product_auto
 
@@ -476,16 +476,16 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
       if t.is_epsilon then "ε"
       else
         String.concat "," (LabelSet.elements t.label |> List.map (function
-          | Action(ImmediateAction m) -> Printf.sprintf "m:%s" (Lang.string_of_msg_spec m)
-          | Action(BlockAction m) -> Printf.sprintf "B_m:%s" (Lang.string_of_msg_spec m)
+          | Action(ImmediateAction m) -> Printf.sprintf "NB:%s" (Lang.string_of_msg_spec m)
+          | Action(BlockAction m) -> Printf.sprintf "B:%s" (Lang.string_of_msg_spec m)
           | Delay(CycleDelay n) -> Printf.sprintf "#%d" n
-          | Delay(MessageDelay m) -> Printf.sprintf "#_B_m:%s" (Lang.string_of_msg_spec m)
+          | Delay(MessageDelay m) -> Printf.sprintf "#_B:%s" (Lang.string_of_msg_spec m)
           | OfferingDelay ms -> Printf.sprintf "#EC:[%s]" (String.concat ";" (List.map Lang.string_of_msg_spec ms))
           | OfferingLabel ms -> Printf.sprintf "#ac:[%s]" (String.concat ";" (List.map Lang.string_of_msg_spec ms))
           | ChoiceLabel -> "#c"
           | Future None -> "#F"
-          | Future(Some(ImmediateAction m)) -> Printf.sprintf "#F_m:%s" (Lang.string_of_msg_spec m)
-          | Future(Some(BlockAction m)) -> Printf.sprintf "#FB_m:%s" (Lang.string_of_msg_spec m)
+          | Future(Some(ImmediateAction m)) -> Printf.sprintf "#FNB:%s" (Lang.string_of_msg_spec m)
+          | Future(Some(BlockAction m)) -> Printf.sprintf "#FB:%s" (Lang.string_of_msg_spec m)
           | Terminal -> "#end"
         ))
     in

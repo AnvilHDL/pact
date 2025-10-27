@@ -5,7 +5,7 @@ chan ch {
 }
 
 
-interface foo1_intfc (ep : right ch) = ep.req >> ep.reset >> ep.ack >> #1;
+interface foo1_intfc (ep : right ch) = ep.req >> #4 >> #ep.reset >> ep.ack >> #1;
 interface foo2_intfc (ep : left ch) = ep.req >> ep.reset >> ep.ack >> #1;
 
 
@@ -13,6 +13,9 @@ proc foo1 (foo1_intfc){
     reg cyc : logic[8];
     loop{
         send ep.req(1'd1) >>
+        cycle 2 >>
+        cycle 1 >>
+        cycle 1 >>
         send ep.reset(1'd0) >>
         let ack = recv ep.ack >>
         dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack) >>
