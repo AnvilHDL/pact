@@ -92,6 +92,10 @@ module TypeAutomaton = struct
     else
       let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon } in
       auto.transitions <- trans :: auto.transitions
+  let remove_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) : unit =
+    auto.transitions <- List.filter (fun t ->
+      not (t.from_state = from_s && t.to_state = to_s && LabelSet.equal t.label label_set)
+    ) auto.transitions
 end
 
 let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
@@ -140,6 +144,7 @@ let check_label_satisfiability (l1: label_kind) (l2: label_kind) : bool =
   | Action(BlockAction m1), Action(ImmediateAction m2) -> m1 = m2
   | Action(BlockAction m1), Action(BlockAction m2) -> m1 = m2
   | Action(BlockAction m1), Future(Some(ImmediateAction m2)) -> m1 = m2 
+  | Action(BlockAction m1), Future(Some(BlockAction m2)) -> m1 = m2
   
   | Action(ImmediateAction m1), Action(ImmediateAction m2) -> m1 = m2
   | Action(ImmediateAction m1), Action(BlockAction m2) -> m1 = m2 
@@ -245,8 +250,59 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       next_s
       
     | Lang.StyAtom (Lang.AtomicAct(Lang.AtomBMsg m)) ->
+      let label_is_offering (l : LabelSet.t) =
+        (* for all labels in this set are of the following kind *)
+        let labels = LabelSet.elements l in
+        let labels_are_offering labels =
+          List.for_all (function
+            | OfferingLabel _ -> true
+            | _ -> false
+          ) labels
+        in
+        labels_are_offering labels
+      in
+
+      let label_is_future (l : LabelSet.t) =
+        let labels = LabelSet.elements l in
+        let labels_are_future labels =
+          List.for_all (function
+            | Future _ -> true
+            | _ -> false
+          ) labels
+        in
+        labels_are_future labels in
+
+      let is_external_recursive = 
+        List.filter_map ( fun t ->
+          if t.from_state = current && label_is_offering t.label then
+            Some (t.to_state, t.label)
+          else
+            None
+        ) auto.transitions
+      in
+      if is_external_recursive <> [] then
+        List.iter (fun (to_state, label) ->
+          TypeAutomaton.add_transition auto current to_state label false
+        ) is_external_recursive;
+      
+      let is_future = 
+        List.find_opt ( fun t ->
+          if t.from_state = current && t.to_state == current && label_is_future t.label then
+            true
+          else
+            false
+        ) auto.transitions
+      in
       let next_s = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action(BlockAction m))) false;
+      if Option.is_some is_future then
+        (
+        TypeAutomaton.remove_transition auto current current (LabelSet.singleton (Future None));
+        TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Future (Some (BlockAction m)))) false
+        )
+      else 
+      (
+        TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action(BlockAction m))) false;
+      );
       TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(MessageDelay m))) false;
       next_s
       
@@ -260,7 +316,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       
     | Lang.StyFuture st ->
       (* Add #F epsilon self-loop *)
-      TypeAutomaton.add_transition auto current current (LabelSet.singleton (Future None)) true;
+      TypeAutomaton.add_transition auto current current (LabelSet.singleton (Future None)) false;
       (* Or start the actual behavior *)
       build st current
   
