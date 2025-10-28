@@ -183,6 +183,12 @@ let label_equivalence (labels1: LabelSet.t) (labels2: LabelSet.t) : bool =
     ) labels2
 
 
+let label_equivalence_one_way (labels1: LabelSet.t) (labels2: LabelSet.t) : bool =
+let label1_satisfied = LabelSet.for_all (fun l1 ->
+    LabelSet.exists (fun l2 -> check_label_satisfiability l1 l2) labels2
+  ) labels1 in
+  label1_satisfied
+
 let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) :  TypeAutomaton.t =
   let auto = TypeAutomaton.create () in
   
@@ -610,7 +616,230 @@ let create_product_automaton (auto1: TypeAutomaton.t) (auto2: TypeAutomaton.t) (
   else
     Ok product_auto
 
+let create_product_automaton_multiparty (autos: (TypeAutomaton.t * identifier) list) (_default_span: Lang.code_span) (verbose : bool)
+  : (TypeAutomaton.t, string) result =
 
+  let product_auto = TypeAutomaton.create () in
+  let state_map : ((int list), int) Hashtbl.t = Hashtbl.create 10 in
+
+
+  let get_state_id (states: int list) =
+    try Hashtbl.find state_map states
+    with Not_found ->
+      let accepting = List.for_all2 (fun (auto, _) s_id ->
+        let s = Hashtbl.find auto.states s_id in
+        s.accepting
+      ) autos states in
+      let new_id = TypeAutomaton.new_state product_auto accepting in
+      Hashtbl.add state_map states new_id;
+      new_id
+  in
+
+  let initial_product_state = get_state_id (List.map (fun (auto, _) -> auto.start_state) autos) in
+  let product_auto = { product_auto with start_state = initial_product_state } in
+
+  let remove_unreachable_states () =
+    let reachable = Hashtbl.create 10 in
+    let rec dfs state_id =
+      if not (Hashtbl.mem reachable state_id) then (
+        Hashtbl.add reachable state_id ();
+        List.iter (fun t ->
+          if t.from_state = state_id then
+            dfs t.to_state
+        ) product_auto.transitions
+      )
+    in
+    dfs product_auto.start_state;
+    
+    Hashtbl.iter (fun id _ ->
+      if not (Hashtbl.mem reachable id) then
+        TypeAutomaton.remove_state product_auto id
+    ) product_auto.states 
+  in
+
+
+  let module IntListSet = Set.Make(struct type t = int list let compare = Stdlib.compare end) in
+  let worklist = ref [List.map (fun (auto, _) -> auto.start_state) autos] in
+  let visited = ref (IntListSet.empty) in
+
+  while !worklist <> [] do
+    let states = List.hd !worklist in
+    worklist := List.tl !worklist;
+    
+    if not (IntListSet.mem states !visited) then (
+      visited := IntListSet.add states !visited;
+      let ps = get_state_id states in
+
+      (* To Do : Better save the outbound transitions in the state representation (like graph) instead of getting them each time *)
+      let transitions_list = List.mapi (fun idx (auto, _) ->
+        List.filter (fun t -> t.from_state = List.nth states idx) auto.transitions
+      ) autos in
+
+      let found_any_match = ref false in
+
+      (* Collect all non-epsilon transitions with their automaton indices *)
+      let indexed_transitions = 
+        List.mapi (fun idx trans_list ->
+          List.filter_map (fun t ->
+            if not t.is_epsilon then Some (idx, t) else None
+          ) trans_list
+        ) transitions_list
+        |> List.flatten
+      in
+
+      (* Try to find a valid subset of transitions where all obligations are met *)
+      let rec find_valid_subset (candidates: (int * transition) list) 
+                                 (selected: (int * transition) list) 
+                                 (remaining: (int * transition) list) =
+        match remaining with
+        | [] ->
+            (* Check if all selected transitions have their obligations met *)
+            if selected <> [] then (
+              let all_satisfied = List.for_all (fun (idx1, t1) ->
+                (* Check if t1's obligations are met by at least one other transition *)
+                List.exists (fun (idx2, t2) ->
+                  idx1 <> idx2 && label_equivalence_one_way t1.label t2.label
+                ) selected
+              ) selected in
+              
+              if all_satisfied then (
+                (* Found a valid subset! Create the product transition *)
+                found_any_match := true;
+                
+                (* Create new state advancing only the automata in selected *)
+                let to_states = List.mapi (fun idx s ->
+                  match List.find_opt (fun (sel_idx, _) -> sel_idx = idx) selected with
+                  | Some (_, t) -> t.to_state
+                  | None -> s
+                ) states in
+                
+                let to_ps = get_state_id to_states in
+                
+                (* Combine all labels from selected transitions *)
+                let combined_labels = List.fold_left (fun acc (_, t) ->
+                  LabelSet.union acc t.label
+                ) LabelSet.empty selected in
+                
+                TypeAutomaton.add_transition product_auto ps to_ps combined_labels false;
+                
+                if not (IntListSet.mem to_states !visited) then
+                  worklist := to_states :: !worklist;
+                
+                true
+              ) else false
+            ) else false
+        | (idx, t) :: rest ->
+            (* Try including this transition *)
+            let with_t = find_valid_subset candidates ((idx, t) :: selected) rest in
+            (* Try excluding this transition *)
+            let without_t = find_valid_subset candidates selected rest in
+            with_t || without_t
+      in
+
+      (* Try to find valid subsets of size >= 2 *)
+      if indexed_transitions <> [] then (
+        let _ = find_valid_subset indexed_transitions [] indexed_transitions in
+        ()
+      );
+
+      (* If no matches found with non-epsilon transitions, try epsilon transitions *)
+      if not !found_any_match then (
+        List.iteri (fun idx trans_list ->
+          List.iter (fun t ->
+            if t.is_epsilon then (
+              found_any_match := true;
+              let to_states = List.mapi (fun i s -> if i = idx then t.to_state else s) states in
+              let to_ps = get_state_id to_states in
+              TypeAutomaton.add_transition product_auto ps to_ps t.label true;
+              
+              if not (IntListSet.mem to_states !visited) then
+                worklist := to_states :: !worklist
+            )
+          ) trans_list
+        ) transitions_list
+      );
+
+      (* Handle looping back to start states when automata reach accepting state *)
+      if not !found_any_match then (
+        let state_infos = List.map2 (fun (auto, _) s_id ->
+          (auto, s_id, Hashtbl.find auto.states s_id)
+        ) autos states in
+        
+        let any_accepting_not_all = 
+          List.exists (fun (_, _, s) -> s.accepting) state_infos &&
+          not (List.for_all (fun (_, _, s) -> s.accepting) state_infos) in
+        
+        if any_accepting_not_all then (
+          (* Collect transitions including start states for accepting automata *)
+          let extended_indexed_transitions = 
+            List.mapi (fun idx (auto, s_id, s) ->
+              let trans_list = 
+                if s.accepting then
+                  List.filter (fun t -> t.from_state = auto.start_state && not t.is_epsilon) auto.transitions
+                else
+                  List.filter (fun t -> t.from_state = s_id && not t.is_epsilon) auto.transitions
+              in
+              List.map (fun t -> (idx, t)) trans_list
+            ) state_infos
+            |> List.flatten
+          in
+          
+          (* Try to find valid subset with looped automata *)
+          let _ = find_valid_subset extended_indexed_transitions [] extended_indexed_transitions in
+          ()
+        )
+      );
+
+      (* Check if we're stuck *)
+      if not !found_any_match then (
+        let all_accepting = List.for_all2 (fun (auto, _) s_id ->
+          let s = Hashtbl.find auto.states s_id in
+          s.accepting
+        ) autos states in
+        
+        let any_has_transitions = List.exists2 (fun (auto, _) s_id ->
+          List.exists (fun t -> t.from_state = s_id) auto.transitions
+        ) autos states in
+        
+        if not all_accepting && any_has_transitions then (
+          remove_unreachable_states ();
+          if verbose then (
+            let file = "product_automaton_multiparty_debug.dot" in
+            let out = open_out file in
+            print_automaton_dot product_auto out;
+            close_out out
+          );
+          let state_ids_str = String.concat ", " (List.map string_of_int states) in
+          raise (Except.TypeError [
+            Text (Printf.sprintf "No valid transition subset found where all obligations are met at states [%s]" state_ids_str);
+            Except.codespan_local _default_span
+          ])
+        )
+      )
+    )
+  done;
+
+  remove_unreachable_states ();
+  
+  (* Check if any accepting states are reachable *)
+  let reachable_accepting_states = Hashtbl.fold (fun id s acc ->
+    if s.accepting && Hashtbl.fold (fun _ v found -> found || v = id) state_map false then
+      id :: acc 
+    else 
+      acc
+  ) product_auto.states [] in
+  
+  if reachable_accepting_states = [] then (
+    if verbose then (
+      let file = "product_automaton_multiparty_debug.dot" in
+      let out = open_out file in
+      print_automaton_dot product_auto out;
+      close_out out
+    );
+    Error "No accepting states reachable in multiparty product automaton; incompatible session types."
+  )
+  else
+    Ok product_auto
 
 
 
@@ -644,3 +873,32 @@ let check_compatibility (type1: Lang.session_type ast_node) (type2: Lang.session
     end;
     (true, "Compatible, constructed product automaton.")
   | Error reason -> (false, reason)
+
+
+let check_compatiblity_multiparty (types: (Lang.session_type ast_node * identifier) list) (verbose : bool) (default_span : code_span) : bool * string =
+  
+  let autos = List.map (fun (stype_node, module_id) ->
+    let auto = build_automaton stype_node.d stype_node.span in
+    if verbose then begin
+      let file = Printf.sprintf "automaton_%s.dot" module_id in
+      let out = open_out file in
+      print_automaton_dot auto out;
+      close_out out;
+      Printf.eprintf "Automaton for %s printed to %s\n" module_id file;
+    end;
+    (auto, module_id)
+  ) types in
+
+  match create_product_automaton_multiparty autos default_span verbose with
+  | Ok _product_auto ->
+    if verbose then begin
+      Printf.eprintf "Multiparty product automaton created successfully.\n";
+      let file = "product_automaton_multiparty.dot" in 
+      let out = open_out file in
+      print_automaton_dot _product_auto out;
+      close_out out;
+      Printf.eprintf "Multiparty product automaton printed to %s\n" file;
+    end;
+    (true, "Compatible multiparty session types, constructed product automaton.")
+  | Error reason -> (false, reason)
+  

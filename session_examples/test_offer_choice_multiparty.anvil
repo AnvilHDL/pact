@@ -1,0 +1,81 @@
+chan ch {
+    left req : (logic@#1),
+    left reset : (logic@#1),
+    right ack : (logic@#1) <<
+}
+
+interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req >> ep1.req >> (ep1.ack : (#4 >> ep.reset >> ep.ack)) & ep1.reset (#2 >> ep.ack >> ep.reset)) >> #1;
+interface foo2_intfc (ep : left ch) = ep.req >> &(ep.reset : F ep.ack,ep.ack : F ep.reset) >> #1;
+interface foo3_intfc (ep1 : left ch) = ep1.req >> 
+
+
+proc foo1 (foo1_intfc){
+    reg cyc : logic[8];
+    loop{
+        send ep.req(1'd1) >>
+        if (1'd1){
+            cycle 2 >>
+            cycle 1 >>
+            cycle 1 >>
+            send ep.reset(1'd0) >>
+            let ack = recv ep.ack >>
+            dprint "[Cycle %d] [foo1] Sent reset" (*cyc)
+        }else{
+            cycle 2 >>
+            let ack = recv ep.ack >>
+            send ep.reset(1'd0) >>
+            dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack)
+        } 
+        >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo2 (foo2_intfc){
+    reg cyc : logic[8];
+    loop{
+        let req = recv ep.req >>
+        offer{
+            reset = recv ep.reset => (
+                dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset) >>
+                cycle 2 >>
+                cycle 1 >>
+                send ep.ack(1'd1) >>
+                dprint "[Cycle %d] [foo2] Sent ack: 1'd1\n" (*cyc)
+            ),
+            send ep.ack(1'd1) => (
+                cycle 2 >>
+                cycle 1 >>
+                let reset = recv ep.reset >>
+                dprint "[Cycle %d] [foo2] Received req: %d | reset = %d and sent ack:  1'd1\n" (*cyc, req, reset)
+            )
+        }
+        >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+    
+}
+
+pool compat_pool {
+    ep_le -- ep_ri : ch;
+    i1 : foo1_intfc(ep_ri);
+    i2 : foo2_intfc(ep_le);
+    i3 : foo3_intfc(ep_le)
+}
+
+proc test_offer_choice_compatiblity(){
+    pool p : compat_pool;
+    spawn foo1[p.i1];
+    spawn foo2[p.i2];
+    loop{
+        cycle 100 >>
+        dfinish
+    }
+}
+    

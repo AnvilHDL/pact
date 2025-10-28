@@ -1480,7 +1480,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
         (
           let session_opt = lookup_interface s_defs intf_id.id in
           match session_opt with
-          | Some session -> (intf_id.id, session.d.body)
+          | Some session -> (session.d.body, intf_id.id)
           | None ->
             raise (Except.TypeError [Text ("Undefined Session type " ^ intf_id.id ^ " in pool member " ^ im.d.inf_mem_id); Except.codespan_local default_span])
         )
@@ -1502,20 +1502,21 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
         p.channels <- p.channels @ channels ;
         let session_with_id = lookup_session_types_from_pool_inst ps.d.p_ty cunit.pools cunit.session_defs ps.span in
 
-        (if List.length session_with_id > 2 then
+        (* (if List.length session_with_id > 2 then
           raise (Except.UnimplementedError [Text "Currently only up to two session types are supported in pool instances!"; Except.codespan_local ps.span])
-        else
-          let session1 = snd (List.hd session_with_id) in
+        else *)
+          (* let session1 = snd (List.hd session_with_id) in
           let session2 = snd (List.nth session_with_id 1) in
           let id1 = fst (List.hd session_with_id) in
-          let id2 = fst (List.nth session_with_id 1) in
-          let check, err = SessionCompatiblity.check_compatibility session1 session2 id1 id2 config.verbose ps.span in
+          let id2 = fst (List.nth session_with_id 1) in *)
+          let check, err = SessionCompatiblity.check_compatiblity_multiparty session_with_id config.verbose ps.span in
+          let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
           if not check then
-            raise (Except.TypeError [Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err); 
-              Except.codespan_local session1.span; 
-              Except.codespan_local session2.span]
-            )
-        )
+            raise (Except.TypeError (
+              Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err)
+              :: ast_spans
+            ))
+        (* ) *)
       ) p.pool_insts ;
 
       (* Now we add the parameters of the spawn *)

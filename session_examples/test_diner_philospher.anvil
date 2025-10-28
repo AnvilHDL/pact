@@ -1,0 +1,81 @@
+chan ch{
+    left req : (logic@#1),
+    right ack : (logic@#1)
+}
+
+
+interface foo1_intfc (ep12 : left ch, ep13 : right ch) =  ep12.req >> ep12.ack >> ep13.req >> ep13.ack >> #1;
+interface foo2_intfc (ep12 : left ch, ep23 : right ch) =  ep12.req >> ep23.req >> ep23.ack >> ep12.ack >> #1; 
+interface foo3_intfc (ep13 : left ch, ep23 : right ch)  = ep23.req >> ep13.req >> ep23.ack >> ep13.ack >> #1;
+
+
+
+
+
+proc foo1 (foo1_intfc){
+    reg cyc : logic[8];
+    loop{
+        let req_from_2 = recv ep12.req >>
+        send ep12.ack(req_from_2) >>
+        send ep13.req(req_from_2) >>
+        let ack_from_3 = recv ep13.ack >>
+        dprint "[Cycle %d] [foo1] Relayed req: %d and ack: %d\n" (*cyc, req_from_2, ack_from_3) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo2 (foo2_intfc){
+    reg cyc : logic[8];
+    loop{
+        let req_from_1 = recv ep12.req >>
+        send ep23.req(req_from_1) >>
+        let ack_from_3 = recv ep23.ack >>
+        send ep12.ack(ack_from_3) >>
+        dprint "[Cycle %d] [foo2] Relayed req: %d and ack: %d\n" (*cyc, req_from_1, ack_from_3) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo3 (foo3_intfc){
+    reg cyc : logic[8];
+    loop{
+        send ep23.req(1'd1) >>
+        let req_from_1 = recv ep13.req >>
+        let ack_from_2 = recv ep23.ack >>
+        send ep13.ack(ack_from_2) >>
+        dprint "[Cycle %d] [foo3] Relayed req: %d and ack: %d\n" (*cyc, req_from_1, ack_from_2) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+
+pool base_multiparty_pool {
+    ep_12_le -- ep_12_ri : ch,
+    ep_13_le -- ep_13_ri : ch,
+    ep_23_le -- ep_23_ri : ch;
+    i1 : foo1_intfc(ep_12_le, ep_13_ri);
+    i2 : foo2_intfc(ep_12_ri, ep_23_ri);
+    i3 : foo3_intfc(ep_13_le, ep_23_le)
+}
+
+proc test_diner_philosopher(){
+    pool p : base_multiparty_pool;
+    spawn foo1[p.i1];
+    spawn foo2[p.i2];
+    spawn foo3[p.i3];
+
+    loop{
+        cycle 100 >>
+        dfinish
+    }
+}
+    
