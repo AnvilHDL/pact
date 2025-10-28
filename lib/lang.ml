@@ -114,6 +114,9 @@ and offering_session_type = {
   continuation: session_type option;
 }
 
+
+
+
 (** A data type. *) 
 type data_type = [
   | `Logic
@@ -277,6 +280,23 @@ type channel_def = {
   endpoint_left: identifier;
   endpoint_right: identifier;
   visibility: channel_visibility;
+}
+
+type interface_pool_def = {
+  pool_id : identifier;
+  pool_channels : channel_def ast_node list;
+  interface_members : interface_mem_def ast_node list;
+}
+
+and interface_mem_def ={
+  inf_mem_id : identifier;
+  interface_class_id : interface_instantiation option;
+  interface_def : session_type option
+}
+
+and interface_instantiation = {
+  id : identifier;
+  params : identifier list;
 }
 
 (* expressions *)
@@ -578,6 +598,7 @@ type compilation_unit = {
   cunit_file_name : string option; (** filename in which the compilation unit resides *)
   channel_classes: channel_class_def list;
   type_defs: type_def list;
+  pools : interface_pool_def list;
   session_defs: session_def list;
   macro_defs: macro_def list;
   func_defs : func_def list;
@@ -588,7 +609,7 @@ type compilation_unit = {
 
 let cunit_empty : compilation_unit =
   {cunit_file_name = None; channel_classes = []; type_defs = [];
-  session_defs = []; procs = []; imports = []; _extern_procs = []; macro_defs = [];func_defs = []}
+  session_defs = []; procs = []; imports = []; _extern_procs = []; macro_defs = []; func_defs = []; pools = []}
 
 let cunit_add_channel_class
   (c : compilation_unit) (cc : channel_class_def) : compilation_unit =
@@ -599,6 +620,9 @@ let cunit_add_type_def (c : compilation_unit) (ty : type_def) : compilation_unit
 
 let cunit_add_session_def (c : compilation_unit) (sess : session_def) : compilation_unit =
   {c with session_defs = sess::c.session_defs}
+
+let cunit_add_interface_pool_def (c : compilation_unit) (pool : interface_pool_def) : compilation_unit =
+  {c with pools = pool::c.pools}
 
 let cunit_add_func_def (c : compilation_unit) (f : func_def) : compilation_unit =
   {c with func_defs = f::c.func_defs}

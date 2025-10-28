@@ -66,6 +66,7 @@ rule read =
   | "in"      { KEYWORD_IN }
   | "call"    { KEYWORD_CALL }
   | "loop"    { KEYWORD_LOOP }
+  | "pool"   { KEYWORD_POOL }
   | "proc"    { KEYWORD_PROC }
   | "chan"    { KEYWORD_CHAN }
   | "left"    { KEYWORD_LEFT }

@@ -51,6 +51,7 @@
 %token KEYWORD_RIGHT        (* right *)
 %token KEYWORD_PUT          (* put *)
 %token KEYWORD_LOGIC        (* logic *)
+%token KEYWORD_POOL        (* pool *)
 %token KEYWORD_FOREIGN      (* foreign *)
 %token KEYWORD_GENERATE     (* generate *)
 %token KEYWORD_GENERATE_SEQ     (* generate *)
@@ -123,6 +124,8 @@ cunit:
   { Lang.cunit_add_type_def c ty }
 | sess = session_def; c = cunit
   { Lang.cunit_add_session_def c sess }
+| pools = interface_pool_def; c = cunit
+  { Lang.cunit_add_interface_pool_def c pools }
 | cc = channel_class_def; c = cunit
   { Lang.cunit_add_channel_class c cc }
 | im = import_directive; c = cunit
@@ -335,12 +338,44 @@ type_def:
   }
 ;
 
+
+interface_pool_def:
+| KEYWORD_POOL; id = IDENT; LEFT_BRACE; channel_defs = separated_list(COMMA, node(channel_def)); SEMICOLON; interface_mem = separated_list(SEMICOLON, node(interface_members_def)); RIGHT_BRACE
+  {
+    {
+    pool_id = id;
+      pool_channels = channel_defs;
+      interface_members = interface_mem
+    } : Lang.interface_pool_def
+  }
+;
+
+interface_members_def:
+| id1 = IDENT; COLON; intf = local_session_type
+  {
+    {
+      inf_mem_id = id1;
+      interface_class_id = None;
+      interface_def = Some intf
+    } : Lang.interface_mem_def
+  }
+| id1 = IDENT; COLON; intf = IDENT; LEFT_PAREN; params = separated_list(COMMA,IDENT); RIGHT_PAREN
+  {
+    {
+      inf_mem_id = id1;
+      interface_class_id = Some {id = intf; params = params};
+      interface_def = None
+    } : Lang.interface_mem_def
+  } 
+;
+
 session_def:
 | KEYWORD_INTERFACE; name = IDENT; LEFT_PAREN; params = proc_def_arg_list; RIGHT_PAREN; EQUAL ; body = node(local_session_type); SEMICOLON
   {
     { name = name; body = body; params = params } : Lang.session_def
   }
 ;
+
 
 local_session_type:
 | SHARP; n = INT

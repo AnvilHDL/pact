@@ -62,6 +62,12 @@ proc foo2 (foo2_intfc){
     
 }
 
+pool compat_pool {
+    ep_le -- ep_ri : ch;
+    i1 : foo1_intfc(ep_ri);
+    i2 : foo2_intfc(ep_le)
+}
+
 proc test_offer_choice_compatiblity(){
     chan ep_le -- ep_ri : ch;
     interface (foo1_intfc , foo2_intfc);
