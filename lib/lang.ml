@@ -501,8 +501,13 @@ type spawn_def = {
   proc: identifier;
   (* channels to pass as args *)
   (* TODO: this naming collides with compile-time parameters *)
-  params: identifier list; (** names of the endpoints passed to the spawned process *)
+  mutable params: identifier list; (** names of the endpoints passed to the spawned process *)
+  interface_params: (ifc_instantiation list) option; (** interface name and endpoint name pairs passed to the spawned process *)
   compile_params: param_value list; (** concrete param value list *)
+}
+and ifc_instantiation = {
+  pid : identifier;
+  pifc_id : identifier;
 }
 
 (* TODO: specify the type? *)
@@ -543,8 +548,8 @@ type interface_spawn = {
 (** Process body. *)
 type proc_def_body = {
   (* new channels available to this process *)
-  channels: channel_def ast_node list;
-  interfaces: (identifier ast_node) list;  (* interface instantiations *)
+  mutable channels: channel_def ast_node list;
+  pool_insts: (pool_inst ast_node) list;  (* pool instantiations *)
   (* processes spawned by this process *)
   spawns: spawn_def ast_node list;
   regs: reg_def ast_node list;
@@ -552,6 +557,11 @@ type proc_def_body = {
   control_gates: control_gate list;
   (* prog: expr; *)
   threads: (expr_node * message_specifier option) list; (** the second component is the optional reset signal *)
+}
+
+and pool_inst = {
+  p_id : identifier;  (* pool instance id *)
+  p_ty : identifier;  (* pool type name *)
 }
 
 (** Extern process definition *)
@@ -598,7 +608,7 @@ type compilation_unit = {
   cunit_file_name : string option; (** filename in which the compilation unit resides *)
   channel_classes: channel_class_def list;
   type_defs: type_def list;
-  pools : interface_pool_def list;
+  pools : interface_pool_def ast_node list;
   session_defs: session_def list;
   macro_defs: macro_def list;
   func_defs : func_def list;
@@ -621,7 +631,7 @@ let cunit_add_type_def (c : compilation_unit) (ty : type_def) : compilation_unit
 let cunit_add_session_def (c : compilation_unit) (sess : session_def) : compilation_unit =
   {c with session_defs = sess::c.session_defs}
 
-let cunit_add_interface_pool_def (c : compilation_unit) (pool : interface_pool_def) : compilation_unit =
+let cunit_add_interface_pool_def (c : compilation_unit) (pool : interface_pool_def ast_node) : compilation_unit =
   {c with pools = pool::c.pools}
 
 let cunit_add_func_def (c : compilation_unit) (f : func_def) : compilation_unit =

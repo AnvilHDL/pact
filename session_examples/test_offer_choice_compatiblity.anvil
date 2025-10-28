@@ -69,10 +69,9 @@ pool compat_pool {
 }
 
 proc test_offer_choice_compatiblity(){
-    chan ep_le -- ep_ri : ch;
-    interface (foo1_intfc , foo2_intfc);
-    spawn foo1(ep_ri);
-    spawn foo2(ep_le);
+    pool p : compat_pool;
+    spawn foo1[p.i1];
+    spawn foo2[p.i2];
     loop{
         cycle 100 >>
         dfinish

@@ -1422,9 +1422,84 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
   List.iter add_proc_args cunit.procs;
 
 
-  (* check for type compatibility *)
+
+  (* Add channel defs and correct spawn def from interface and pools *)
+
+ let lookup_channel_inst_from_pools (p : pool_inst) (p_defs : (interface_pool_def ast_node) list) (default_span : code_span) =
+  let pool_def_opt = List.find_opt (fun (pd : interface_pool_def ast_node) -> pd.d.pool_id = p.p_ty) p_defs in
+  match pool_def_opt with
+  | Some pool_def ->
+      pool_def.d.pool_channels
+  | None ->
+    raise (Except.TypeError [Text ("Undefined interface pool " ^ p.p_id); Except.codespan_local default_span])  
+  in
+
+  let lookup_pool_inst_from_pools (id : identifier) (p_defs : (interface_pool_def ast_node) list) (default_span : code_span) =
+    let pool_def_opt = List.find_opt (fun (pd : interface_pool_def ast_node) -> pd.d.pool_id = id) p_defs in
+    match pool_def_opt with
+    | Some pool_def ->
+        pool_def
+    | None ->
+      raise (Except.TypeError [Text ("Undefined interface pool " ^ id); Except.codespan_local default_span])
+  in
+
+  let lookup_pool_ty_from_id (id : identifier) (p_defs : (pool_inst ast_node) list) (default_span : code_span) =
+    let pool_inst_opt = List.find_opt (fun (pi : pool_inst ast_node) -> pi.d.p_id = id) p_defs in
+    match pool_inst_opt with
+    | Some pool_inst ->
+        pool_inst.d.p_ty
+    | None ->
+      raise (Except.TypeError [Text ("Undefined interface pool instance " ^ id); Except.codespan_local default_span])
+  in
+
+
+  
+  let get_params_from_interface_params (ip : ifc_instantiation) (p_defs : (interface_pool_def ast_node) list) (ifc_list : (pool_inst ast_node) list) (default_span : code_span) =
+    let pi = lookup_pool_ty_from_id ip.pid ifc_list default_span in
+    let pool_def = lookup_pool_inst_from_pools pi p_defs default_span in
+    let interface_opt = List.find_opt (fun p -> p.d.inf_mem_id = ip.pifc_id) pool_def.d.interface_members in
+    match interface_opt with
+    | Some interface_member ->
+      (
+        match interface_member.d.interface_class_id with
+        | Some intf_id ->
+            intf_id.params
+        | None ->
+          raise (Except.TypeError [Text ("Currently only interface instantiation is supported in pool members, but got none for " ^ ip.pifc_id ^ " in pool " ^ ip.pid); Except.codespan_local default_span])
+      )
+    | None ->
+      raise (Except.TypeError [Text ("Undefined interface member " ^ ip.pifc_id ^ " in pool " ^ ip.pid); Except.codespan_local default_span])
+  in
+    
+    
 
   List.iter (fun (proc : proc_def) ->
+    match proc.body with
+    | Extern _ -> ()
+    | Native p ->
+      List.iter (fun (ps : pool_inst ast_node) ->
+        let channels = lookup_channel_inst_from_pools ps.d cunit.pools ps.span in
+        p.channels <- p.channels @ channels;
+      ) p.pool_insts ;
+
+      (* Now we add the parameters of the spawn *)
+      List.iter (fun (s : spawn_def ast_node) ->
+        (* let interface_params =  *)
+        if Option.is_some s.d.interface_params then
+          let interface_params = Option.get s.d.interface_params in
+          List.iter (fun ip ->
+            let params = get_params_from_interface_params ip cunit.pools  p.pool_insts s.span in
+            s.d.params <- s.d.params @ params
+          )interface_params
+      ) p.spawns
+
+  ) cunit.procs;
+
+  
+
+  (* check for type compatibility *)
+
+  (* List.iter (fun (proc : proc_def) ->
     match proc.body with
     | Extern _ -> ()
     | Native p ->
@@ -1448,7 +1523,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
             )
       )
 
-  ) cunit.procs;
+  ) cunit.procs; *)
 
   let graphs = List.map (build_proc config sched module_name param_values ci ) cunit.procs in
   {

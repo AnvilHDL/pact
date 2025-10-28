@@ -124,7 +124,7 @@ cunit:
   { Lang.cunit_add_type_def c ty }
 | sess = session_def; c = cunit
   { Lang.cunit_add_session_def c sess }
-| pools = interface_pool_def; c = cunit
+| pools = node(interface_pool_def); c = cunit
   { Lang.cunit_add_interface_pool_def c pools }
 | cc = channel_class_def; c = cunit
   { Lang.cunit_add_channel_class c cc }
@@ -236,7 +236,7 @@ proc_def_body:
   {
     let open Lang in {
       channels = [];
-      interfaces = [];
+      pool_insts = [];
       spawns = [];
       regs = [];
       threads = [];
@@ -268,9 +268,9 @@ proc_def_body:
   {
     let open Lang in {body with channels = chan_def::(body.channels)}
   }
-| KEYWORD_INTERFACE; LEFT_PAREN; intfcs = separated_list(COMMA, node(IDENT)); RIGHT_PAREN; SEMICOLON; body = proc_def_body
+| KEYWORD_POOL; p = node(pool_spawn); SEMICOLON; body = proc_def_body
   {
-    let open Lang in {body with interfaces = intfcs}
+    let open Lang in {body with pool_insts = p::(body.pool_insts)}
   }
 | KEYWORD_REG; reg_def = node(reg_def); SEMICOLON; body = proc_def_body // For reg definition
   {
@@ -286,6 +286,15 @@ proc_def_body:
   }
 ;
 
+
+pool_spawn:
+| pid = IDENT; COLON; pty = IDENT
+  {
+    {
+      p_id = pid;
+      p_ty = pty
+    } : Lang.pool_inst
+  }
 // interface_spawn:
 //   id = IDENT; LEFT_ABRACK; params = separated_list(COMMA, IDENT); RIGHT_ABRACK
 //   { {intfc_id = id; intfc_args =  params} }
@@ -568,19 +577,39 @@ spawn:
       proc = proc;
       params = params;
       compile_params = [];
+      interface_params = None
     } : Lang.spawn_def
   }
+| proc = IDENT; LEFT_BRACKET; params = separated_list(COMMA, ifc_inst); RIGHT_BRACKET
+  {
+    {
+      proc = proc;
+      params  = [];
+      compile_params = [];
+      interface_params = Some params
+    } : Lang.spawn_def
+  }
+
 | proc = IDENT; LEFT_ABRACK; compile_params = separated_list(COMMA, param_value); RIGHT_ABRACK;
   LEFT_PAREN; params = separated_list(COMMA, IDENT); RIGHT_PAREN
   {
     {
       proc = proc;
       params = params;
+      interface_params = None;
       compile_params = compile_params;
     } : Lang.spawn_def
   }
 ;
 
+ifc_inst:
+| pid = IDENT; PERIOD; id = IDENT
+  {
+    {
+      pid = pid;
+      pifc_id = id;
+    } : Lang.ifc_instantiation
+  }
 param_value:
 | n = INT
   { Lang.IntParamValue n }
