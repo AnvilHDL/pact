@@ -1322,9 +1322,9 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       let proc_interface_protocol = 
         match proc.interface with
         | Some intf ->
-          let session = List.find_opt (fun (s : session_def) -> s.name = intf.d) ci.session_defs
+          let session = List.find_opt (fun (s : session_def ast_node) -> s.d.name = intf.d) ci.session_defs
             |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
-          Some (session.body)
+          Some (session.d.body)
         | None -> None
       in
 
@@ -1405,8 +1405,8 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     weak_typecasts = wty
   } in
 
-  let lookup_interface (interfaces : session_def list) (intf : identifier) : session_def option =
-    List.find_opt (fun (s:session_def) -> s.name = intf) interfaces
+  let lookup_interface (interfaces : session_def ast_node list) (intf : identifier) : session_def ast_node option =
+    List.find_opt (fun (s:session_def ast_node) -> s.d.name = intf) interfaces
   in
 
   let add_proc_args (proc : proc_def) =
@@ -1414,7 +1414,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
       let intf = Option.get proc.interface in
       let session = lookup_interface cunit.session_defs intf.d
         |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
-      let session_params = session.params in
+      let session_params = session.d.params in
       proc.args <- session_params
 
     in
@@ -1471,7 +1471,27 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
       raise (Except.TypeError [Text ("Undefined interface member " ^ ip.pifc_id ^ " in pool " ^ ip.pid); Except.codespan_local default_span])
   in
     
-    
+  let lookup_session_types_from_pool_inst (id : identifier) (p_defs : (interface_pool_def ast_node) list) (s_defs : (session_def ast_node)list) (default_span : code_span) =
+    let pool_def = lookup_pool_inst_from_pools id p_defs default_span in
+
+    let session_defs = List.map (fun im ->
+      match im.d.interface_class_id with
+      | Some intf_id ->
+        (
+          let session_opt = lookup_interface s_defs intf_id.id in
+          match session_opt with
+          | Some session -> (intf_id.id, session.d.body)
+          | None ->
+            raise (Except.TypeError [Text ("Undefined Session type " ^ intf_id.id ^ " in pool member " ^ im.d.inf_mem_id); Except.codespan_local default_span])
+        )
+      | None ->
+        raise (Except.TypeError [Text ("Currently only interface instantiation is supported in pool members, but got none for " ^ im.d.inf_mem_id ^ " in pool " ^ id);
+          Except.codespan_local default_span])
+
+    ) pool_def.d.interface_members in
+    session_defs
+      
+ in
 
   List.iter (fun (proc : proc_def) ->
     match proc.body with
@@ -1479,7 +1499,23 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     | Native p ->
       List.iter (fun (ps : pool_inst ast_node) ->
         let channels = lookup_channel_inst_from_pools ps.d cunit.pools ps.span in
-        p.channels <- p.channels @ channels;
+        p.channels <- p.channels @ channels ;
+        let session_with_id = lookup_session_types_from_pool_inst ps.d.p_ty cunit.pools cunit.session_defs ps.span in
+
+        (if List.length session_with_id > 2 then
+          raise (Except.UnimplementedError [Text "Currently only up to two session types are supported in pool instances!"; Except.codespan_local ps.span])
+        else
+          let session1 = snd (List.hd session_with_id) in
+          let session2 = snd (List.nth session_with_id 1) in
+          let id1 = fst (List.hd session_with_id) in
+          let id2 = fst (List.nth session_with_id 1) in
+          let check, err = SessionCompatiblity.check_compatibility session1 session2 id1 id2 config.verbose ps.span in
+          if not check then
+            raise (Except.TypeError [Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err); 
+              Except.codespan_local session1.span; 
+              Except.codespan_local session2.span]
+            )
+        )
       ) p.pool_insts ;
 
       (* Now we add the parameters of the spawn *)
@@ -1494,6 +1530,9 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
       ) p.spawns
 
   ) cunit.procs;
+
+
+
 
   
 

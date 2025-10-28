@@ -18,7 +18,7 @@ type cunit_info = {
   channel_classes : Lang.channel_class_def list;
   func_defs : Lang.func_def list;
   macro_defs : Lang.macro_def list;
-  session_defs : Lang.session_def list;
+  session_defs : Lang.session_def Lang.ast_node list;
   weak_typecasts : bool
 }
 

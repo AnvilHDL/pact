@@ -609,7 +609,7 @@ type compilation_unit = {
   channel_classes: channel_class_def list;
   type_defs: type_def list;
   pools : interface_pool_def ast_node list;
-  session_defs: session_def list;
+  session_defs: session_def ast_node list;
   macro_defs: macro_def list;
   func_defs : func_def list;
   procs: proc_def list;
@@ -628,7 +628,7 @@ let cunit_add_channel_class
 let cunit_add_type_def (c : compilation_unit) (ty : type_def) : compilation_unit =
   {c with type_defs = ty::c.type_defs}
 
-let cunit_add_session_def (c : compilation_unit) (sess : session_def) : compilation_unit =
+let cunit_add_session_def (c : compilation_unit) (sess : session_def ast_node) : compilation_unit =
   {c with session_defs = sess::c.session_defs}
 
 let cunit_add_interface_pool_def (c : compilation_unit) (pool : interface_pool_def ast_node) : compilation_unit =

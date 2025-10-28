@@ -122,7 +122,7 @@ cunit:
   { Lang.cunit_add_func_def c func_def }
 | ty = type_def; c = cunit
   { Lang.cunit_add_type_def c ty }
-| sess = session_def; c = cunit
+| sess = node(session_def); c = cunit
   { Lang.cunit_add_session_def c sess }
 | pools = node(interface_pool_def); c = cunit
   { Lang.cunit_add_interface_pool_def c pools }
