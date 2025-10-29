@@ -547,9 +547,12 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     graph.wires <- wires;
     Typing.immediate_data graph (Some msg_valid_port) `Logic ctx.current
   | Probe msg_spec ->
-    let _ = MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
+    let m = MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
     |> unwrap_or_err "Invalid message specifier in probe" e.span in
-    let wires, msg_ack_port = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
+    let wires, msg_ack_port = if m.handshake_mode = Lang.ValidReady then (
+      WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires
+    )
+    else WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
     graph.wires <- wires;
     Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
   | Cycle n -> Typing.cycles_data graph n ctx.current

@@ -348,11 +348,14 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         match e.source with `Seq ( _ , `Choice msg_list) -> Some msg_list
         | _ -> None
       ) ev.outs in
-      let msg_list = if Option.is_none msg_list then 
+        if Option.is_none msg_list then 
+          (
         let err_msg = Printf.sprintf "Session type mismatch at event %d: expected choice messages but none found from event outbound edges event ids of outbounds = %s" ev.id (String.concat ", " (List.map string_of_int (List.map (fun e -> e.id) ev.outs))) in
-        raise (Except.TypeError [Text err_msg; Except.codespan_local default_span])
-      else Option.get msg_list in
-
+        (-1, Some sty, Some (err_msg, default_span))
+      )
+      else 
+      (
+        let msg_list = Option.get msg_list in
 
       let msg_list_offering = List.map (fun (o : offering_session_type) -> 
         match o.trigger with
@@ -384,12 +387,23 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
             )
         in
         let new_sty = build_choice_from_offerings offerings in
-        (-1,Some new_sty, None)
+        let evid = List.find_map (fun e ->
+          match e.source with
+          | `Seq (_, `Choice msg_list_ev) ->
+              if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list_ev then
+                Some e.id
+              else None
+          | _ -> None
+        ) ev.outs in
+        let evid = Option.value evid ~default:(-1) in
+        (* update_sty graph evid new_sty default_span; *)
+        (evid, Some new_sty, None)
       ) else
         (
           let err_msg = "Session type mismatch: none of the offered messages match the expected choices" in
           (-1, Some sty, Some (err_msg, default_span))
         )
+      )
 
 
 (** Check session type conformance for entire event graph *)
