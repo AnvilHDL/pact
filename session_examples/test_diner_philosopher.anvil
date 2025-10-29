@@ -63,8 +63,8 @@ pool base_multiparty_pool {
     ep_13_le -- ep_13_ri : ch,
     ep_23_le -- ep_23_ri : ch;
     i1 : foo1_intfc(ep_12_le, ep_13_ri);
-    i2 : foo2_intfc(ep_12_ri, ep_23_ri);
-    i3 : foo3_intfc(ep_13_le, ep_23_le)
+    i2 : foo2_intfc(ep_12_ri, ep_23_le);
+    i3 : foo3_intfc(ep_13_le, ep_23_ri)
 }
 
 proc test_diner_philosopher(){

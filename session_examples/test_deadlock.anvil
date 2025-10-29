@@ -1,0 +1,57 @@
+chan ch {
+    left req : (logic@#1),
+    right gnt : (logic@#1)
+}
+
+
+interface foo1_intfc (ep : right ch) = ep.req >> ep.gnt >> #1;
+interface foo2_intfc (ep : left ch) = ep.gnt >> ep.req >> #1;
+
+
+proc foo1 (foo1_intfc){
+    reg cyc : logic[8];
+    loop{
+        send ep.req(1'd1) >>
+        let gnt = recv ep.gnt >>
+        dprint "[Cycle %d] [foo1] Received gnt: %d\n" (*cyc, gnt) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo2 (foo2_intfc){
+    reg cyc : logic[8];
+    loop{
+
+        send ep.gnt(1'd1) >>
+        let req = recv ep.req >>
+        dprint "[Cycle %d] [foo2] Received req: %d\n" (*cyc, req) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+    
+}
+
+
+
+pool test_pool{
+    ep_le -- ep_ri : ch;
+    i1 : foo1_intfc(ep_ri);
+    i2 : foo2_intfc(ep_le)
+}
+
+proc test_deadlock(){
+    
+    pool p : test_pool;
+    spawn foo1[p.i1];
+    spawn foo2[p.i2];
+    loop{
+        cycle 100 >>
+        dfinish
+    }
+}
+    
