@@ -1371,9 +1371,12 @@ let build_proc (config : Config.compile_config) sched module_name param_values
             (* discard after type checking *)
             let ctx = (BuildContext.create_empty graph shared_vars_info false) in
             let td = visit_expr graph ci ctx e in
-            (match proc_interface_protocol with
-            | Some _ -> if(i == 0 ) then SessionCheck.check_session config graph module_name else Printf.eprintf "[Warning] Skipping session type checks for thread %d in process %s\n" i module_name
-            | None -> Printf.eprintf "[Warning] No interface specified for process %s, skipping session type checks\n" module_name);
+            if not config.disable_session_checks then
+            (
+              (match proc_interface_protocol with
+              | Some _ -> if(i == 0 ) then SessionCheck.check_session config graph module_name else Printf.eprintf "[Warning] Skipping session type checks for thread %d in process %s\n" i module_name
+              | None -> Printf.eprintf "[Warning] No interface specified for process %s, skipping session type checks\n" module_name)
+            );
             graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
             graph.is_general_recursive <- graph.last_event_id <> td.lt.live.id;
             let g' = GraphOpt.optimize config false ci graph in
@@ -1509,14 +1512,16 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
           let session2 = snd (List.nth session_with_id 1) in
           let id1 = fst (List.hd session_with_id) in
           let id2 = fst (List.nth session_with_id 1) in *)
-          let check, err = SessionCompatiblity.check_compatiblity_multiparty session_with_id config.verbose ps.span in
-          let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
-          if not check then
-            raise (Except.TypeError (
-              Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err)
-              :: ast_spans
-            ))
-        (* ) *)
+          if not config.disable_session_checks then
+          (
+              let check, err = SessionCompatiblity.check_compatiblity_multiparty session_with_id config.verbose ps.span in
+              let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
+              if not check then
+                raise (Except.TypeError (
+                  Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err)
+                  :: ast_spans
+                ))            
+          )
       ) p.pool_insts ;
 
       (* Now we add the parameters of the spawn *)

@@ -4,6 +4,7 @@
 type compile_config = {
   verbose : bool; (** output verbose details related to compilation to stderr *)
   disable_lt_checks : bool; (** disable all lifetime and borrow related checks *)
+  disable_session_checks : bool; (** disable all session type related checks *)
   weak_typecasts : bool; (** allow weak typecasts, i.e., allow type mismatches
                              between data types of different widths *)
   opt_level : int; (** optimisation level *)
