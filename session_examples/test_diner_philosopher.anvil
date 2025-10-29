@@ -4,9 +4,9 @@ chan ch{
 }
 
 
-interface foo1_intfc (ep12 : left ch, ep13 : right ch) =  ep12.req >> ep12.ack >> ep13.req >> ep13.ack >> #1;
-interface foo2_intfc (ep12 : right ch, ep23 : left ch) =  ep12.req >> ep23.req >> ep23.ack >> ep12.ack >> #1; 
-interface foo3_intfc (ep13 : left ch, ep23 : right ch)  = ep23.req >> ep13.req >> ep23.ack >> ep13.ack >> #1;
+interface foo1_intfc (ep12 : left ch, ep13 : right ch) =   #1 >> ep13.req >> ep12.req >> ep12.ack >> ep13.ack >> #1;
+interface foo2_intfc (ep12 : right ch, ep23 : left ch) =  #1 >> ep12.req >> ep23.req >> ep23.ack >> ep12.ack >> #1; 
+interface foo3_intfc (ep13 : left ch, ep23 : right ch)  = #1 >> ep23.req >> ep13.req >> ep23.ack >> ep13.ack >> #1;
 
 
 
@@ -15,9 +15,10 @@ interface foo3_intfc (ep13 : left ch, ep23 : right ch)  = ep23.req >> ep13.req >
 proc foo1 (foo1_intfc){
     reg cyc : logic[8];
     loop{
+        cycle 1 >>
+        send ep13.req(1'd1) >>
         let req_from_2 = recv ep12.req >>
         send ep12.ack(req_from_2) >>
-        send ep13.req(req_from_2) >>
         let ack_from_3 = recv ep13.ack >>
         dprint "[Cycle %d] [foo1] Relayed req: %d and ack: %d\n" (*cyc, req_from_2, ack_from_3) >>
         cycle 1
@@ -30,6 +31,7 @@ proc foo1 (foo1_intfc){
 proc foo2 (foo2_intfc){
     reg cyc : logic[8];
     loop{
+        cycle 1 >>
         send ep12.req(1'd1) >>
         let req_from_3 = recv ep23.req >>
         send ep23.ack(1'd1) >>
@@ -45,6 +47,7 @@ proc foo2 (foo2_intfc){
 proc foo3 (foo3_intfc){
     reg cyc : logic[8];
     loop{
+        cycle 1 >>
         send ep23.req(1'd1) >>
         let req_from_1 = recv ep13.req >>
         let ack_from_2 = recv ep23.ack >>
