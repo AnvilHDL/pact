@@ -1,0 +1,46 @@
+chan ch {
+    left req : (logic@#1),
+    left ack : (logic@#1)
+}
+proc tryand(ep : left ch ){
+    reg cyc : logic[8];
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+    loop{
+       xoffer{
+            x= recv ep.req => (
+                dprint "[Cycle %d] try received req: %d" (*cyc, x) >>
+                cycle 5
+            ),
+            x = recv ep.ack => (
+                dprint "[Cycle %d] try received ack: %d" (*cyc, x)
+                >>
+                cycle 3
+            )
+        } >> 
+        dprint "[Cycle %d] completed xoffer" (*cyc) >>
+        cycle 1
+    }
+}
+
+proc tryxor(){
+    chan ep_le -- ep_ri : ch;
+    spawn tryand(ep_le);
+    reg cyc : logic[8];
+    
+    loop{
+        send ep_ri.req(1'd1) >>
+        dprint "[Cycle %d] Top sent req" (*cyc) >>
+        send ep_ri.ack(1'd1) >>
+        dprint "[Cycle %d] Top sent ack" (*cyc) >>
+        cycle 1
+    }
+    loop{
+        cycle 100 >> 
+        dfinish
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}

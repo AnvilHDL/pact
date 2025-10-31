@@ -36,6 +36,7 @@ rule read =
   | "interface" { KEYWORD_INTERFACE }
   | "when"    { KEYWORD_WHEN }
   | "offer"   { KEYWORD_OFFER }
+  | "xoffer"  { KEYWORD_XOFFER }
   | "$"       { DOLLAR }
   | "&&"      { DOUBLE_AND }
   | '&'       { AND }

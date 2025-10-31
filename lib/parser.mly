@@ -22,6 +22,7 @@
 %token DOUBLE_LEFT_ABRACK   (* << *)
 %token DOUBLE_RIGHT_ABRACK  (* << *)
 %token KEYWORD_CONST        (* const *)
+%token KEYWORD_XOFFER       (* xoffer *)
 %token KEYWORD_READY        (* ready *)
 %token KEYWORD_PROBE        (* probe *)
 %token DOUBLE_EQ            (* == *)
@@ -742,8 +743,10 @@ expr:
   { Lang.Debug Lang.DebugFinish }
 | LEFT_BRACKET; li = separated_list(COMMA, node(expr)); RIGHT_BRACKET
   { Lang.List li }
-| KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
+| KEYWORD_XOFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
   { Lang.XOffer offer_arms }
+| KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
+  { Lang.Offer offer_arms }
 ;
 
 expr_in_parenthese:

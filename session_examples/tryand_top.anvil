@@ -9,9 +9,17 @@ proc tryand(ep : left ch ){
     }
     loop{
        offer{
-            x= recv ep.req => dprint "[Cycle %d] try received req: %d" (*cyc, x),
-            x = recv ep.ack => dprint "[Cycle %d] try received ack: %d" (*cyc, x)
+            x= recv ep.req => (
+                dprint "[Cycle %d] try received req: %d" (*cyc, x) >>
+                cycle 5
+            ),
+            x = recv ep.ack => (
+                dprint "[Cycle %d] try received ack: %d" (*cyc, x)
+                >>
+                cycle 3
+            )
         } >> 
+        dprint "[Cycle %d] completed xoffer" (*cyc) >>
         cycle 1
     }
 }
@@ -24,13 +32,12 @@ proc tryand_top(){
     loop{
         send ep_ri.req(1'd1) >>
         dprint "[Cycle %d] Top sent req" (*cyc) >>
-        cycle 2 >>
         send ep_ri.ack(1'd1) >>
         dprint "[Cycle %d] Top sent ack" (*cyc) >>
-        cycle 2
+        cycle 1
     }
     loop{
-        cycle 10 >> 
+        cycle 100 >> 
         dfinish
     }
     loop{

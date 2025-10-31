@@ -455,6 +455,7 @@ and expr =
   | Probe of message_specifier (** [probe(a, b)] *)
   | Match of expr_node * ((expr_node * expr_node option) list)
   | XOffer of ((offer_arm_type * expr_node) list)
+  | Offer of ((offer_arm_type * expr_node) list)
   | Read of lvalue (** reading a value from a register (leading to a borrow) *)
   | Debug of debug_op
   | Send of send_pack
@@ -823,7 +824,13 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (expr: ex
       List.map (fun (arm_type, e_body) ->
         (arm_type, subst e_body)
       ) arms
-    ) 
+    )
+  | Offer arms ->
+    Offer (
+      List.map (fun (arm_type, e_body) ->
+        (arm_type, subst e_body)
+      ) arms
+    )
   | Recurse | Literal _ | Cycle _
   | Identifier _ | Ready _ | Probe _
   | Read _ | Recv _

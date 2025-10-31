@@ -306,6 +306,12 @@ let rec recurse_unfold expr_full_node expr_node =
           (arm_type, unfold e_body)
         ) arms
       )
+    | Offer arms ->
+      Offer (
+        List.map (fun (arm_type, e_body) ->
+          (arm_type, unfold e_body)
+        ) arms
+      )
     | Recurse -> failwith "Shouldn't reach here!"
     in
     {expr_node with d = expr'}
@@ -901,6 +907,135 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     graph.gate_context <- gc;
     ntd
+| Offer offer_arms ->
+    let offer_msg_list = List.map (fun (offer_arm, _) ->
+      match offer_arm with
+      | OfferSend send_pack -> send_pack.send_msg_spec
+      | OfferRecv (_, recv_pack) -> recv_pack.recv_msg_spec
+    ) offer_arms in
+
+    let msg_defs = List.map (fun msg_spec ->
+      MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
+      |> unwrap_or_err "Invalid message specifier in offer" e.span
+    ) offer_msg_list in
+
+    let msg_list = List.combine offer_msg_list msg_defs in
+
+    do_sanity_check_offer msg_list e.span;
+
+    let cond_td = Typing.offer_condition graph ctx offer_msg_list in
+    let ctx = BuildContext.wait graph ctx cond_td.lt.live in
+    
+    (* Create separate if-branches for each offer arm *)
+    let branch_contexts_and_tds = List.mapi (fun idx (offer_arm, arm_expr) ->
+      let (msg_spec, msg_def) = List.nth msg_list idx in
+      
+      (* Create condition wire for this branch *)
+      let wire_td = if msg_def.dir = Inp then
+        let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
+        graph.wires <- wires';
+        Typing.immediate_data graph (Some msg_valid_port) `Logic ctx.current
+      else
+        let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
+        graph.wires <- wires';
+        Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
+      in
+      
+      (* Create branch info for this specific arm *)
+      let branch_info = {
+        branch_cond_v = wire_td;
+        branch_cond = TrueFalse;
+        branch_count = 2;
+        branches_to = [];
+        branches_val = [];
+      } in
+      
+      let (br_side_true, ctx_branch) = BuildContext.branch_side graph ctx branch_info 0 in
+      
+      (* Process the offer arm in the true branch *)
+      let td_result = match offer_arm with
+        | OfferSend send_pack ->
+            let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
+              |> unwrap_or_err "Invalid message specifier in offer send" e.span in
+            if msg.dir <> Out then
+              raise (event_graph_error_default "Mismatching message direction!" e.span);
+            
+            let td_data = visit_expr graph ci ctx_branch send_pack.send_data in
+            let msg_dtype = (List.hd msg.sig_types).dtype in
+            let err_string = Printf.sprintf "In offer send: Invalid data type for message %s: expected %s but got %s"
+              send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td_data.dtype) in
+            check_dtype err_string (Some msg_dtype) td_data.dtype e.span ci.file_name ci.weak_typecasts;
+            
+            let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_branch.current in
+            let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live e.span in
+            ctx_branch.current.sustained_actions <-
+              ({until = ntd.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data)} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
+            graph.gate_context <- gc;
+            let ctx' = BuildContext.wait graph ctx_branch ntd.lt.live in
+            visit_expr graph ci ctx' arm_expr
+
+        | OfferRecv (id, recv_pack) ->
+            let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
+              |> unwrap_or_err "Invalid message specifier in offer receive" e.span in
+            if msg.dir <> Inp then
+              raise (event_graph_error_default "Mismatching message direction!" e.span);
+            
+            let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
+            graph.wires <- wires';
+            let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx_branch.current in
+            let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live e.span in
+            ctx_branch.current.sustained_actions <-
+              ({until = ntd.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
+            graph.gate_context <- gc;
+            
+            let ctx_with_binding = BuildContext.add_binding ctx_branch id ntd in
+            let ctx' = BuildContext.wait graph ctx_with_binding ntd.lt.live in
+            visit_expr graph ci ctx' arm_expr
+      in
+      
+      (* Create false branch (empty continuation) *)
+      let (br_side_false, ctx_false) = BuildContext.branch_side graph ctx branch_info 1 in
+      let td_false = Typing.const_data graph None unit_dtype ctx_false.current in
+      
+      (* Update branch info *)
+      branch_info.branches_to <- [ctx_branch.current; ctx_false.current];
+      branch_info.branches_val <- [td_result.lt.live; td_false.lt.live];
+      
+      BuildContext.branch_merge ctx [ctx_branch; ctx_false];
+      
+      let ctx_br = BuildContext.branch graph ctx branch_info in
+      br_side_true.branch_event <- Some ctx_br.current;
+      br_side_false.branch_event <- Some ctx_br.current;
+      
+      (ctx_br, td_result)
+    ) offer_arms in
+    
+    (* Merge all branch contexts using Later *)
+    let (branch_ctxs, branch_tds) = List.split branch_contexts_and_tds in
+    let merged_event = List.fold_left (fun acc_event (branch_ctx:build_context) ->
+      Typing.event_create graph (`Later (acc_event, branch_ctx.current))
+    ) (List.hd branch_ctxs).current (List.tl branch_ctxs) in
+    
+    (* Merge lifetimes and borrows from all branches *)
+    let merged_dead = List.fold_left Utils.list_unordered_join 
+      cond_td.lt.dead (List.map (fun td -> td.lt.dead) branch_tds) in
+    let merged_borrows = List.fold_left Utils.list_unordered_join 
+      [] (List.map (fun td -> td.reg_borrows) branch_tds) in
+    
+    let lt = {live = merged_event; dead = merged_dead} in
+    
+    (* Use first branch's result as the representative *)
+    let result_w = match branch_tds with
+      | [] -> None
+      | hd::_ -> hd.w
+    in
+    let result_dtype = match branch_tds with
+      | [] -> unit_dtype
+      | hd::_ -> hd.dtype
+    in
+    
+    {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype}
+    
   | XOffer offer_arms ->
     (* Create branches for each offer arm - all can start in parallel *)
     (* create a special condition node *)
