@@ -104,10 +104,11 @@ and atomic_action_with_gap =
 and session_type =
   | StySeq of session_type * session_type (** sequence *)
   | StyChoice of session_type * session_type (** internal choice (+ operator) *)
-  | StyChoiceDual of offering_session_type list (** dual choice (AND operator) *)
+  | StyXOffer of offering_session_type list (** dual choice (XOR operator) *)
   | StyAtom of atomic_action_with_gap (** single atomic action *)
   | StyParallel of session_type * session_type (** parallel composition of session types *)
   | StyFuture of session_type (** future operator (F) **)
+  | StyOffer of offering_session_type list (** offer operator (dual of choice) **)
 
 and offering_session_type = {
   trigger: atomic_action;
@@ -980,8 +981,10 @@ let rec aux p =
       "(" ^ aux p1 ^ " >> " ^ aux p2 ^ ")"
   | StyChoice (p1, p2) ->
       "( " ^ aux p1 ^ " + " ^ aux p2 ^ " )"
-  | StyChoiceDual ps ->
+  | StyOffer ps ->
       "( " ^ String.concat " & " (List.map aux2 ps) ^ " )"
+  | StyXOffer ps ->
+      "( " ^ String.concat " ^ " (List.map aux2 ps) ^ " )"
   | StyAtom act -> string_of_atomic_action_with_gap act
   | StyFuture p_inner ->
       "F( " ^ aux p_inner ^ " )"

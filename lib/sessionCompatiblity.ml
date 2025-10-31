@@ -206,7 +206,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       TypeAutomaton.add_transition auto left_end choice_state (LabelSet.singleton ChoiceLabel) false;
       build st2 choice_state
 
-    | Lang.StyChoiceDual offerings -> (* External choice m1 & m2 *)
+    | Lang.StyOffer offerings -> (* External choice m1 & m2 *)
       let final = TypeAutomaton.new_state auto false in
       
       (* Helper to get message_specifier from atomic_action *)
@@ -249,7 +249,10 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         
       ) offerings;
       final
-      
+    | Lang.StyXOffer _offerings -> (
+      raise (TypeError [Text ("Exclusive Offer is not implemented in session automaton construction"); Except.codespan_local default_span])
+    )
+
     | Lang.StyAtom (Lang.AtomDelay n) ->
       let next_s = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Delay (CycleDelay n))) false;

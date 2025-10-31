@@ -397,7 +397,9 @@ local_session_type:
 | act1 = local_session_type ;PLUS; act2 = local_session_type
   { Lang.StyChoice (act1, act2) }
 | AND; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
-  { Lang.StyChoiceDual offering_list }
+  { Lang.StyOffer offering_list }
+| XOR; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
+  { Lang.StyXOffer offering_list }
 | act1 = local_session_type; DOUBLE_OR; act2 = local_session_type
   { Lang.StyParallel (act1, act2) }
 | LEFT_PAREN; sty = local_session_type; RIGHT_PAREN

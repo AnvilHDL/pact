@@ -334,8 +334,10 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           (* update_sty graph _id s' default_span; *)
           (_id, Some s', None)
       )
-  
-  | Lang.StyChoiceDual offerings ->
+  | Lang.StyOffer _offering_session_type ->
+      (* External choice: match offered messages with event outbound edges *)
+      raise (Except.TypeError [Text ("Offer is not implemented in session judgement"); Except.codespan_local default_span])
+  | Lang.StyXOffer offerings ->
       if List.length offerings < 2 then 
         raise (Except.TypeError [Text (Printf.sprintf "Not well formed choice dual session type | No of offerings = %d" (List.length offerings)); Except.codespan_local default_span]);
       (* get the message list from the event outbound edges *)

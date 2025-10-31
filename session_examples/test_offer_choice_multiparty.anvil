@@ -5,7 +5,7 @@ chan ch {
 }
 
 interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req >> ep1.req >> (ep1.ack : (#4 >> ep.reset >> ep.ack)) & ep1.reset (#2 >> ep.ack >> ep.reset)) >> #1;
-interface foo2_intfc (ep : left ch) = ep.req >> &(ep.reset : F ep.ack,ep.ack : F ep.reset) >> #1;
+interface foo2_intfc (ep : left ch) = ep.req >> ^(ep.reset : F ep.ack,ep.ack : F ep.reset) >> #1;
 interface foo3_intfc (ep1 : left ch) = ep1.req >> 
 
 
@@ -38,7 +38,7 @@ proc foo2 (foo2_intfc){
     reg cyc : logic[8];
     loop{
         let req = recv ep.req >>
-        offer{
+        xoffer{
             reset = recv ep.reset => (
                 dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset) >>
                 cycle 2 >>
