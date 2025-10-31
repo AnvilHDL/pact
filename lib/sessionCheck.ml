@@ -36,7 +36,7 @@ let get_event_id_for_atomic_action (ev : event) (g : event_graph) (atom : Lang.a
         Option.get ids
     )
 
-let update_sty (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type) (default_span : code_span)=
+let update_sty (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type) (default_span : code_span) (verbose : bool) =
   if ev_id < 0 then ()
   else
     let ev_opt = List.find_opt (fun e -> e.id = ev_id) graph.events in
@@ -44,10 +44,12 @@ let update_sty (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type)
       raise (Except.TypeError [Text (Printf.sprintf "Event with id %d not found in graph during session type update" ev_id); Except.codespan_local graph.thread_codespan])
     else
       let ev = Option.get ev_opt in
-      Printf.eprintf "Updating event %d session type to %s\n" ev.id (Lang.string_of_protocol new_sty);
-      ev.session_type <- Some {d= new_sty; span = default_span}
+    
+      if verbose then Printf.eprintf "Updating event %d session type to %s\n" ev.id (Lang.string_of_protocol new_sty);
+   
+    ev.session_type <- Some {d= new_sty; span = default_span}
 
-let update_sty_seq (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type) (default_span : code_span)=
+let update_sty_seq (graph : event_graph) (ev_id : int) (new_sty : Lang.session_type) (default_span : code_span) (verbose : bool)=
   if ev_id < 0 then ()
   else
     let ev_opt = List.find_opt (fun e -> e.id = ev_id) graph.events in
@@ -60,7 +62,7 @@ let update_sty_seq (graph : event_graph) (ev_id : int) (new_sty : Lang.session_t
           ev.session_type <- Some {d= new_sty; span = default_span}
       else
         let existing_sty = Option.get ev.session_type in
-          Printf.eprintf "Updating event %d session type (%s) by sequencing with %s \n" ev_id (Lang.string_of_protocol existing_sty.d) (Lang.string_of_protocol new_sty);
+          if verbose then Printf.eprintf "Updating event %d session type (%s) by sequencing with %s \n" ev_id (Lang.string_of_protocol existing_sty.d) (Lang.string_of_protocol new_sty);
         ev.session_type <- Some {d = Lang.StySeq (existing_sty.d, new_sty); span = default_span}
 
 (** Extract atomic actions from an event's actions and sustained actions *)
@@ -179,6 +181,9 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         let err_msg = Printf.sprintf "Session type mismatch: expected delay of at least %d cycles" n in
         (-1,Some sty, Some (err_msg, code_span))
       )
+  | Lang.StyTrue ->
+      (* True session type is always satisfied *)
+      raise (Except.TypeError [Text "Unexpected true session type during session judgement"; Except.codespan_local default_span])
   | Lang.StySeq (s1, s2) ->
    if config.verbose then Printf.eprintf "Checking sequence session type at event %d | s_1 = %s | s_2 = %s\n" ev.id (Lang.string_of_protocol s1) (Lang.string_of_protocol s2);
       let (id, s1_cont, err1) = session_judgement {st with d = s1} ev config default_span graph in
@@ -192,9 +197,9 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
               (* s1 completed, propagate s2 to successors *)
               if id < 0 then
                 List.iter (fun succ_ev ->
-                  update_sty_seq graph succ_ev.id s2 default_span
+                  update_sty_seq graph succ_ev.id s2 default_span config.verbose
                 ) ev.outs
-              else update_sty graph id s2 default_span;
+              else update_sty graph id s2 default_span config.verbose;
 
               (id,Some s2, None)
           | Some s1' ->
@@ -203,10 +208,10 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
               let remaining = Lang.StySeq (s1', s2) in
               if id < 0 then
               List.iter (fun succ_ev ->
-                update_sty_seq graph succ_ev.id remaining default_span
+                update_sty_seq graph succ_ev.id remaining default_span config.verbose
               ) ev.outs
               else
-              update_sty graph id remaining default_span;
+              update_sty graph id remaining default_span config.verbose;
 
               
               (* List.iter (fun succ_ev ->
@@ -250,7 +255,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
                 (id2, None, None)
             | Some s2' ->
                 (* let remaining = Lang.StyChoice (s1, s2') in *)
-                update_sty graph id2 s2' default_span;
+                update_sty graph id2 s2' default_span config.verbose;
                 (* List.iter (fun succ_ev ->
                   update_sty graph succ_ev.id remaining default_span
                 ) ev.outs; *)
@@ -269,7 +274,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
                 (* List.iter (fun succ_ev ->
                   update_sty graph succ_ev.id remaining default_span
                 ) ev.outs; *)
-                 update_sty graph id1 s1' default_span;
+                 update_sty graph id1 s1' default_span config.verbose;
                 (id1, Some s1', None)
             )
         | Some e1, Some e2 ->
@@ -286,14 +291,14 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           | None, None ->
               (-1,None, None)
           | None, Some s2' ->
-               update_sty graph id2 s2' default_span;
+               update_sty graph id2 s2' default_span config.verbose;
               (id2,Some s2', None)
           | Some s1', None ->
-              update_sty graph id1 s1' default_span;
+              update_sty graph id1 s1' default_span config.verbose  ;
               (id1,Some s1', None)
           | Some s1', Some s2' ->
-              update_sty graph id1 s1' default_span;
-              update_sty graph id2 s2' default_span;
+              update_sty graph id1 s1' default_span config.verbose;
+              update_sty graph id2 s2' default_span config.verbose;
               let ev_id = List.find_map (fun e ->
                 match e.source with
                 | `Later (id_a, id_b) when (id_a.id = id1 && id_b.id = id2) || (id_a.id = id2 && id_b.id = id1) -> Some e.id
@@ -334,9 +339,76 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           (* update_sty graph _id s' default_span; *)
           (_id, Some s', None)
       )
-  | Lang.StyOffer _offering_session_type ->
+  | Lang.StyOffer offerings ->
       (* External choice: match offered messages with event outbound edges *)
-      raise (Except.TypeError [Text ("Offer is not implemented in session judgement"); Except.codespan_local default_span])
+      if List.length offerings < 2 then 
+        raise (Except.TypeError [Text (Printf.sprintf "Not well formed choice dual session type | No of offerings = %d" (List.length offerings)); Except.codespan_local default_span]);
+      (* get the message list from the event outbound edges *)
+      if config.verbose then
+        Printf.eprintf "Checking event %d for dual choice with offerings: %s\n" ev.id (String.concat ", " (List.map (fun (o:offering_session_type) -> match o.trigger with
+          | Lang.AtomBMsg m -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomNBMsg m -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
+        ) offerings));
+      let msg_list = List.find_map (fun (e : event) ->
+        match e.source with `Seq ( _ , `Choice msg_list) -> Some msg_list
+        | _ -> None
+      ) ev.outs in
+        if Option.is_none msg_list then 
+          (
+        let err_msg = Printf.sprintf "Session type mismatch at event %d: expected choice messages but none found from event outbound edges event ids of outbounds = %s" ev.id (String.concat ", " (List.map string_of_int (List.map (fun e -> e.id) ev.outs))) in
+        (-1, Some sty, Some (err_msg, default_span))
+      )
+      else 
+      (
+        let msg_list = Option.get msg_list in
+
+      let msg_list_offering = List.map (fun (o : offering_session_type) -> 
+        match o.trigger with
+        | Lang.AtomBMsg msg -> msg
+        | Lang.AtomNBMsg msg -> msg
+      ) offerings in
+      if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
+        let rec build_choice_from_offerings (offerings : offering_session_type list) =
+          if List.length offerings = 1 then
+            let only = List.hd offerings in
+            match only.continuation with
+            | Some sty -> Lang.StySeq(
+                Lang.StyAtom (Lang.AtomicAct (only.trigger)),
+                sty
+              )
+            | None -> Lang.StyAtom (Lang.AtomicAct (only.trigger))
+          else
+            let first = List.hd offerings in
+            let rest = List.tl offerings in
+            Lang.StyChoice(
+              (match first.continuation with
+              | Some sty -> Lang.StySeq(
+                  Lang.StyAtom (Lang.AtomicAct (first.trigger)),
+                  sty
+                )
+              | None -> Lang.StyAtom (Lang.AtomicAct (first.trigger)))
+              ,
+              build_choice_from_offerings rest
+            )
+        in
+        let new_sty = build_choice_from_offerings offerings in
+        let evid = List.find_map (fun e ->
+          match e.source with
+          | `Seq (_, `Choice msg_list_ev) ->
+              if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list_ev then
+                Some e.id
+              else None
+          | _ -> None
+        ) ev.outs in
+        let evid = Option.value evid ~default:(-1) in
+        (* update_sty graph evid new_sty default_span; *)
+        (evid, Some new_sty, None)
+      ) else
+        (
+          let err_msg = "Session type mismatch: none of the offered messages match the expected choices" in
+          (-1, Some sty, Some (err_msg, default_span))
+        )
+      )
   | Lang.StyXOffer offerings ->
       if List.length offerings < 2 then 
         raise (Except.TypeError [Text (Printf.sprintf "Not well formed choice dual session type | No of offerings = %d" (List.length offerings)); Except.codespan_local default_span]);
@@ -438,6 +510,21 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
         IntHashtbl.add visited start_ev.id true;
         (* Set initial session type on start event *)
         start_ev.session_type <- Some {protocol_node with Lang.d = initial_sty};
+        let is_empty_branch (e : event) : bool = 
+            (
+              let first_node = match e.source with
+              | `Root (Some (__, _branch_side_info)) ->
+                true
+              | _ -> false
+            in
+            let last_node = List.exists (fun out_ev ->
+              match out_ev.source with
+              | `Branch (_, _) -> true
+              | _ -> false
+            ) e.outs in
+            first_node && last_node
+            )
+        in
         
         while not (Queue.is_empty bfs_queue) do
           let ev = Queue.pop bfs_queue in
@@ -466,10 +553,13 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
               ) ev.outs
             in
             
-            if check_is_branch_event ev then (
+            
+            if is_empty_branch ev then
+              ()
+            else if check_is_branch_event ev then (
               (* Branch event: just propagate current type to successors *)
               List.iter (fun succ_ev ->
-                update_sty g succ_ev.id current_sty g.thread_codespan
+                update_sty g succ_ev.id current_sty g.thread_codespan config.verbose
               ) ev.outs
             ) else (
               (* Run session judgement - it will update types internally *)
@@ -491,8 +581,12 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
                   ])
               | None -> ()
             );
+
             
             (* Add unvisited successors to queue *)
+            if is_empty_branch ev then
+              ()
+            else
             List.iter (fun succ_ev ->
               if not (IntHashtbl.mem visited succ_ev.id) then (
                 IntHashtbl.add visited succ_ev.id true;

@@ -205,7 +205,8 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       let choice_state = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto left_end choice_state (LabelSet.singleton ChoiceLabel) false;
       build st2 choice_state
-
+    | Lang.StyTrue -> 
+      raise (TypeError [Text ("True session type should not appear in automaton construction"); Except.codespan_local default_span])
     | Lang.StyOffer offerings -> (* External choice m1 & m2 *)
       let final = TypeAutomaton.new_state auto false in
       

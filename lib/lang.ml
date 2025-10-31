@@ -108,6 +108,7 @@ and session_type =
   | StyAtom of atomic_action_with_gap (** single atomic action *)
   | StyParallel of session_type * session_type (** parallel composition of session types *)
   | StyFuture of session_type (** future operator (F) **)
+  | StyTrue (** true session type **)
   | StyOffer of offering_session_type list (** offer operator (dual of choice) **)
 
 and offering_session_type = {
@@ -979,6 +980,8 @@ let rec aux p =
   match p with
   | StySeq (p1, p2) ->
       "(" ^ aux p1 ^ " >> " ^ aux p2 ^ ")"
+  | StyTrue ->
+      "∅"
   | StyChoice (p1, p2) ->
       "( " ^ aux p1 ^ " + " ^ aux p2 ^ " )"
   | StyOffer ps ->
@@ -995,5 +998,5 @@ and aux2 p =
   | {trigger; continuation} ->
     match continuation with
     | None -> string_of_atomic_action trigger
-    | Some p_continuation -> string_of_atomic_action trigger ^ " ; " ^ aux p_continuation
+    | Some p_continuation -> string_of_atomic_action trigger ^ " : " ^ aux p_continuation
 in aux p
