@@ -1193,16 +1193,16 @@ let timed_data_wildcard = (
         Typing.immediate_data graph (Some wire_none_active) `Logic ctx.current
     ) in
     let wire_list = if is_wildcard_present then wire_list @ [timed_data_wildcard] else wire_list in
-    let wildcard_arm = if is_wildcard_present then
-      List.find (fun (offer_arm, _) ->
+
+    let wildcard_arm =
+      List.find_opt (fun (offer_arm, _) ->
         match offer_arm with
         | OfferWildcard -> true
         | _ -> false
       ) offer_arms
-    else
-      failwith "No wildcard arm found" in 
+      in
 
-    let offer_arms_new = if is_wildcard_present then offer_arm_filtered @ [wildcard_arm] else offer_arm_filtered in
+    let offer_arms_new = if is_wildcard_present then offer_arm_filtered @ [Option.get wildcard_arm] else offer_arm_filtered in
     
     let branch_count = List.length offer_arms in
     let branch_info = {
