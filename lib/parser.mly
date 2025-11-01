@@ -412,9 +412,9 @@ offering_arm:
   { { Lang.trigger = Lang.AtomicAct trig; Lang.continuation = Some cont } : Lang.offering_session_type }
 | trig = atomic_action;
   { { Lang.trigger = Lang.AtomicAct trig; Lang.continuation = None } : Lang.offering_session_type }
-| SHARP; COLON; cont = local_session_type
+| ASTERISK; COLON; cont = local_session_type
   { { Lang.trigger = Lang.AtomDelay 0; Lang.continuation = Some cont } : Lang.offering_session_type }
-| SHARP
+| ASTERISK
   { { Lang.trigger = Lang.AtomDelay 0; Lang.continuation = None } : Lang.offering_session_type }
 
 atomic_action:

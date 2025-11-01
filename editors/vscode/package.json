@@ -3,6 +3,7 @@
 	"displayName": "AnvilHDL",
 	"description": "AnvilHDL support for Visual Studio Code.",
 	"version": "0.1.0",
+	"icon": "./image.png",
 	"publisher": "AnvilHDL",
 	"engines": {
 		"vscode": "^1.22.0"
@@ -22,7 +23,8 @@
 			{
 				"id": "anvil",
 				"extensions": [
-					".anvil"
+					".anvil",
+					".anvilh"
 				],
 				"aliases": [
 					"AnvilHDL"
