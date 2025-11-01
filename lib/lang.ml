@@ -112,7 +112,7 @@ and session_type =
   | StyOffer of offering_session_type list (** offer operator (dual of choice) **)
 
 and offering_session_type = {
-  trigger: atomic_action;
+  trigger: atomic_action_with_gap;
   continuation: session_type option;
 }
 
@@ -470,6 +470,7 @@ and expr_node = expr ast_node
 and offer_arm_type =
   | OfferSend of send_pack
   | OfferRecv of identifier * recv_pack
+  | OfferWildcard
 
 (** A "location" that can be assigned to. *)
 and lvalue =
@@ -997,6 +998,6 @@ and aux2 p =
   match p with
   | {trigger; continuation} ->
     match continuation with
-    | None -> string_of_atomic_action trigger
-    | Some p_continuation -> string_of_atomic_action trigger ^ " : " ^ aux p_continuation
+    | None -> string_of_atomic_action_with_gap trigger
+    | Some p_continuation -> string_of_atomic_action_with_gap trigger ^ " : " ^ aux p_continuation
 in aux p

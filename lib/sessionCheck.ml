@@ -346,8 +346,9 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
       (* get the message list from the event outbound edges *)
       if config.verbose then
         Printf.eprintf "Checking event %d for dual choice with offerings: %s\n" ev.id (String.concat ", " (List.map (fun (o:offering_session_type) -> match o.trigger with
-          | Lang.AtomBMsg m -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
-          | Lang.AtomNBMsg m -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomicAct (Lang.AtomBMsg m) -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomicAct (Lang.AtomNBMsg m) -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomDelay _ -> Printf.sprintf "Wildcard Delay"
         ) offerings));
       let msg_list = List.find_map (fun (e : event) ->
         match e.source with `Seq ( _ , `Choice msg_list) -> Some msg_list
@@ -364,32 +365,47 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
 
       let msg_list_offering = List.map (fun (o : offering_session_type) -> 
         match o.trigger with
-        | Lang.AtomBMsg msg -> msg
-        | Lang.AtomNBMsg msg -> msg
+        | Lang.AtomicAct (Lang.AtomBMsg msg) -> msg
+        | Lang.AtomicAct (Lang.AtomNBMsg msg) -> msg
+        | Lang.AtomDelay _ -> raise (Except.TypeError [Text "Delay not allowed in choice offerings"; Except.codespan_local default_span])
       ) offerings in
       if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
         let rec build_choice_from_offerings (offerings : offering_session_type list) =
           if List.length offerings = 1 then
             let only = List.hd offerings in
-            match only.continuation with
-            | Some sty -> Lang.StySeq(
-                Lang.StyAtom (Lang.AtomicAct (only.trigger)),
-                sty
+            match only.trigger with
+            | Lang.AtomicAct trig ->
+              (
+              match only.continuation with
+              | Some sty -> Lang.StySeq(
+                  Lang.StyAtom (Lang.AtomicAct trig),
+                  sty
               )
-            | None -> Lang.StyAtom (Lang.AtomicAct (only.trigger))
+              | None -> Lang.StyAtom (Lang.AtomicAct trig)
+              )
+            | _ -> match only.continuation with
+              | Some sty -> sty
+              | None -> Lang.StyTrue
           else
             let first = List.hd offerings in
             let rest = List.tl offerings in
-            Lang.StyChoice(
-              (match first.continuation with
-              | Some sty -> Lang.StySeq(
-                  Lang.StyAtom (Lang.AtomicAct (first.trigger)),
-                  sty
+            match first.trigger with
+            | Lang.AtomicAct trig ->
+              (
+                Lang.StyChoice(
+                    (
+                    match first.continuation with
+                      | Some sty -> Lang.StySeq(
+                          Lang.StyAtom (Lang.AtomicAct trig),
+                          sty
+                        )
+                      | None -> Lang.StyAtom (Lang.AtomicAct trig)
+                    )
+                  ,
+                  build_choice_from_offerings rest
                 )
-              | None -> Lang.StyAtom (Lang.AtomicAct (first.trigger)))
-              ,
-              build_choice_from_offerings rest
-            )
+              )
+            | _ -> build_choice_from_offerings rest
         in
         let new_sty = build_choice_from_offerings offerings in
         let evid = List.find_map (fun e ->
@@ -415,8 +431,9 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
       (* get the message list from the event outbound edges *)
       if config.verbose then
         Printf.eprintf "Checking event %d for dual choice with offerings: %s\n" ev.id (String.concat ", " (List.map (fun (o:offering_session_type) -> match o.trigger with
-          | Lang.AtomBMsg m -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
-          | Lang.AtomNBMsg m -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomicAct (Lang.AtomBMsg m) -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomicAct (Lang.AtomNBMsg m) -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
+          | Lang.AtomDelay _ -> Printf.sprintf "Wildcard Delay"
         ) offerings));
       let msg_list = List.find_map (fun (e : event) ->
         match e.source with `Seq ( _ , `Choice msg_list) -> Some msg_list
@@ -433,32 +450,47 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
 
       let msg_list_offering = List.map (fun (o : offering_session_type) -> 
         match o.trigger with
-        | Lang.AtomBMsg msg -> msg
-        | Lang.AtomNBMsg msg -> msg
+        | Lang.AtomicAct (Lang.AtomBMsg msg) -> msg
+        | Lang.AtomicAct (Lang.AtomNBMsg msg) -> msg
+        | Lang.AtomDelay _ -> {endpoint = "**"; msg = "**"}  (* Wildcard for delay *)
       ) offerings in
       if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
-        let rec build_choice_from_offerings (offerings : offering_session_type list) =
+      let rec build_choice_from_offerings (offerings : offering_session_type list) =
           if List.length offerings = 1 then
             let only = List.hd offerings in
-            match only.continuation with
-            | Some sty -> Lang.StySeq(
-                Lang.StyAtom (Lang.AtomicAct (only.trigger)),
-                sty
+            match only.trigger with
+            | Lang.AtomicAct trig ->
+              (
+              match only.continuation with
+              | Some sty -> Lang.StySeq(
+                  Lang.StyAtom (Lang.AtomicAct trig),
+                  sty
               )
-            | None -> Lang.StyAtom (Lang.AtomicAct (only.trigger))
+              | None -> Lang.StyAtom (Lang.AtomicAct trig)
+              )
+            | _ -> match only.continuation with
+              | Some sty -> sty
+              | None -> Lang.StyTrue
           else
             let first = List.hd offerings in
             let rest = List.tl offerings in
-            Lang.StyChoice(
-              (match first.continuation with
-              | Some sty -> Lang.StySeq(
-                  Lang.StyAtom (Lang.AtomicAct (first.trigger)),
-                  sty
+            match first.trigger with
+            | Lang.AtomicAct trig ->
+              (
+                Lang.StyChoice(
+                    (
+                    match first.continuation with
+                      | Some sty -> Lang.StySeq(
+                          Lang.StyAtom (Lang.AtomicAct trig),
+                          sty
+                        )
+                      | None -> Lang.StyAtom (Lang.AtomicAct trig)
+                    )
+                  ,
+                  build_choice_from_offerings rest
                 )
-              | None -> Lang.StyAtom (Lang.AtomicAct (first.trigger)))
-              ,
-              build_choice_from_offerings rest
-            )
+              )
+            | _ -> build_choice_from_offerings rest
         in
         let new_sty = build_choice_from_offerings offerings in
         let evid = List.find_map (fun e ->

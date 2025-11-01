@@ -212,19 +212,22 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       
       (* Helper to get message_specifier from atomic_action *)
       let get_msg_spec = function
-        | Lang.AtomBMsg m -> m
-        | Lang.AtomNBMsg m -> m
+        | Lang.AtomicAct (Lang.AtomBMsg m) -> m
+        | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
+        | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
       in
       let all_msg_specs = List.map (fun (o : offering_session_type) -> get_msg_spec o.Lang.trigger) offerings in
       let all_blocking  = List.for_all (fun (o : offering_session_type) ->
         match o.Lang.trigger with
-        | Lang.AtomBMsg _ -> true
-        | Lang.AtomNBMsg _ -> false
+        | Lang.AtomicAct (Lang.AtomBMsg _) -> true
+        | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
+        | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
       ) offerings in
       let all_non_blocking = List.for_all (fun (o : offering_session_type) ->
         match o.Lang.trigger with
-        | Lang.AtomBMsg _ -> false
-        | Lang.AtomNBMsg _ -> true
+        | Lang.AtomicAct (Lang.AtomBMsg _) -> false
+        | Lang.AtomicAct (Lang.AtomNBMsg _) -> true
+        | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
       ) offerings in
       if not all_blocking && not all_non_blocking then
         raise(TypeError [Text ("Mixed blocking and non-blocking offerings in external choice"); Except.codespan_local default_span])
@@ -234,8 +237,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       List.iter (fun offer ->
         let branch_s = TypeAutomaton.new_state auto false in
         let label, _is_blocking = match offer.Lang.trigger with
-          | Lang.AtomBMsg m -> (Action(BlockAction m), true)
-          | Lang.AtomNBMsg m -> (Action(ImmediateAction m), false)
+          | Lang.AtomicAct (Lang.AtomBMsg m) -> (Action(BlockAction m), true)
+          | Lang.AtomicAct (Lang.AtomNBMsg m) -> (Action(ImmediateAction m), false)
+          | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
         in
         TypeAutomaton.add_transition auto current branch_s (LabelSet.singleton label) false;
         

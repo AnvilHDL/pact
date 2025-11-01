@@ -409,12 +409,13 @@ local_session_type:
 
 offering_arm: 
 | trig  = atomic_action; COLON; cont = local_session_type
-  { { Lang.trigger = trig; Lang.continuation = Some cont } : Lang.offering_session_type }
-
+  { { Lang.trigger = Lang.AtomicAct trig; Lang.continuation = Some cont } : Lang.offering_session_type }
 | trig = atomic_action;
-  { { Lang.trigger = trig; Lang.continuation = None } : Lang.offering_session_type }
-
-
+  { { Lang.trigger = Lang.AtomicAct trig; Lang.continuation = None } : Lang.offering_session_type }
+| SHARP; COLON; cont = local_session_type
+  { { Lang.trigger = Lang.AtomDelay 0; Lang.continuation = Some cont } : Lang.offering_session_type }
+| SHARP
+  { { Lang.trigger = Lang.AtomDelay 0; Lang.continuation = None } : Lang.offering_session_type }
 
 atomic_action:
 | id = message_specifier
@@ -885,6 +886,8 @@ offer_arm:
   { (Lang.OfferSend send_pack, body) }
 | id = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack; EQ_GT body = node(expr)
   { (Lang.OfferRecv (id, recv_pack), body) }
+| SHARP; EQ_GT; body = node(expr)
+  { (Lang.OfferWildcard , body) }
 ;  
 
 //Definition of messages: To Do: Doesnt support custom lifetime types, just sync?
