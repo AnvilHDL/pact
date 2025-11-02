@@ -870,7 +870,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let borrow = {borrow_range = sub_reg_range reg_ident off le; borrow_start = ctx.current; borrow_source_span = e.span} in
     let g = GateHelper.add_reg_event graph.gate_context rlval ctx.current e.span Lang.GateRead in
     graph.gate_context <- g;
-    { td'' with dtype = _dt; reg_borrows = [borrow] }
+    { td'' with dtype = _dt; reg_borrows = borrow :: td''.reg_borrows }
   | Debug op ->
     (
       match op with

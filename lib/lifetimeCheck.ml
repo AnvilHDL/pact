@@ -304,6 +304,21 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       borrow_add_reg borrow.borrow_range.subreg_name lt_tagged borrow.borrow_range
     ) td.reg_borrows
   ) !td_to_live_until;
+
+  if config.verbose then (
+  StringHashtbl.iter (fun reg_name borrows ->
+    Printf.eprintf "Register %s has %d borrow(s):\n" reg_name (List.length borrows);
+    List.iter (fun (lt_tagged, range) ->
+      Printf.eprintf "  Borrow from event %d, dead at %s, range: %s\n" 
+        lt_tagged.d.live.id 
+        (string_of_lt lt_tagged.d)
+        (match range.subreg_range_interval with
+         | (Const n, sz) -> Printf.sprintf "[%d, %d]" n sz
+         | (NonConst _, sz) -> Printf.sprintf "[var, %d]" sz)
+    ) borrows
+  ) reg_borrows
+  );
+
   (* check register and message borrows *)
   let check_send msg td ev ev_until span =
     let msg_d = MessageCollection.lookup_message g.messages msg ci.channel_classes |> Option.get in
