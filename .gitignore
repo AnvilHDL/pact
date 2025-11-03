@@ -12,3 +12,4 @@ lib/self-notes.md
 **/*.anvil.sv
 session_examples/*.dot
 **/*.png
+**/*.log

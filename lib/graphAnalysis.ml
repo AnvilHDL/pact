@@ -351,6 +351,10 @@ let events_max_dist events lookup_message ev =
       )
     | `Choice mlist ->
       List.fold_left (fun mx m ->
+        let wild_card = {msg="*"; endpoint = "*"  } in
+        if m = wild_card then
+          event_distance_max
+        else
         let msg_def = lookup_message m |> Option.get in
         let d = match msg_def.recv_sync with
           | Static _ | Dependent _ -> 0

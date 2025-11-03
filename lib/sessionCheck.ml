@@ -4,6 +4,37 @@ open EventGraph
 
 module IntHashtbl = Hashtbl.Make(Int)
 
+let is_empty_branch (e : event) : bool = 
+            (
+              let first_node = match e.source with
+              | `Root (Some (__, _branch_side_info)) ->
+                true
+              | _ -> false
+            in
+            let last_node = List.exists (fun out_ev ->
+              match out_ev.source with
+              | `Branch (_, _) -> true
+              | _ -> false
+            ) e.outs in
+            first_node && last_node
+            )
+
+
+let is_empty_branch_special_one (e : event) : bool = 
+(
+              let first_node = match e.source with
+              | `Root (Some (__, _branch_side_info)) when _branch_side_info.branch_side_sel = 1 ->
+                true
+              | _ -> false
+            in
+            let last_node = List.exists (fun out_ev ->
+              match out_ev.source with
+              | `Branch (_, _) -> true
+              | _ -> false
+            ) e.outs in
+            first_node && last_node
+)
+
 
 let get_event_id_for_atomic_action (ev : event) (g : event_graph) (atom : Lang.atomic_action_with_gap) : int=
   let atom_delay = match atom with
@@ -182,8 +213,21 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         (-1,Some sty, Some (err_msg, code_span))
       )
   | Lang.StyTrue ->
-      (* True session type is always satisfied *)
-      raise (Except.TypeError [Text "Unexpected true session type during session judgement"; Except.codespan_local default_span])
+      if config.verbose then 
+        Printf.eprintf "Session type true at event %d\n" ev.id;
+      (* only if its the only node in the branch *)
+        let child = List.find_opt (fun e ->
+          match e.source with
+          | `Branch (_, _) -> true
+          | _ -> false
+        ) ev.outs in
+  
+        if is_empty_branch ev then
+          ((Option.get child).id, None, None)  (* True session type satisfied *)
+        else (
+          let err_msg = "Session type mismatch: true session type can only be at empty branch events" in
+          (-1, Some sty, Some (err_msg, default_span))
+        )
   | Lang.StySeq (s1, s2) ->
    if config.verbose then Printf.eprintf "Checking sequence session type at event %d | s_1 = %s | s_2 = %s\n" ev.id (Lang.string_of_protocol s1) (Lang.string_of_protocol s2);
       let (id, s1_cont, err1) = session_judgement {st with d = s1} ev config default_span graph in
@@ -452,7 +496,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         match o.trigger with
         | Lang.AtomicAct (Lang.AtomBMsg msg) -> msg
         | Lang.AtomicAct (Lang.AtomNBMsg msg) -> msg
-        | Lang.AtomDelay _ -> {endpoint = "**"; msg = "**"}  (* Wildcard for delay *)
+        | Lang.AtomDelay _ -> {endpoint = "*"; msg = "*"}  (* Wildcard for delay *)
       ) offerings in
       if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
       let rec build_choice_from_offerings (offerings : offering_session_type list) =
@@ -542,21 +586,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
         IntHashtbl.add visited start_ev.id true;
         (* Set initial session type on start event *)
         start_ev.session_type <- Some {protocol_node with Lang.d = initial_sty};
-        let is_empty_branch (e : event) : bool = 
-            (
-              let first_node = match e.source with
-              | `Root (Some (__, _branch_side_info)) ->
-                true
-              | _ -> false
-            in
-            let last_node = List.exists (fun out_ev ->
-              match out_ev.source with
-              | `Branch (_, _) -> true
-              | _ -> false
-            ) e.outs in
-            first_node && last_node
-            )
-        in
+
         
         while not (Queue.is_empty bfs_queue) do
           let ev = Queue.pop bfs_queue in
@@ -586,10 +616,11 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
             in
             
             
-            if is_empty_branch ev then
+            if is_empty_branch_special_one ev then
               ()
-            else if check_is_branch_event ev then (
+            else if check_is_branch_event  ev && (not (is_empty_branch ev)) then (
               (* Branch event: just propagate current type to successors *)
+              Printf.eprintf "Branch event %d: propagating session type %s to successors\n" ev.id (Lang.string_of_protocol current_sty);
               List.iter (fun succ_ev ->
                 update_sty g succ_ev.id current_sty g.thread_codespan config.verbose
               ) ev.outs
@@ -616,7 +647,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
 
             
             (* Add unvisited successors to queue *)
-            if is_empty_branch ev then
+            if is_empty_branch_special_one ev then
               ()
             else
             List.iter (fun succ_ev ->
