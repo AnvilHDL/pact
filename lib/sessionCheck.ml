@@ -461,6 +461,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           | _ -> None
         ) ev.outs in
         let evid = Option.value evid ~default:(-1) in
+        update_sty graph evid new_sty default_span config.verbose;
         (* update_sty graph evid new_sty default_span; *)
         (evid, Some new_sty, None)
       ) else
