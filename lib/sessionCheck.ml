@@ -367,7 +367,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         match o.trigger with
         | Lang.AtomicAct (Lang.AtomBMsg msg) -> msg
         | Lang.AtomicAct (Lang.AtomNBMsg msg) -> msg
-        | Lang.AtomDelay _ -> raise (Except.TypeError [Text "Delay not allowed in choice offerings"; Except.codespan_local default_span])
+        | Lang.AtomDelay _ -> {endpoint = "*"; msg = "*"}  (* Wildcard for delay *)
       ) offerings in
       if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
         let rec build_choice_from_offerings (offerings : offering_session_type list) =
