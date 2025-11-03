@@ -637,6 +637,12 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
               (* Check for errors *)
               match error_opt with
               | Some (err_msg, err_span) ->
+                let file_handler = Out_channel.open_text (Printf.sprintf "%sgraph_error.dot" module_name) in
+                  if config.verbose then (
+                    Printf.eprintf "Session type violation at event %d: %s\n" ev.id err_msg;
+                    EventGraphOps.print_graph_with_session_types g file_handler;
+                    Out_channel.close file_handler
+                  );
                   raise (Except.TypeError [
                     Text "Session type violation: ";
                     Text err_msg;
