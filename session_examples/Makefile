@@ -29,7 +29,7 @@ $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
 ifdef LOG
 	dune exec anvil $(ANVIL_FLAGS) $< > $@ 2> compile.log
 else
-	anvil $(ANVIL_FLAGS) $< > $@
+	dune exec anvil $(ANVIL_FLAGS) $< > $@
 endif
 
 ifdef DEBUG

@@ -1,0 +1,58 @@
+chan ch {
+    left req : (logic@#1),
+    right gnt : (logic@#1) <<,
+    right gnt2 : (logic@#1) >>
+}
+
+// interface foo1_intfc (ep : right ch) = (ep.req >> ep.gnt) + (ep.req >> ep.gnt2) >> #1;
+proc foo1(ep : right ch){
+    reg cyc : logic[8];
+    loop{
+        offer{
+            send ep.req(1'd1) => (
+                let r = probe ep.gnt >>
+                dprint "[Cycle %d] Sent req on ep.req | At this point status of gnt's ready is  = %d\n" (*cyc, r)
+            ),
+            x = recv ep.gnt => (
+                let f = ready ep.req >>
+                dprint "[Cycle %d] Received gnt on ep.gnt  | At this point status of valid of req is %d" (*cyc, f) >>
+                cycle 2
+            ),
+            y = recv ep.gnt2 => (
+                let f2 = ready ep.req >>
+                let f3 = probe ep.gnt >>
+                dprint "[Cycle %d] Received gnt2 on ep.gnt2 | At this point status of valid of req is %d and the ready of gnt is %d\n" (*cyc, f2, f3) >>
+                cycle 3
+            )
+        } >>
+        cycle 2
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+    
+}
+
+
+proc test_dual_handshake(){
+    chan ep_le -- ep_ri : ch;
+    reg cyc : logic[8];
+    spawn foo1(ep_ri);
+    loop{
+        cycle 100 >>
+        dfinish
+    }
+    loop{
+        cycle 5 >>
+        let x = recv ep_le.req  >>
+        cycle 1 >>
+        send ep_le.gnt(1'd1) >>
+        cycle 1 >>
+        send ep_le.gnt2(1'd1) >>
+        dprint "[Cycle %d] Received req on ep.req and sent gnt on ep.gnt and gnt2 on ep.gnt2\n" (*cyc) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}

@@ -11,6 +11,11 @@ module EventStateFormatter = struct
     Printf.sprintf "EVENTS%d[%d].event_current" thread_id ev_id
 end
 
+let is_wildcard_present msg_list =
+    List.exists (fun (msg : Lang.message_specifier) ->
+      if msg.endpoint = "*" && msg.msg = "*" then true else false
+    ) msg_list
+
 let collect_reg_states g =
   let open EventGraph in
   List.concat_map (fun e ->
@@ -29,7 +34,13 @@ let collect_reg_states g =
           let sn = EventStateFormatter.format_counter g.thread_id e.id in
           [(Printf.sprintf "logic[%d:0]" (width - 1), sn)]
         )
-      | `Send _ | `Recv _ | `Choice _ | `Sync _ ->
+      | `Send _ | `Recv _| `Sync _ ->
+        let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+        [("logic", sn)]
+      |  `Choice msg_list ->
+        if is_wildcard_present msg_list then
+          []
+        else
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
     )
@@ -133,14 +144,12 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             ] |> print_lines
           )
         | `Choice msg_list ->
-          let is_wildcard_present =
-            List.exists (fun (msg : Lang.message_specifier) ->
-              if msg.endpoint = "*" && msg.msg = "*" then true else false
-            ) msg_list
-          in
-          
+          let is_wildcard_present = is_wildcard_present msg_list in
           (*For this we want to wait till or of the valid/ready port becomes 1 *)
-          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+          let sn_opt = if is_wildcard_present then
+            None
+          else
+            Some (EventStateFormatter.format_syncstate g.thread_id e.id) in
           (* Collect all the handshake signals to OR together *)
           let handshake_signals = List.filter_map (fun (msg : Lang.message_specifier) ->
             (* Skip wildcard when collecting signals *)
@@ -154,6 +163,9 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                 if CodegenPort.message_has_ready_port msg_def then
                   Some (CodegenFormat.format_msg_ready_signal_name 
                     (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+                else if CodegenPort.message_has_ack_port msg_def then
+                  Some (CodegenFormat.format_msg_ack_signal_name 
+                    (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
                 else None
               | Inp ->
                 (* Input message (Recv): wait for valid port *)
@@ -162,9 +174,11 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                     (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
                 else None
           ) msg_list in
-          
+
           if handshake_signals <> [] && not is_wildcard_present then (
             (* No wildcard: wait for one of the signals *)
+          if Option.is_none sn_opt then raise (Failure "Internal error: syncstate expected in Choice without wildcard");
+            let sn = Option.get sn_opt in
             let or_condition = String.concat " || " handshake_signals in
             [
               Printf.sprintf "assign %s = (%s || %s_q) && (%s);" cn cn' sn or_condition;
@@ -174,13 +188,11 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             (* Wildcard present: proceed immediately without waiting *)
             [
               Printf.sprintf "assign %s = %s;" cn cn';
-              Printf.sprintf "assign %s_n = 1'b0;" sn
             ] |> print_lines
           ) else (
             (* No handshake signals, complete immediately *)
             [
-              Printf.sprintf "assign %s = %s || %s_q;" cn cn' sn;
-              Printf.sprintf "assign %s_n = 1'b0;" sn
+              Printf.sprintf "assign %s = %s;" cn cn';
             ] |> print_lines
           )
           
@@ -401,6 +413,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
   let print_line = CodegenPrinter.print_line printer in
   let send_or_assigns = Hashtbl.create 8 in
   let recv_or_assigns = Hashtbl.create 8 in
+  let choice_valid_asserts = Hashtbl.create 8 in (* For Choice ValidAck send assertions (no data) *)
   let insert_to tbl w_name has_sync_port cond =
     (
       match Hashtbl.find_opt tbl w_name with
@@ -458,7 +471,41 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
       | ImmediateSend (msg, td) -> print_send activated msg td
       | ImmediateRecv msg -> print_recv activated msg
       | _ -> ()
-    ) e.actions
+    ) e.actions;
+
+    (* Handle Choice events: assert signals while waiting for handshake *)
+    match e.source with
+    | `Seq (_, `Choice msg_list) ->
+      let is_wildcard = is_wildcard_present msg_list in
+      if not is_wildcard then (
+        (* When in waiting state, assert the appropriate signals based on protocol *)
+        let activated = Printf.sprintf "(%s || %s_q)"
+          (EventStateFormatter.format_current g.thread_id e.id)
+          (EventStateFormatter.format_syncstate g.thread_id e.id) in
+        
+        List.iter (fun (msg : Lang.message_specifier) ->
+          if msg.endpoint <> "*" || msg.msg <> "*" then
+            let msg_def = lookup_msg_def msg |> Option.get in
+            match msg_def.dir with
+            | Out ->
+              (* Output message (Send): assert valid only for ValidAck protocol *)
+              if msg_def.handshake_mode = Lang.ValidAck then
+                insert_to choice_valid_asserts
+                  (CodegenFormat.format_msg_valid_signal_name 
+                    (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+                  true
+                  activated
+            | Inp ->
+              (* Input message (Recv): assert ready only for ValidReady protocol *)
+              if msg_def.handshake_mode = Lang.ValidReady then
+                insert_to recv_or_assigns
+                  (CodegenFormat.format_msg_ready_signal_name 
+                    (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+                  true
+                  activated
+        ) msg_list
+      )
+    | _ -> ()
   in
   (* assuming reverse topo order, the assign lists will be in topo order *)
   List.iter print_send_recv g.events;
@@ -470,6 +517,15 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     )
   ) recv_or_assigns;
 
+  (* Merge Choice valid assertions into send_or_assigns *)
+  Hashtbl.iter (fun w_name (has_sync_port, conds) ->
+    if has_sync_port then (
+      List.iter (fun cond ->
+        insert_to send_or_assigns w_name true (cond, "", "")
+      ) !conds
+    )
+  ) choice_valid_asserts;
+
   let send_data_selectors = ref [] in
   Hashtbl.iter (fun w_name (has_sync_port, conds_dw) ->
     if has_sync_port then (
@@ -478,17 +534,19 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
       |> Printf.sprintf "assign %s = %s;" w_name
       |> print_line;
     );
-    let n = List.length !conds_dw in
-    if n <= 1 then (
-      assert (n = 1);
-      let (_, dw, vw) = List.hd !conds_dw in
+    (* Filter out entries with empty data strings (from Choice assertions) *)
+    let conds_with_data = List.filter (fun (_, dw, vw) -> dw <> "" && vw <> "") !conds_dw in
+    let n = List.length conds_with_data in
+    if n = 1 then (
+      let (_, dw, vw) = List.hd conds_with_data in
       Printf.sprintf "assign %s = %s;" dw vw
       |> print_line
-    ) else (
+    ) else if n > 1 then (
       (* if we have more than one site that sends, keep track of which event is the last send (TODO: optimisation) *)
       let width = Utils.int_log2 n in
-      send_data_selectors := (width, w_name, !conds_dw)::!send_data_selectors
+      send_data_selectors := (width, w_name, conds_with_data)::!send_data_selectors
     )
+    (* if n = 0, no data signals to assign (all are Choice assertions) *)
   ) send_or_assigns;
 
   if !send_data_selectors <> [] then (

@@ -11,10 +11,10 @@ let do_sanity_check_offer (msg_list : (message_specifier * message_def) list) (s
 
 List.iter (fun ((msg_spec : message_specifier), message_def) ->
   if message_def.dir == Out && message_def.handshake_mode != ValidReady then
-    raise (Except.TypeError [Text ("In offer: Outbound message " ^ msg_spec.msg ^ " must use ready/ack handshake");
+    raise (Except.TypeError [Text ("In exclusive offer: Outbound message " ^ msg_spec.msg ^ " must use ready/valid handshake");
       Except.codespan_local span])
   else if message_def.dir == Inp && message_def.handshake_mode != ValidAck then
-    raise (Except.TypeError [Text ("In offer: Inbound message " ^ msg_spec.msg ^ " must use probe/ack handshake");
+    raise (Except.TypeError [Text ("In exclusive offer: Inbound message " ^ msg_spec.msg ^ " must use valid/ack handshake");
       Except.codespan_local span])
   ) msg_list
 
@@ -930,7 +930,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
 
     let msg_list = List.combine offer_msg_list_filtered msg_defs in
 
-    do_sanity_check_offer msg_list e.span;
+    (* do_sanity_check_offer msg_list e.span; *)
 
     let cond_td = Typing.offer_condition graph ctx offer_msg_list in
     let ctx = BuildContext.wait graph ctx cond_td.lt.live in
@@ -952,6 +952,11 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
         graph.wires <- wires';
         Typing.immediate_data graph (Some msg_valid_port) `Logic ctx.current
       else
+        if msg_def.handshake_mode == Lang.ValidAck then
+          let (wires', msg_ack_port) = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
+          graph.wires <- wires';
+          Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
+        else
         let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
         graph.wires <- wires';
         Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
