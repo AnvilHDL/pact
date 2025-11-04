@@ -26,13 +26,22 @@ ifdef SESSIONOFF
 endif
 
 $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
+ifdef LOG
 	dune exec anvil $(ANVIL_FLAGS) $< > $@ 2> compile.log
+else
+	anvil $(ANVIL_FLAGS) $< > $@
+endif
+
 ifdef DEBUG
 	python3 debug.py
 endif
+
 obj_dir/V$(MODULE_NAME): $(MODULE_NAME)_driver.cpp $(MODULE_NAME).anvil.sv
-# 	verilator --cc --exe --build $(VERILATOR_FLAGS) $^ > /dev/null 2>&1
+ifdef LOG
+	verilator --cc --exe --build $(VERILATOR_FLAGS) $^ > /dev/null 2>&1
+else
 	verilator --cc --exe --build $(VERILATOR_FLAGS) $^
+endif
 
 $(MODULE_NAME)_driver.cpp: $(TEST_DRIVER)
 	sed "s/Vtop/V$(MODULE_NAME)/g" $< > $@
@@ -41,4 +50,4 @@ run: obj_dir/V$(MODULE_NAME)
 	@ $< $(TIMEOUT)
 
 clean:
-	rm -rf *.anvil.sv *_driver.cpp *.png *.dot *.logobj_dir
+	rm -rf *.anvil.sv *_driver.cpp *.png *.dot *.log obj_dir

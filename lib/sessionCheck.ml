@@ -168,6 +168,15 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
   if config.verbose then
     Printf.eprintf "Session judgement at event %d with session type: %s\n" ev.id (Lang.string_of_protocol st.d); *)
   let sty = st.d in
+
+  if sty <> Lang.StyTrue && is_empty_branch ev then
+    let ev_id = List.find (fun e ->
+      match e.source with
+      | `Branch (_, _) -> true
+      | _ -> false
+    ) ev.outs in
+    (ev_id.id, Some sty, None)
+  else
   match sty with
   | Lang.StyAtom (Lang.AtomicAct atom) ->
       let (satisfied, _span, _) = event_satisfies_atomic ev (Lang.AtomicAct atom) config.verbose default_span in
