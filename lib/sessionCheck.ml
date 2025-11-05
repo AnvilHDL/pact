@@ -170,14 +170,31 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
     Printf.eprintf "Session judgement at event %d with session type: %s\n" ev.id (Lang.string_of_protocol st.d); *)
   let sty = st.d in
 
-  (* if sty <> Lang.StyTrue && is_empty_branch ev then
+  let is_wildcard_branch (e : event) : bool =
+    let e_source = match e.source with
+      | `Root (Some (_ev, _branch_side_info)) ->
+        Some _ev
+      | _ -> None
+      in
+    match e_source with
+    | Some _ev ->
+      (match _ev.source with `Seq (_, `Choice _) -> true | _ -> false)
+    | None -> false
+
+    in
+        
+
+  if ((not (is_wildcard_branch ev)) && (is_empty_branch ev)) then
+    (
+      if config.verbose then Printf.eprintf "Empty branch event %d: propagating session type %s to successor\n" ev.id (Lang.string_of_protocol sty);
     let ev_id = List.find (fun e ->
       match e.source with
       | `Branch (_, _) -> true
       | _ -> false
     ) ev.outs in
     (ev_id.id, Some sty, None)
-  else *)
+  )
+  else
   match sty with
   | Lang.StyAtom (Lang.AtomicAct atom) ->
       let (satisfied, _span, _) = event_satisfies_atomic ev (Lang.AtomicAct atom) config.verbose default_span in
