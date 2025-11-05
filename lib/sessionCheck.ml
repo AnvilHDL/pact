@@ -22,8 +22,9 @@ let is_empty_branch (e : event) : bool =
 
 let is_empty_branch_special_one (e : event) : bool = 
 (
+
               let first_node = match e.source with
-              | `Root (Some (__, _branch_side_info)) when _branch_side_info.branch_side_sel = 1 ->
+              | `Root (Some (ev, _branch_side_info)) when _branch_side_info.branch_side_sel = 1 && _branch_side_info.owner_branch.branch_cond = TrueFalse  && match ev.source with `Seq (_, `Choice _) -> true | _ -> false ->
                 true
               | _ -> false
             in
@@ -169,14 +170,14 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
     Printf.eprintf "Session judgement at event %d with session type: %s\n" ev.id (Lang.string_of_protocol st.d); *)
   let sty = st.d in
 
-  if sty <> Lang.StyTrue && is_empty_branch ev then
+  (* if sty <> Lang.StyTrue && is_empty_branch ev then
     let ev_id = List.find (fun e ->
       match e.source with
       | `Branch (_, _) -> true
       | _ -> false
     ) ev.outs in
     (ev_id.id, Some sty, None)
-  else
+  else *)
   match sty with
   | Lang.StyAtom (Lang.AtomicAct atom) ->
       let (satisfied, _span, _) = event_satisfies_atomic ev (Lang.AtomicAct atom) config.verbose default_span in
@@ -600,6 +601,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
         
         while not (Queue.is_empty bfs_queue) do
           let ev = Queue.pop bfs_queue in
+          Printf.eprintf "\n[Session Type Check] Exploring event %d| Current queue -> [%s]\n" ev.id (String.concat ", " (List.map string_of_int (Queue.fold (fun acc x -> acc @ [x.id]) [] bfs_queue)));
           
           if ev.id = last_node_id then
             ()
@@ -628,7 +630,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
             
             if is_empty_branch_special_one ev then
               ()
-            else if check_is_branch_event  ev && (not (is_empty_branch ev)) then (
+            else if check_is_branch_event ev && (not (is_empty_branch ev)) then (
               (* Branch event: just propagate current type to successors *)
               Printf.eprintf "Branch event %d: propagating session type %s to successors\n" ev.id (Lang.string_of_protocol current_sty);
               List.iter (fun succ_ev ->
