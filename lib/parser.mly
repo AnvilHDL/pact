@@ -604,6 +604,16 @@ spawn:
       compile_params = compile_params;
     } : Lang.spawn_def
   }
+| proc = IDENT; LEFT_ABRACK; compile_params = separated_list(COMMA, param_value); RIGHT_ABRACK;
+  LEFT_BRACKET; params = separated_list(COMMA, ifc_inst); RIGHT_BRACKET
+  {
+    {
+      proc = proc;
+      params  = [];
+      compile_params = compile_params;
+      interface_params = Some params
+    } : Lang.spawn_def
+  }
 ;
 
 ifc_inst:
