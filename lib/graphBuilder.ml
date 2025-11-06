@@ -939,8 +939,68 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       match offer_arm with
       | OfferWildcard -> false
       | _ -> true
-    ) offer_arms in 
+    ) offer_arms in
+
+    let ctx',wildcard_info =  if is_wildcard_present then (
+      let wildcard_arm_expr =
+        List.find_map (fun (offer_arm, arm_expr) ->
+          match offer_arm with
+          | OfferWildcard -> Some arm_expr
+          | _ -> None
+        ) offer_arms
+        |> unwrap_or_err "Wildcard arm not found" e.span
+      in
+      let branch_cond_wires = 
+        List.map (fun (msg_spec,msg_def) ->
+          if msg_def.dir = Inp then
+            let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
+            graph.wires <- wires';
+            msg_valid_port
+          else
+            if msg_def.handshake_mode == Lang.ValidAck then
+              let (wires', msg_ack_port) = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
+              graph.wires <- wires';
+              msg_ack_port
+            else
+              let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
+              graph.wires <- wires';
+              msg_ack_port
+        ) msg_list in
+
+        let wildcard_branch_cond = 
+          List.fold_left (fun acc w ->
+            let (wires', new_w) = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs Or acc (`Single w) graph.wires in
+            graph.wires <- wires';
+            new_w
+          ) (List.hd branch_cond_wires) (List.tl branch_cond_wires)
+        in 
+
+
+        (* create negatition of this *)
+        let wires,branch_cond_wire = WireCollection.add_unary graph.thread_id ci.typedefs Not wildcard_branch_cond graph.wires in
+        graph.wires <- wires;
+
+        let wire_td = Typing.immediate_data graph (Some branch_cond_wire) `Logic ctx.current in
+
+
+          let outer_branch_info = {
+          branch_cond_v = wire_td;
+          branch_cond = TrueFalse;
+          branch_count = 2; (* wildcard arm and others *)
+          branches_to = [];
+          branches_val = [];
+        } in
+        let (br_side_true, ctx_wildcard) = BuildContext.branch_side graph ctx outer_branch_info 0 in
+        let td_result = visit_expr graph ci ctx_wildcard wildcard_arm_expr in
+
       
+        let (br_side_false, ctx_true) = BuildContext.branch_side graph ctx outer_branch_info 1 in
+        outer_branch_info.branches_to <- [ctx_wildcard.current; ctx_true.current];
+        outer_branch_info.branches_val <- [td_result.lt.live];
+        (ctx_true, Some (outer_branch_info, br_side_true, br_side_false, td_result))
+        (* Process the wildcard arm in the true branch *)
+      )
+      else(ctx ,None) in
     
     (* Create separate if-branches for each offer arm *)
     let branch_contexts_and_tds = List.mapi (fun idx (offer_arm, arm_expr) ->
@@ -950,16 +1010,16 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       let wire_td = if msg_def.dir = Inp then
         let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
         graph.wires <- wires';
-        Typing.immediate_data graph (Some msg_valid_port) `Logic ctx.current
+        Typing.immediate_data graph (Some msg_valid_port) `Logic ctx'.current
       else
         if msg_def.handshake_mode == Lang.ValidAck then
           let (wires', msg_ack_port) = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
           graph.wires <- wires';
-          Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
+          Typing.immediate_data graph (Some msg_ack_port) `Logic ctx'.current
         else
         let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
         graph.wires <- wires';
-        Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
+        Typing.immediate_data graph (Some msg_ack_port) `Logic ctx'.current
       in
       
       (* Create branch info for this specific arm *)
@@ -971,7 +1031,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
         branches_val = [];
       } in
       
-      let (br_side_true, ctx_branch) = BuildContext.branch_side graph ctx branch_info 0 in
+      let (br_side_true, ctx_branch) = BuildContext.branch_side graph ctx' branch_info 0 in
       
       (* Process the offer arm in the true branch *)
       let td_result = match offer_arm with
@@ -1017,87 +1077,32 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       in
       
       (* Create false branch (empty continuation) *)
-      let (br_side_false, ctx_false) = BuildContext.branch_side graph ctx branch_info 1 in
+      let (br_side_false, ctx_false) = BuildContext.branch_side graph ctx' branch_info 1 in
       let td_false = Typing.const_data graph None unit_dtype ctx_false.current in
       
       (* Update branch info *)
       branch_info.branches_to <- [ctx_branch.current; ctx_false.current];
       branch_info.branches_val <- [td_result.lt.live; td_false.lt.live];
       
-      BuildContext.branch_merge ctx [ctx_branch; ctx_false];
+      BuildContext.branch_merge ctx' [ctx_branch; ctx_false];
       
-      let ctx_br = BuildContext.branch graph ctx branch_info in
+      let ctx_br = BuildContext.branch graph ctx' branch_info in
       br_side_true.branch_event <- Some ctx_br.current;
       br_side_false.branch_event <- Some ctx_br.current;
       
-      (ctx_br, td_result,wire_td)
+      (ctx_br, td_result)
     ) offer_arm_filtered in
 
-    let branch_contexts_and_tds_merged = if is_wildcard_present then
-    (
-      (* Find the wildcard arm and extract its expression *)
-      let wildcard_arm_expr = 
-        List.find_map (fun (offer_arm, arm_expr) ->
-          match offer_arm with
-          | OfferWildcard -> Some arm_expr
-          | _ -> None
-        ) offer_arms
-        |> unwrap_or_err "Wildcard arm not found" e.span
-      in
-    
-      (* take the td result create a negative wire, use that negative wire to create and wire saying none of them are active *)
-        let wire_not_td = List.map (
-          fun (_,_ ,branch_td) ->
-            let (wires', w_not) = WireCollection.add_unary graph.thread_id ci.typedefs Not (unwrap_or_err "Invalid branch condition" e.span branch_td.w) graph.wires in
-            graph.wires <- wires';
-            w_not
-        ) branch_contexts_and_tds in
-        let wire_not_td_singleton = List.map (fun w -> `Single w) wire_not_td in
-        let wires,wire = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (1, 1)) graph.wires in
-        graph.wires <- wires;
-        let wire_none_active =
-          List.fold_left (fun acc_w w_not ->
-            let (wires', w_and) = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs And acc_w w_not graph.wires in
-            graph.wires <- wires';
-            w_and
-          ) wire wire_not_td_singleton in
-        
-        let td_none_active = Typing.immediate_data graph (Some wire_none_active) `Logic ctx.current in
-
-        let branch_info = {
-          branch_cond_v = td_none_active;
-          branch_cond = TrueFalse;
-          branch_count = 2;
-          branches_to = [];
-          branches_val = [];
-        } in
-        let (br_side_true, ctx_branch) = BuildContext.branch_side graph ctx branch_info 0 in
-        let td_result = visit_expr graph ci ctx_branch wildcard_arm_expr in
-
-        let br_side_false, ctx_false = BuildContext.branch_side graph ctx branch_info 1 in
-        let td_false = Typing.const_data graph None unit_dtype ctx_false.current in
-        branch_info.branches_to <- [ctx_branch.current; ctx_false.current];
-        branch_info.branches_val <- [td_result.lt.live; td_false.lt.live];
-
-        BuildContext.branch_merge ctx [ctx_branch; ctx_false];
-
-        let ctx_br = BuildContext.branch graph ctx branch_info in
-        br_side_true.branch_event <- Some ctx_br.current;
-        br_side_false.branch_event <- Some ctx_br.current;
-
-        branch_contexts_and_tds @ [(ctx_br, td_result, td_none_active)]
-    )
-    else branch_contexts_and_tds in
     (* Merge all branch contexts using Later *)
-    let split3 lst =
+    (* let split3 lst =
       let rec aux l (acc1, acc2, acc3) =
         match l with
         | [] -> (List.rev acc1, List.rev acc2, List.rev acc3)
         | (x, y, z)::xs -> aux xs (x::acc1, y::acc2, z::acc3)
       in
       aux lst ([], [], [])
-    in
-    let (branch_ctxs, branch_tds, _) = split3 branch_contexts_and_tds_merged in
+    in *)
+    let (branch_ctxs, branch_tds) = List.split branch_contexts_and_tds in
     let merged_event = List.fold_left (fun acc_event (branch_ctx:build_context) ->
       Typing.event_create graph (`Later (acc_event, branch_ctx.current))
     ) (List.hd branch_ctxs).current (List.tl branch_ctxs) in
@@ -1120,7 +1125,18 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       | hd::_ -> hd.dtype
     in
     
-    {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype}
+    let td_false = {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype} in
+    if is_wildcard_present then (
+      let (outer_branch_info, br_side_true, br_side_false, td_wildcard) = Option.get wildcard_info in
+      outer_branch_info.branches_to <- outer_branch_info.branches_to @ [merged_event];
+      outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_false.lt.live];
+      BuildContext.branch_merge ctx' [td_wildcard.lt.live |> BuildContext.wait graph ctx'];
+      let ctx_br = BuildContext.branch graph ctx' outer_branch_info in
+      br_side_true.branch_event <- Some ctx_br.current;
+      br_side_false.branch_event <- Some ctx_br.current;
+      {w = td_false.w; lt = {live = ctx_br.current; dead = Utils.list_unordered_join td_false.lt.dead td_wildcard.lt.dead}; reg_borrows = Utils.list_unordered_join td_false.reg_borrows td_wildcard.reg_borrows; dtype = td_false.dtype}
+    ) else
+      td_false
     
   | XOffer offer_arms ->
     (* Create branches for each offer arm - all can start in parallel *)

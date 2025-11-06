@@ -14,6 +14,10 @@
 // Include model header, generated from Verilating "top.v"
 #include "Vtop.h"
 
+#if VM_TRACE
+#include <verilated_vcd_c.h>
+#endif
+
 // Legacy function required only so linking works on Cygwin and MSVC++
 double sc_time_stamp() { return 0; }
 
@@ -59,6 +63,14 @@ int main(int argc, char** argv) {
     // "TOP" will be the hierarchical name of the module.
     const std::unique_ptr<Vtop> top{new Vtop{contextp.get(), "TOP"}};
 
+#if VM_TRACE
+    // Initialize VCD trace dump
+    std::unique_ptr<VerilatedVcdC> tfp{new VerilatedVcdC};
+    top->trace(tfp.get(), 9999);  // Trace 99 levels of hierarchy (use a large number for full trace)
+    tfp->open("logs/waveform.vcd");
+    printf("Waveform tracing enabled. Output: logs/waveform.vcd\n");
+#endif
+
     top->clk_i = 0;
     top->rst_ni = !0;
 
@@ -96,8 +108,18 @@ int main(int argc, char** argv) {
 
         top->eval();
 
+#if VM_TRACE
+        // Dump trace data for this cycle
+        tfp->dump(contextp->time());
+#endif
+
         ++ time_cnt;
     }
+
+#if VM_TRACE
+    // Close trace file
+    tfp->close();
+#endif
 
     // Final model cleanup
     top->final();
