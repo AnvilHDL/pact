@@ -261,9 +261,14 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       ) offerings;
       final
     | Lang.StyAtom (Lang.AtomDelay n) ->
-      let next_s = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Delay (CycleDelay n))) false;
-      next_s
+      let temp_current = ref current in
+      List.iter (fun _ ->
+        let intermediate_s = TypeAutomaton.new_state auto false in
+        TypeAutomaton.add_transition auto !temp_current intermediate_s (LabelSet.singleton (Delay (CycleDelay 1))) false;
+        temp_current := intermediate_s
+      ) (List.init n (fun x -> x));
+      !temp_current
+
       
     | Lang.StyAtom (Lang.AtomicAct(Lang.AtomBMsg m)) ->
       let label_is_offering (l : LabelSet.t) =

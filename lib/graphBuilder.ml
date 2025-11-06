@@ -1840,28 +1840,39 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
                 let interface_opt = lookup_interface cunit.session_defs intf_inst.id in
                 (match interface_opt with
                 | Some interface_def ->
-                    (* First, create a unification map: right_endpoint -> left_endpoint for all channels *)
-                    let unification_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
-                      Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
-                    ) Utils.StringMap.empty pool_channels in
-                    
                     (* Map interface parameter names to actual endpoint names from channels *)
                     (* interface_def.d.params is a list of endpoint_def ast_node *)
                     (* intf_inst.params is a list of identifier (actual endpoint names) *)
                     let endpoint_param_names = List.map (fun (ep : Lang.endpoint_def ast_node) -> ep.d.name) interface_def.d.params in
                     let actual_endpoints = intf_inst.params in
                     
-                    (* Build base mapping, but also unify: if actual_ep is a right endpoint, map to left *)
+                    (* Build set of actual endpoints used by this interface *)
+                    let actual_endpoints_set = List.fold_left (fun set ep ->
+                      Utils.StringSet.add ep set
+                    ) Utils.StringSet.empty actual_endpoints in
+                    
+                    (* Create unification map ONLY for channels where at least one endpoint is used by this interface *)
+                    let relevant_unification_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
+                      let left_used = Utils.StringSet.mem chan.d.endpoint_left actual_endpoints_set in
+                      let right_used = Utils.StringSet.mem chan.d.endpoint_right actual_endpoints_set in
+                      if left_used || right_used then
+                        (* At least one endpoint is used - unify both to left *)
+                        Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
+                      else
+                        map
+                    ) Utils.StringMap.empty pool_channels in
+                    
+                    (* Build base mapping, applying unification if actual_ep is a right endpoint *)
                     let base_mapping = List.fold_left2 (fun map param_name actual_ep ->
-                      let unified_ep = match Utils.StringMap.find_opt actual_ep unification_map with
+                      let unified_ep = match Utils.StringMap.find_opt actual_ep relevant_unification_map with
                         | Some left_ep -> left_ep  (* actual_ep is a right endpoint, use left instead *)
                         | None -> actual_ep        (* actual_ep is already a left endpoint or standalone *)
                       in
                       Utils.StringMap.add param_name unified_ep map
                     ) Utils.StringMap.empty endpoint_param_names actual_endpoints in
                     
-                    (* Merge both maps: unification_map provides direct endpoint-to-endpoint mapping *)
-                    Utils.StringMap.fold Utils.StringMap.add unification_map base_mapping
+                    (* Merge: add relevant unifications for direct endpoint-to-endpoint mapping within this interface *)
+                    Utils.StringMap.fold Utils.StringMap.add relevant_unification_map base_mapping
                 | None -> Utils.StringMap.empty)
             | None -> Utils.StringMap.empty
           in
