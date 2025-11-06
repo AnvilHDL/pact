@@ -997,7 +997,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
         let (br_side_false, ctx_true) = BuildContext.branch_side graph ctx outer_branch_info 1 in
         outer_branch_info.branches_to <- [ctx_wildcard.current; ctx_true.current];
         outer_branch_info.branches_val <- [td_result.lt.live];
-        (ctx_true, Some (outer_branch_info, br_side_true, br_side_false, td_result))
+        (ctx_true, Some (outer_branch_info, br_side_true, br_side_false, td_result,ctx_wildcard))
         (* Process the wildcard arm in the true branch *)
       )
       else(ctx ,None) in
@@ -1127,10 +1127,10 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     
     let td_false = {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype} in
     if is_wildcard_present then (
-      let (outer_branch_info, br_side_true, br_side_false, td_wildcard) = Option.get wildcard_info in
+      let (outer_branch_info, br_side_true, br_side_false, td_wildcard,ctx_wildcard) = Option.get wildcard_info in
       outer_branch_info.branches_to <- outer_branch_info.branches_to @ [merged_event];
       outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_false.lt.live];
-      BuildContext.branch_merge ctx' [td_wildcard.lt.live |> BuildContext.wait graph ctx'];
+      BuildContext.branch_merge ctx [ctx'; ctx_wildcard];
       let ctx_br = BuildContext.branch graph ctx' outer_branch_info in
       br_side_true.branch_event <- Some ctx_br.current;
       br_side_false.branch_event <- Some ctx_br.current;
