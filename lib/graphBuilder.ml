@@ -1782,6 +1782,105 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
           let session2 = snd (List.nth session_with_id 1) in
           let id1 = fst (List.hd session_with_id) in
           let id2 = fst (List.nth session_with_id 1) in *)
+          
+          (* Preprocess session types to replace interface parameters with actual endpoint names *)
+          let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.session_type =
+            let replace_endpoint_in_msg_spec (msg_spec : Lang.message_specifier) : Lang.message_specifier =
+              match Utils.StringMap.find_opt msg_spec.endpoint endpoint_mapping with
+              | Some new_endpoint -> {msg_spec with endpoint = new_endpoint}
+              | None -> msg_spec
+            in
+            
+            let replace_in_atomic_action (action : Lang.atomic_action) : Lang.atomic_action =
+              match action with
+              | Lang.AtomBMsg msg_spec -> Lang.AtomBMsg (replace_endpoint_in_msg_spec msg_spec)
+              | Lang.AtomNBMsg msg_spec -> Lang.AtomNBMsg (replace_endpoint_in_msg_spec msg_spec)
+            in
+            
+            let replace_in_action_with_gap (action : Lang.atomic_action_with_gap) : Lang.atomic_action_with_gap =
+              match action with
+              | Lang.AtomDelay n -> Lang.AtomDelay n
+              | Lang.AtomicAct atomic -> Lang.AtomicAct (replace_in_atomic_action atomic)
+            in
+            
+            let rec preprocess_sty (sty : Lang.session_type) : Lang.session_type =
+              match sty with
+              | Lang.StySeq (s1, s2) -> Lang.StySeq (preprocess_sty s1, preprocess_sty s2)
+              | Lang.StyChoice (s1, s2) -> Lang.StyChoice (preprocess_sty s1, preprocess_sty s2)
+              | Lang.StyParallel (s1, s2) -> Lang.StyParallel (preprocess_sty s1, preprocess_sty s2)
+              | Lang.StyFuture s -> Lang.StyFuture (preprocess_sty s)
+              | Lang.StyAtom action -> Lang.StyAtom (replace_in_action_with_gap action)
+              | Lang.StyXOffer offerings ->
+                  let process_offering (off : Lang.offering_session_type) : Lang.offering_session_type =
+                    {
+                      trigger = replace_in_action_with_gap off.trigger;
+                      continuation = Option.map preprocess_sty off.continuation;
+                    }
+                  in
+                  Lang.StyXOffer (List.map process_offering offerings)
+              | Lang.StyOffer offerings ->
+                  let process_offering (off : Lang.offering_session_type) : Lang.offering_session_type =
+                    {
+                      trigger = replace_in_action_with_gap off.trigger;
+                      continuation = Option.map preprocess_sty off.continuation;
+                    }
+                  in
+                  Lang.StyOffer (List.map process_offering offerings)
+              | Lang.StyTrue -> Lang.StyTrue
+            in
+            preprocess_sty sty
+          in
+          
+          (* Build endpoint mapping from interface params to actual endpoints from channels *)
+          (* Additionally, map both left and right endpoints to the left endpoint name *)
+          let build_endpoint_mapping (interface_member : Lang.interface_mem_def ast_node) (pool_channels : Lang.channel_def ast_node list) : identifier Utils.string_map =
+            match interface_member.d.interface_class_id with
+            | Some intf_inst ->
+                (* Look up the interface definition to get parameter names *)
+                let interface_opt = lookup_interface cunit.session_defs intf_inst.id in
+                (match interface_opt with
+                | Some interface_def ->
+                    (* First, create a unification map: right_endpoint -> left_endpoint for all channels *)
+                    let unification_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
+                      Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
+                    ) Utils.StringMap.empty pool_channels in
+                    
+                    (* Map interface parameter names to actual endpoint names from channels *)
+                    (* interface_def.d.params is a list of endpoint_def ast_node *)
+                    (* intf_inst.params is a list of identifier (actual endpoint names) *)
+                    let endpoint_param_names = List.map (fun (ep : Lang.endpoint_def ast_node) -> ep.d.name) interface_def.d.params in
+                    let actual_endpoints = intf_inst.params in
+                    
+                    (* Build base mapping, but also unify: if actual_ep is a right endpoint, map to left *)
+                    let base_mapping = List.fold_left2 (fun map param_name actual_ep ->
+                      let unified_ep = match Utils.StringMap.find_opt actual_ep unification_map with
+                        | Some left_ep -> left_ep  (* actual_ep is a right endpoint, use left instead *)
+                        | None -> actual_ep        (* actual_ep is already a left endpoint or standalone *)
+                      in
+                      Utils.StringMap.add param_name unified_ep map
+                    ) Utils.StringMap.empty endpoint_param_names actual_endpoints in
+                    
+                    (* Merge both maps: unification_map provides direct endpoint-to-endpoint mapping *)
+                    Utils.StringMap.fold Utils.StringMap.add unification_map base_mapping
+                | None -> Utils.StringMap.empty)
+            | None -> Utils.StringMap.empty
+          in
+          
+          (* Apply preprocessing to all session types in the pool instance *)
+          let pool_def = lookup_pool_inst_from_pools ps.d.p_ty cunit.pools ps.span in
+          let session_with_id = List.map2 (fun (sty_node, intf_id) interface_member ->
+            let endpoint_mapping = build_endpoint_mapping interface_member pool_def.d.pool_channels in
+            let preprocessed_sty = preprocess_session_type endpoint_mapping sty_node.d in
+            ({sty_node with d = preprocessed_sty}, intf_id)
+          ) session_with_id pool_def.d.interface_members in
+
+          if config.verbose then
+          (
+            List.iter (fun ((session : session_type ast_node), intf_id) ->
+              Printf.eprintf "[Info] Preprocessed session type for interface %s in pool instance %s of process %s:\n%s\n"
+                intf_id ps.d.p_id module_name (Lang.string_of_protocol session.d)
+            ) session_with_id
+          );
           if not config.disable_session_checks then
           (
               let check, err = SessionCompatiblity.check_compatiblity_multiparty session_with_id config.verbose ps.span in

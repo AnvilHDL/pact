@@ -3,7 +3,7 @@ chan ch {
     left ack : (logic@#1)
 }
 
-interface trywild_interface (ep : left ch) = &(ep.req : #5, ep.ack : #3, *) >> #1 ;
+interface trywild_interface (ep : left ch) = &(ep.req : #5, ep.ack : #3, * : #2) >> #1 ;
 proc tryand(trywild_interface){
     reg cyc : logic[8];
     loop{
@@ -19,6 +19,8 @@ proc tryand(trywild_interface){
             ),
             # => (
                 dprint "[Cycle %d] Nothing recieved in wildcard arm" (*cyc)
+                >> 
+                cycle 2
             )
         } >> 
         dprint "[Cycle %d] completed xoffer" (*cyc) >>
@@ -29,11 +31,19 @@ proc tryand(trywild_interface){
     }
 }
 
+
+interface wildcard_top_interface(pe : right ch) = #4 >> pe.req >> pe.ack >> #1 ;
+
+pool wildcard_pool{
+    ep_le -- ep_ri : ch;
+    i1 : trywild_interface(ep_le);
+    i2 : wildcard_top_interface(ep_ri)
+}
+
 proc test_wildcard_top(){
-    chan ep_le -- ep_ri : ch;
-    spawn tryand(ep_le);
+    pool p : wildcard_pool;
+    spawn tryand[p.i1];
     reg cyc : logic[8];
-    
     loop{
 
         cycle 4 >>

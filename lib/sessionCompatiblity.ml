@@ -207,42 +207,48 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       build st2 choice_state
     | Lang.StyTrue -> 
       raise (TypeError [Text ("True session type should not appear in automaton construction"); Except.codespan_local default_span])
-    | Lang.StyOffer offerings -> (* External choice m1 & m2 *)
+    | Lang.StyXOffer offerings | Lang.StyOffer offerings -> (* External choice m1 & m2 *)
       let final = TypeAutomaton.new_state auto false in
       
       (* Helper to get message_specifier from atomic_action *)
       let get_msg_spec = function
         | Lang.AtomicAct (Lang.AtomBMsg m) -> m
         | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
-        | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
+        | _ -> {endpoint = "*"; msg = "*"}
       in
       let all_msg_specs = List.map (fun (o : offering_session_type) -> get_msg_spec o.Lang.trigger) offerings in
       let all_blocking  = List.for_all (fun (o : offering_session_type) ->
         match o.Lang.trigger with
         | Lang.AtomicAct (Lang.AtomBMsg _) -> true
         | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
-        | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
+        | _ -> true
       ) offerings in
       let all_non_blocking = List.for_all (fun (o : offering_session_type) ->
         match o.Lang.trigger with
         | Lang.AtomicAct (Lang.AtomBMsg _) -> false
         | Lang.AtomicAct (Lang.AtomNBMsg _) -> true
-        | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
+        | _ -> true
+      ) offerings in
+      let wildcard = List.exists (fun (o : offering_session_type) ->
+        match o.Lang.trigger with
+        | Lang.AtomicAct (Lang.AtomBMsg _) -> false
+        | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
+        | _ -> true
       ) offerings in
       if not all_blocking && not all_non_blocking then
         raise(TypeError [Text ("Mixed blocking and non-blocking offerings in external choice"); Except.codespan_local default_span])
-      else if all_blocking then
+      else if all_blocking && (not wildcard) then
         TypeAutomaton.add_transition auto current current (LabelSet.singleton (OfferingDelay all_msg_specs)) false;
 
       List.iter (fun offer ->
         let branch_s = TypeAutomaton.new_state auto false in
-        let label, _is_blocking = match offer.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg m) -> (Action(BlockAction m), true)
-          | Lang.AtomicAct (Lang.AtomNBMsg m) -> (Action(ImmediateAction m), false)
-          | _ -> raise (TypeError [Text ("[Unimplemented] Only message actions allowed in external choice offerings"); Except.codespan_local default_span])
+        let label, is_epsilon = match offer.Lang.trigger with
+          | Lang.AtomicAct (Lang.AtomBMsg m) -> LabelSet.singleton (Action(BlockAction m)), false
+          | Lang.AtomicAct (Lang.AtomNBMsg m) -> LabelSet.singleton (Action(ImmediateAction m)), false
+          | _ -> LabelSet.empty, true (*add epsilon transition*)
         in
-        TypeAutomaton.add_transition auto current branch_s (LabelSet.singleton label) false;
-        
+        TypeAutomaton.add_transition auto current branch_s label is_epsilon;
+
         let branch_end = match offer.Lang.continuation with
           | Some cont -> build cont branch_s
           | None -> branch_s (* If no continuation, the branch ends immediately *)
@@ -254,10 +260,6 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         
       ) offerings;
       final
-    | Lang.StyXOffer _offerings -> (
-      raise (TypeError [Text ("Exclusive Offer is not implemented in session automaton construction"); Except.codespan_local default_span])
-    )
-
     | Lang.StyAtom (Lang.AtomDelay n) ->
       let next_s = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Delay (CycleDelay n))) false;
