@@ -91,7 +91,13 @@ let debug_types _out config =
       let open Lang in
       let open SessionCompatiblityv2 in
      Printf.eprintf "Pool %s: \n" pool.d.pool_id;
-      if List.length pool.d.interface_members > 2 then raise (Failure "Unimplemented: pools with more than 2 interface members")
+      if List.length pool.d.interface_members > 1 then
+        (
+          let open SessionCompatiblityv2 in
+        let (check, msg) = check_compatibility_multiparty pool in
+        Printf.eprintf "[Multiparty Compatibility]: %b \n\n" (check);
+        Printf.eprintf "Message: %s \n\n" (msg);
+        )
       else 
         (
         let im1 = List.nth pool.d.interface_members 0 in

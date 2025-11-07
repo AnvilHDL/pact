@@ -29,3 +29,11 @@ pool p4{
     i1 : ep.req + ep.ack;
     i2 : ep.req
 }
+
+pool p5{
+    ep_1_le -- ep_1_ri : ch,
+    ep_2_le -- ep_2_ri : ch;
+    i1 : ep_1.req;
+    i2 : ep_1.req + ep_2.req;
+    i3 : ep_2.req
+}

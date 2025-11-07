@@ -1901,6 +1901,10 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
             ({sty_node with d = preprocessed_sty}, intf_id)
           ) session_with_id pool_def.d.interface_members in
 
+          (* Map each left endpoint to the list of all interface IDs that use it *)
+          (* This includes interfaces that use the left endpoint directly OR use its paired right endpoint *)
+
+          
           if config.verbose then
           (
             List.iter (fun ((session : session_type ast_node), intf_id) ->
@@ -1908,9 +1912,11 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
                 intf_id ps.d.p_id module_name (Lang.string_of_protocol session.d)
             ) session_with_id
           );
+          let ep_itfc_id_map = SessionCompatiblityv2.create_ep_id_intfc_id_map pool_def in
+
           if not config.disable_session_checks then
           (
-              let check, err = SessionCompatiblity.check_compatiblity_multiparty session_with_id config.verbose ps.span in
+              let check, err = SessionCompatiblityv2.compatiblity_check_multiparty session_with_id ep_itfc_id_map config.verbose ps.span in
               let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
               if not check then
                 raise (Except.TypeError (

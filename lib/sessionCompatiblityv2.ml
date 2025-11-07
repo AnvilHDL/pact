@@ -1,6 +1,14 @@
 
 open Lang
 
+(* Helper function to find index of element in list *)
+let rec find_index_helper pred lst idx =
+    match lst with
+    | [] -> None
+    | x :: xs -> if pred x then Some idx else find_index_helper pred xs (idx + 1)
+
+let find_index pred lst = find_index_helper pred lst 0
+
 type message_or_delay = 
 | Msg of message_specifier
 | Delay of int 
@@ -395,4 +403,209 @@ let compatiblity_check_binary (sty1_ast : session_type ast_node) (sty2_ast : ses
             result
     in
     check_with_memo sty1_ast sty2_ast
+
+let create_ep_id_intfc_id_map (pool_def_o : interface_pool_def ast_node) : identifier list Utils.string_map =
+            (* First, build a map from right endpoints to their corresponding left endpoints *)
+            let right_to_left_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
+              Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
+            ) Utils.StringMap.empty pool_def_o.d.pool_channels in
+            
+            (* For each left endpoint, collect all interface IDs that use it *)
+            let all_left_endpoints = List.map (fun (chan : Lang.channel_def ast_node) -> chan.d.endpoint_left) pool_def_o.d.pool_channels in
+            let intfc_ids = List.map (fun (intf_member : interface_mem_def ast_node) -> intf_member.d.inf_mem_id) pool_def_o.d.interface_members in
+            List.fold_left (fun map left_ep ->
+              (* Find all interfaces that use this left endpoint (either directly or via its right endpoint) *)
+              let interface_ids = List.fold_left2 (fun acc intf_id interface_member ->
+                match interface_member.d.interface_class_id with
+                | Some intf_inst ->
+                    (* Check if this interface uses the left endpoint directly OR uses its paired right endpoint *)
+                    let uses_this_endpoint = List.exists (fun actual_ep ->
+                      actual_ep = left_ep || 
+                      (match Utils.StringMap.find_opt actual_ep right_to_left_map with
+                       | Some mapped_left -> mapped_left = left_ep
+                       | None -> false)
+                    ) intf_inst.params in
+                    if uses_this_endpoint then intf_id :: acc else acc
+                | None -> acc
+              ) []  intfc_ids pool_def_o.d.interface_members in
+              
+              if interface_ids <> [] then
+                Utils.StringMap.add left_ep (List.rev interface_ids) map
+              else
+                map
+            ) Utils.StringMap.empty all_left_endpoints
+
+
+
+let product_acts (gc_list : RGCollections.t list) =
+    (* for each element in the collection,do a product on actions only *)
+    let gc_list_projected_to_acts = List.map (fun rgcoll ->
+        RGCollections.map (fun rgset ->
+            RGSet.map (fun acm ->
+                {acts = acm.acts; cont = StyTrue}
+            ) rgset
+        ) rgcoll
+    ) gc_list in
+
+    let rec fold_product acc = function
+        | [] -> acc
+        | rgcoll :: rest ->
+            let new_acc = doubleProduct acc rgcoll in
+            fold_product new_acc rest
+    in
+    fold_product (List.hd gc_list_projected_to_acts) (List.tl gc_list_projected_to_acts) 
+
+
+
+
+let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identifier) list)) (_ep_intfc_map : identifier list Utils.string_map) (verbose : bool) (_span : code_span) =
+    (* Memoization table to detect cycles and cache results *)
+    let visited = Hashtbl.create 16 in
+
+    let rec check_multiparty_with_memo (session_ids: (((session_type ast_node)*identifier) list)) : (bool * string) =
+        let key = List.map (fun (sty_ast, id) -> (sty_ast.d, id)) session_ids in
+
+        match Hashtbl.find_opt visited key with
+        | Some result -> result
+        | None ->
+            Hashtbl.add visited key (true, "Assumed true for cycle detection");
+
+            let sty_list = List.map (fun (sty_ast, _) -> sty_ast.d) session_ids in
+            let result = match sty_list with
+            | [] | [_] -> (true, "Single or no session, trivially compatible")
+            | [_; _] ->
+                let res = compatiblity_check_binary (List.nth session_ids 0 |> fst) (List.nth session_ids 1 |> fst) in
+                if res then (true, "Binary compatibility succeeded")
+                else (false, "Binary compatibility failed")
+            | _ ->
+                let sty_list_filtered = List.filter (fun sty -> 
+                        match sty with
+                        | StyTrue -> true
+                        | StyAtom _-> true
+                        | _ -> false
+                    ) sty_list in
+                (* now for this list check if we have some matched types, checking two at a time , filter them out*)                
+                let sty_list_satisfied = ref [] in
+                let rec helper remaining_stys =
+                    match remaining_stys with
+                    | [] -> ()
+                    | sty1 :: rest ->
+                        let matched = ref false in
+                        let rec try_match sty_list_to_try =
+                            match sty_list_to_try with
+                            | [] -> ()
+                            | sty2 :: rest2 ->
+                                match sty1, sty2 with
+                                | StyTrue, StyTrue -> sty_list_satisfied := sty1 :: sty2 :: !sty_list_satisfied; matched := true
+                                | StyAtom (AtomDelay d1), StyAtom (AtomDelay d2) when d1 = d2 -> sty_list_satisfied := sty1 :: sty2 :: !sty_list_satisfied; matched := true
+                                | StyAtom (AtomicAct AtomNBMsg m1), StyAtom (AtomicAct AtomNBMsg m2) when m1 = m2 -> sty_list_satisfied := sty1 :: sty2 :: !sty_list_satisfied; matched := true
+                                | StyAtom (AtomicAct (AtomBMsg m1)), StyAtom (AtomicAct (AtomBMsg m2)) when m1 = m2 -> sty_list_satisfied := sty1 :: sty2 :: !sty_list_satisfied; matched := true
+                                | StyAtom (AtomicAct AtomNBMsg m1), StyAtom (AtomicAct (AtomBMsg m2)) when m1 = m2 -> sty_list_satisfied := sty1 :: sty2 :: !sty_list_satisfied; matched := true
+                                | StyAtom (AtomicAct (AtomBMsg m1)), StyAtom (AtomicAct AtomNBMsg m2) when m1 = m2 -> sty_list_satisfied := sty1 :: sty2 :: !sty_list_satisfied; matched := true
+                                | _ -> try_match rest2
+                        in
+                        try_match rest;
+                        if !matched then
+                            let rest_filtered = List.filter (fun sty -> not (List.mem sty !sty_list_satisfied)) rest in
+                            helper rest_filtered
+                        else
+                            helper rest
+                in
+                helper sty_list_filtered;
+                let remaining_stys = List.filter (fun sty -> not (List.mem sty !sty_list_satisfied)) sty_list in
+                if remaining_stys = [] then
+                    (true, "All session types satisfied")
+                else if List.length remaining_stys = 1 then
+                    (false, "Only one session type remaining, cannot satisfy multiparty compatibility")
+                else
+                    (* For each session type, check if its reliability can be satisfied by 
+                       the product of guarantees from all other processes *)
+                    let all_compatible = List.for_all (fun sty ->
+                        let rc_sty = constructReliabilityCollection sty in
+                        let other_stys = List.filter (fun other_sty -> other_sty <> sty) remaining_stys in
+                        let gc_list = List.map (fun other_sty -> constructGuaranteeCollection other_sty) other_stys in
+                        let prod_gc_others = product_acts gc_list in
+                        
+                        if verbose then begin
+                            Printf.eprintf "\nChecking session type: %s\n" (string_of_protocol sty);
+                            Printf.eprintf "Reliability collection:\n%s\n" (string_of_rgcollections rc_sty);
+                            Printf.eprintf "Product of other guarantees:\n%s\n" (string_of_rgcollections prod_gc_others);
+                        end;
+                        
+                        (* Check if each reliability requirement can be satisfied *)
+                        RGCollections.exists (fun rgset_rely ->
+                            match find_subset rgset_rely prod_gc_others with
+                            | None -> 
+                                if verbose then
+                                    Printf.eprintf "Could not satisfy reliability requirement: %s\n" (string_of_rgset rgset_rely);
+                                false
+                            | Some rgset_guarantee ->
+                                if verbose then
+                                    Printf.eprintf "Reliability requirement satisfied: %s\n" (string_of_rgset rgset_rely);
+                                
+                                (* For each action in the reliability set, recursively check continuations *)
+                                RGSet.for_all (fun acm_rely ->
+                                    match find_act acm_rely rgset_guarantee with
+                                    | None -> 
+                                        if verbose then
+                                            Printf.eprintf "ERROR: Action not found in guarantee set\n";
+                                        false
+                                    | Some _ ->
+                                        (* Find the continuations from each contributing process *)
+                                        (* Since prod_gc_others is a product of guarantees, we need to find 
+                                           the original continuations from each process's guarantee collection *)
+                                        let other_stys_with_idx = List.mapi (fun idx sty -> (idx, sty)) other_stys in
+                                        
+                                        (* For now, we'll get continuations by looking at each process's guarantee *)
+                                        let all_continuations = List.filter_map (fun (idx, _other_sty) ->
+                                            let gc_other = List.nth gc_list idx in
+                                            (* Find if this process has this action in any of its guarantee sets *)
+                                            let found = RGCollections.fold (fun rgset acc_opt ->
+                                                match acc_opt with
+                                                | Some _ -> acc_opt
+                                                | None ->
+                                                    match find_act acm_rely rgset with
+                                                    | Some acm -> Some ({d = acm.cont; span = code_span_dummy}, "")
+                                                    | None -> None
+                                            ) gc_other None in
+                                            found
+                                        ) other_stys_with_idx in
+                                        
+                                        (* Add the current process's continuation *)
+                                        let all_conts = ({d = acm_rely.cont; span = code_span_dummy}, "") :: all_continuations in
+                                        
+                                        if verbose then begin
+                                            Printf.eprintf "Action %s: checking %d continuations\n"
+                                                (string_of_actionset acm_rely.acts)
+                                                (List.length all_conts);
+                                            List.iter (fun (cont, _) ->
+                                                Printf.eprintf "  - %s\n" (string_of_protocol cont.d)
+                                            ) all_conts;
+                                        end;
+                                        
+                                        (* Recursively check multiparty compatibility of continuations *)
+                                        let (compatible, _) = check_multiparty_with_memo all_conts in
+                                        compatible
+                                ) rgset_rely
+                        ) rc_sty
+                    ) remaining_stys in
+                    
+                    if all_compatible then
+                        (true, "Multiparty compatibility check passed")
+                    else
+                        (false, "Multiparty compatibility check failed")
+            in
+            Hashtbl.replace visited key result;
+            result
+    in
+    check_multiparty_with_memo session_ids
     
+
+let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) : (bool * string) =
+        let ep_intfc_map = create_ep_id_intfc_id_map pool_def in
+        let session_ids = List.filter_map (fun intf_member ->
+            match intf_member.d.interface_def with
+            | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
+            | None -> raise (Failure "Interface member missing definition")
+        ) pool_def.d.interface_members in
+        compatiblity_check_multiparty session_ids ep_intfc_map false pool_def.span
