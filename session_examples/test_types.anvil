@@ -1,0 +1,1 @@
+interface foo (ep : left ch) = ep.req >> ep.res ;

@@ -63,8 +63,35 @@ let rec parse_recursive cunits parsed_files config filename =
     ) cunit.imports
   )
 
+let debug_types _out config =
+  (* parse types first *)
+  let toplevel_filename = List.hd config.Config.input_filenames in
+  let cunits = ref [] in
+  (
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    with
+      | Except.TypeError msg ->
+        (Except.Text "Type error:")::msg
+          |> raise_compile_error None
+  );
+  let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
+    let open Lang in
+    let open SessionCompatiblityv2 in
+  List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
+
+    let sty_str = string_of_protocol sdef.d.body.d in
+    Printf.eprintf "Session Type %s:\n%s\n\n" sdef.d.name sty_str;
+    Printf.eprintf "Reliability Sets:\n%s\n\n" (string_of_rgcollections (constructReliabilitySet sdef.d.body.d));
+  )session_type_defs
+      
+
 let compile out config =
   let open Config in
+  if config.debug_mode then(
+    Printf.eprintf "Debug mode enabled\n";
+    debug_types out config
+  )
+  else(
   let toplevel_filename = List.hd config.input_filenames in
   let cunits = ref [] in
   (
@@ -171,3 +198,4 @@ let compile out config =
     Codegen.generate out config
      {graphs with EventGraph.external_event_graphs = all_event_graphs}) all_collections
 
+  )

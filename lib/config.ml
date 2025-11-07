@@ -1,4 +1,5 @@
 type compile_config = {
+  debug_mode : bool;
   verbose: bool;
   disable_lt_checks : bool;
   disable_session_checks : bool;
@@ -9,6 +10,7 @@ type compile_config = {
 }
 
 let parse_args () : compile_config =
+  let debug_mode = ref false in
   let verbose = ref false
   and disable_lt_checks = ref false
   and disable_session_checks = ref false
@@ -26,11 +28,13 @@ let parse_args () : compile_config =
       ("-disable-session-checks", Arg.Set disable_session_checks, "Disable session type checks");
       ("-weak-typecasts", Arg.Set weak_typecasts, "Allow Typecasts");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default)");
-      ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds")
+      ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds");
+      ("-debug", Arg.Set debug_mode, "Enable debug mode for testing")
     ]
     add_input_filename
     "anvil [-verbose] [-disable-lt-checks] [-O <opt-level>] [-two-round] <file1> [<file2>] ...";
   {
+    debug_mode = !debug_mode;
     verbose = !verbose;
     disable_lt_checks = !disable_lt_checks;
     disable_session_checks = !disable_session_checks;
