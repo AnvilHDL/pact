@@ -80,8 +80,9 @@ let debug_types _out config =
   List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
 
     let sty_str = string_of_protocol sdef.d.body.d in
-    Printf.eprintf "Session Type %s:\n%s\n\n" sdef.d.name sty_str;
-    Printf.eprintf "Reliability Sets:\n%s\n\n" (string_of_rgcollections (constructReliabilitySet sdef.d.body.d));
+    Printf.eprintf "Session Type %s: %s \n" sdef.d.name sty_str;
+    Printf.eprintf "\nReliability %s\n\n" (string_of_rgcollections (constructReliabilitySet sdef.d.body.d));
+    Printf.eprintf "\nGuarantee %s\n\n" (string_of_rgcollections (constructGuaranteeSet sdef.d.body.d));
   )session_type_defs
       
 

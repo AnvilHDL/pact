@@ -133,7 +133,7 @@ let string_of_rgset (rgset : RGSet.t) : string =
 let string_of_rgcollections (rgcoll : RGCollections.t) : string =
     let elements = RGCollections.elements rgcoll in
     let element_strings = List.map string_of_rgset elements in
-    "RGCollections: { " ^ (String.concat " , " element_strings) ^ " }"
+    "Collection: {\n " ^ (String.concat " ,\n " element_strings) ^ " \n}"
 
 
 let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
@@ -141,9 +141,9 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
   match sty with
   | StyTrue -> 
       RGCollections.empty
-  | StyAtom (AtomicAct AtomNBMsg m) ->
-      RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Msg m); cont = StyTrue})
-  | StyAtom (AtomicAct (AtomBMsg m)) ->
+  | StyAtom (AtomicAct AtomBMsg m) ->
+      RGCollections.union (RGCollections.singleton(RGSet.singleton {acts = ActionSet.singleton (Msg m); cont = StyTrue})) (RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty}))
+  | StyAtom (AtomicAct (AtomNBMsg m)) ->
       RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Msg m); cont = StyTrue})
   | StyAtom (AtomDelay d) when d > 1 ->
         RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyAtom (AtomDelay (d - 1))})
@@ -154,11 +154,14 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
       (* the action set is regset1 the continuation is for all elelment of the set we create sequence of the type *)
       RGCollections.fold (fun rgset acc ->
           RGSet.fold (fun acm acc' ->
-              let new_cont = StySeq (acm.cont, sty2) in
+            let new_cont =match acm.cont with
+            | StyTrue -> sty2
+            | _ -> StySeq (acm.cont, sty2)
+          in
               let new_acm = RGSet.singleton {acts = acm.acts; cont = new_cont} in
               RGCollections.add new_acm acc'
           ) rgset acc
-      ) rgSet1 RGCollections.empty
+      ) rgSet1 RGCollections.empty 
   | StyParallel (sty1, sty2) ->
         let rgSet1 = constructReliabilitySet sty1 in
         let rgSet2 = constructReliabilitySet sty2 in
@@ -175,10 +178,18 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
     | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     ) ps in
+    let all_blocking = List.for_all (fun oty ->
+      match oty.trigger with
+      | AtomicAct (AtomBMsg _) -> true
+      | _ -> false
+    ) ps in
+        
     let parallelPerm = createParallelPermutations rgSets in
+    let new_set = if (not all_blocking) then rgSets@parallelPerm else rgSets@parallelPerm@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
     List.fold_left (fun acc rgset ->
         RGCollections.add rgset acc
-    ) RGCollections.empty parallelPerm
+    ) RGCollections.empty new_set
+      
   | StyXOffer ps ->
     (*trigger continuation list give back as RgSets*)
    let rgSets = List.map (fun oty ->
@@ -187,6 +198,15 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
     | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     ) ps in
+    let all_blocking = List.for_all (fun oty ->
+      match oty.trigger with
+      | AtomicAct (AtomBMsg _) -> true
+      | _ -> false
+     ) ps in 
+    if all_blocking then
+      let new_set = rgSets@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
+      RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
+    else
     let rgCollections = RGCollections.of_list rgSets in
     rgCollections
   | StyFuture ps ->
@@ -195,3 +215,82 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
     let rgCollection = constructReliabilitySet ps in
     setProduct futureCollection rgCollection
   | _ -> RGCollections.empty
+
+
+let rec constructGuaranteeSet (sty : session_type) : RGCollections.t =
+    match sty with
+    | StyTrue -> 
+        RGCollections.empty
+    | StyAtom (AtomicAct AtomNBMsg m) ->
+        RGCollections.singleton(RGSet.singleton {acts = ActionSet.singleton (Msg m); cont = StyTrue})
+    | StyAtom (AtomicAct (AtomBMsg m)) ->
+        RGCollections.singleton(RGSet.union (RGSet.singleton {acts = ActionSet.singleton (Msg m); cont = StyTrue}) (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty}))
+    | StyAtom (AtomDelay d) when d > 1 ->
+          RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyAtom (AtomDelay (d - 1))})
+    | StyAtom (AtomDelay 1) ->
+          RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyTrue})
+    | StySeq (sty1, sty2) ->
+        let rgSet1 = constructGuaranteeSet sty1 in
+        (* the action set is regset1 the continuation is for all elelment of the set we create sequence of the type *)
+        RGCollections.fold (fun rgset acc ->
+            RGSet.fold (fun acm acc' ->
+              let new_cont =match acm.cont with
+              | StyTrue -> sty2
+              | _ -> StySeq (acm.cont, sty2)
+            in
+                let new_acm = RGSet.singleton {acts = acm.acts; cont = new_cont} in
+                RGCollections.add new_acm acc'
+            ) rgset acc
+        ) rgSet1 RGCollections.empty 
+    | StyParallel (sty1, sty2) ->
+        (*same as rely set  *)
+            let rgSet1 = constructGuaranteeSet sty1 in
+            let rgSet2 = constructGuaranteeSet sty2 in
+            doubleProduct rgSet1 rgSet2
+    | StyChoice (sty1, sty2) ->
+            let rgSet1 = constructGuaranteeSet sty1 in
+            let rgSet2 = constructGuaranteeSet sty2 in
+            RGCollections.union rgSet1 rgSet2
+    | StyOffer ps ->
+      (*trigger continuation list give back as RgSets*)
+      let rgSets = List.map (fun oty ->
+        match oty.trigger with
+        | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+        | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+        | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+      ) ps in
+      let parallelPerm = createParallelPermutations rgSets in
+      let all_blocking = List.for_all (fun oty ->
+        match oty.trigger with
+        | AtomicAct (AtomBMsg _) -> true
+        | _ -> false
+        ) ps in
+      let new_set =  if (not all_blocking) then rgSets@parallelPerm else rgSets@parallelPerm@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
+     RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
+    | StyXOffer ps ->
+        (*trigger continuation list give back as RgSets*)
+         let rgSets = List.map (fun oty ->
+            match oty.trigger with
+            | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+            | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+            | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+        ) ps in
+        let all_blocking = List.for_all (fun oty ->
+          match oty.trigger with
+          | AtomicAct (AtomBMsg _) -> true
+          | _ -> false
+         ) ps in
+        if all_blocking then
+          let new_set = rgSets@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
+          RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
+        else
+          let rgCollections = RGCollections.of_list rgSets in
+          rgCollections
+    | StyFuture ps ->
+        let futureCollection = RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = ps}) in
+        let rgCollection = constructGuaranteeSet ps in
+        RGCollections.union futureCollection rgCollection
+     | _ -> RGCollections.empty
+    
+
+    
