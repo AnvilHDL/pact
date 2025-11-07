@@ -11,3 +11,21 @@ pool p1 {
     i1 : (ep.req >> ep.ack) ;
     i2 : (ep.req || ep.ack)
 }
+
+pool p2 {
+    ep_le -- ep_ri : ch;
+    i1 : (ep.req + ep.ack) ;
+    i2 : &(ep.req , ep.ack)
+}
+
+pool p3{
+    ep_le -- ep_ri : ch;
+    i1 : (ep.req + ep.ack) >> (ep.ack + ep.req);
+    i2 : &(ep.req : ep.ack, ep.ack : ep.req)
+}
+
+pool p4{
+    ep_le -- ep_ri : ch;
+    i1 : ep.req + ep.ack;
+    i2 : ep.req
+}

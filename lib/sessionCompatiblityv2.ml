@@ -355,7 +355,7 @@ let compatiblity_check_binary (sty1_ast : session_type ast_node) (sty2_ast : ses
         | Some result -> result
         | None ->
             (* Assume true initially for cycles, then verify *)
-            Hashtbl.add visited key true;
+            Hashtbl.add visited key false;
             
             let sty1 = sty1_ast.d in
             let sty2 = sty2_ast.d in
@@ -378,11 +378,15 @@ let compatiblity_check_binary (sty1_ast : session_type ast_node) (sty2_ast : ses
             | StyAtom (AtomicAct (AtomBMsg m1)), StyAtom (AtomicAct AtomNBMsg m2) ->
                 m1 = m2
             | _ ->
-                let obligations_1 = match_obligations check_with_memo (constructReliabilityCollection sty1) (constructGuaranteeCollection sty2) sty1_ast.span sty2_ast.span in
+                let rc1 = constructReliabilityCollection sty1 in
+                let gc2 = constructGuaranteeCollection sty2 in
+                let obligations_1 = match_obligations check_with_memo rc1 gc2 sty1_ast.span sty2_ast.span in
                   if obligations_1 then
                     (
+                        let rc2 = constructReliabilityCollection sty2 in
+                        let gc1 = constructGuaranteeCollection sty1 in
                     Printf.eprintf "Type 1: obligations matched for %s by %s\n\n" (string_of_protocol sty1) (string_of_protocol sty2);
-                    let obligations2 = match_obligations check_with_memo (constructReliabilityCollection sty2) (constructGuaranteeCollection sty1) sty2_ast.span sty1_ast.span in
+                    let obligations2 = match_obligations check_with_memo rc2 gc1 sty2_ast.span sty1_ast.span in
                       if obligations2 then ( Printf.eprintf "Type 2: obligations matched for %s by %s\n\n" (string_of_protocol sty2) (string_of_protocol sty1); true) else false
                       )
                   else false

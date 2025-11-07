@@ -110,7 +110,7 @@ let debug_types _out config =
           compatiblity_check_binary
             {d = im1_sty; span = pool.span}
             {d = im2_sty; span = pool.span} in
-        Printf.eprintf "  Compatiblity: %b \n" (compatiblity)
+        Printf.eprintf "[Compatibility]: %b \n\n" (compatiblity)
         )
   )pools;
 
