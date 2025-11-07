@@ -1,3 +1,13 @@
 interface a (ep : left ch) = ep.req + ep.res ;
 interface b (ep : right ch) = ep.req || ep.res ;
 interface c (ep : left ch) = &(ep.req: ep.res, ep.res:ep.req) ;
+
+chan ch{
+    left req : (logic@#1),
+    right ack : (logic@#1)
+}
+pool p1 {
+    ep_le -- ep_ri : ch;
+    i1 : (ep.req >> ep.ack) ;
+    i2 : (ep.req || ep.ack)
+}

@@ -81,9 +81,40 @@ let debug_types _out config =
 
     let sty_str = string_of_protocol sdef.d.body.d in
     Printf.eprintf "Session Type %s: %s \n" sdef.d.name sty_str;
-    Printf.eprintf "\nReliability %s\n\n" (string_of_rgcollections (constructReliabilitySet sdef.d.body.d));
-    Printf.eprintf "\nGuarantee %s\n\n" (string_of_rgcollections (constructGuaranteeSet sdef.d.body.d));
-  )session_type_defs
+    Printf.eprintf "\nReliability %s\n\n" (string_of_rgcollections (constructReliabilityCollection sdef.d.body.d));
+    Printf.eprintf "\nGuarantee %s\n\n" (string_of_rgcollections (constructGuaranteeCollection sdef.d.body.d));
+  )session_type_defs;
+  Printf.eprintf "\nPool Compatiblity Checks:\n\n";
+
+  let pools = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
+  List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
+      let open Lang in
+      let open SessionCompatiblityv2 in
+     Printf.eprintf "Pool %s: \n" pool.d.pool_id;
+      if List.length pool.d.interface_members > 2 then raise (Failure "Unimplemented: pools with more than 2 interface members")
+      else 
+        (
+        let im1 = List.nth pool.d.interface_members 0 in
+        let im2 = List.nth pool.d.interface_members 1 in
+        if im1.d.interface_def = None || im2.d.interface_def = None then
+          raise (Failure "Unimplemented: pool interface members without interface definitions");
+        let im1_sty = Option.get im1.d.interface_def in
+        let im2_sty = Option.get im2.d.interface_def in
+        Printf.eprintf "Interface Member 1: %s \n\n" (string_of_protocol im1_sty);
+        Printf.eprintf "Interface Member 2: %s \n\n" (string_of_protocol im2_sty);
+        Printf.eprintf "Reliability 1: %s \n\n" (string_of_rgcollections (constructReliabilityCollection im1_sty));
+        Printf.eprintf "Guarantee 2: %s \n\n" (string_of_rgcollections (constructGuaranteeCollection im2_sty));
+        Printf.eprintf "Reliability 2: %s \n\n" (string_of_rgcollections (constructReliabilityCollection im2_sty));
+        Printf.eprintf "Guarantee 1: %s \n\n" (string_of_rgcollections (constructGuaranteeCollection im1_sty));
+        let compatiblity = 
+          compatiblity_check_binary
+            {d = im1_sty; span = pool.span}
+            {d = im2_sty; span = pool.span} in
+        Printf.eprintf "  Compatiblity: %b \n" (compatiblity)
+        )
+  )pools;
+
+  Printf.eprintf "\n"
       
 
 let compile out config =

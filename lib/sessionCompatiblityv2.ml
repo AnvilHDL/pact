@@ -30,6 +30,24 @@ module MessageOrDelay = struct
 end
 
 module ActionSet = Set.Make(MessageOrDelay)
+(* special union function delay and some message is equivalent to message ignores delay*)
+let special_union (set1 : ActionSet.t) (set2 : ActionSet.t) : ActionSet.t =
+    let has_msg = 
+        ActionSet.exists (function
+            | Msg _ -> true
+            | _ -> false
+        ) set1 || ActionSet.exists (function
+            | Msg _ -> true
+            | _ -> false
+        ) set2
+    in
+    if has_msg then
+        ActionSet.filter (function
+            | Delay _ -> false
+            | _ -> true
+        ) (ActionSet.union set1 set2)
+    else
+        ActionSet.union set1 set2
 
 type act_continuation_map = {
     acts : ActionSet.t;  (* Now a set of actions *)
@@ -43,9 +61,10 @@ module RGSet = Set.Make(struct
         ActionSet.equal a.acts b.acts && a.cont = b.cont
 
     let compare = fun a b ->
-        ActionSet.compare a.acts b.acts
+        let c1 = ActionSet.compare a.acts b.acts in
+        if c1 <> 0 then c1
+        else Stdlib.compare a.cont b.cont
 
-    
 end)
 
 module RGCollections = Set.Make(struct
@@ -54,8 +73,23 @@ module RGCollections = Set.Make(struct
         RGSet.compare a b
 end)
 
+let find_subset_acts (se1 : RGSet.t) (se2 : RGSet.t) : bool =
+    RGSet.for_all (fun acm1 ->
+        RGSet.exists (fun acm2 ->
+            ActionSet.equal acm1.acts acm2.acts
+        ) se2
+    ) se1
 
 
+let find_subset (se1 : RGSet.t) (collection : RGCollections.t) : RGSet.t option =
+  RGCollections.elements collection
+  |> List.find_opt (fun se2 -> find_subset_acts se1 se2)
+
+let find_act (acm1 : act_continuation_map) (rgset2 : RGSet.t) : act_continuation_map option =
+    RGSet.elements rgset2
+    |> List.find_opt (fun acm2 ->
+        ActionSet.equal acm1.acts acm2.acts
+    )
 
 
 
@@ -81,8 +115,12 @@ let doubleProduct(set1 : RGCollections.t) (set2 : RGCollections.t) : RGCollectio
       let product_set = RGSet.fold (fun acm1 inner_acc ->
         RGSet.fold (fun acm2 inner_acc' ->
           (* Combine the actions from both act_continuation_maps *)
-          let combined_acts = ActionSet.union acm1.acts acm2.acts in
-          let combined_acm = {acts = combined_acts; cont = StyParallel (acm1.cont, acm2.cont)} in
+          let combined_acts = special_union acm1.acts acm2.acts in
+          let cont' = match (acm1.cont, acm2.cont) with
+            | (StyTrue, _) -> acm2.cont
+            | (_, StyTrue) -> acm1.cont
+            | _ -> StyParallel (acm1.cont, acm2.cont) in
+          let combined_acm = {acts = combined_acts; cont = cont'} in
           RGSet.add combined_acm inner_acc'
         ) rgset2 inner_acc
       ) rgset1 RGSet.empty in
@@ -136,7 +174,7 @@ let string_of_rgcollections (rgcoll : RGCollections.t) : string =
     "Collection: {\n " ^ (String.concat " ,\n " element_strings) ^ " \n}"
 
 
-let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
+let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
 
   match sty with
   | StyTrue -> 
@@ -150,7 +188,7 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
   | StyAtom (AtomDelay 1) ->
         RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyTrue})
   | StySeq (sty1, sty2) ->
-      let rgSet1 = constructReliabilitySet sty1 in
+      let rgSet1 = constructReliabilityCollection sty1 in
       (* the action set is regset1 the continuation is for all elelment of the set we create sequence of the type *)
       RGCollections.fold (fun rgset acc ->
           RGSet.fold (fun acm acc' ->
@@ -163,12 +201,12 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
           ) rgset acc
       ) rgSet1 RGCollections.empty 
   | StyParallel (sty1, sty2) ->
-        let rgSet1 = constructReliabilitySet sty1 in
-        let rgSet2 = constructReliabilitySet sty2 in
+        let rgSet1 = constructReliabilityCollection sty1 in
+        let rgSet2 = constructReliabilityCollection sty2 in
         doubleProduct rgSet1 rgSet2
   | StyChoice (sty1, sty2) ->
-        let rgSet1 = constructReliabilitySet sty1 in
-        let rgSet2 = constructReliabilitySet sty2 in
+        let rgSet1 = constructReliabilityCollection sty1 in
+        let rgSet2 = constructReliabilityCollection sty2 in
         setProduct rgSet1 rgSet2
   | StyOffer ps ->
     (*trigger continuation list give back as RgSets*)
@@ -212,12 +250,12 @@ let rec constructReliabilitySet (sty : session_type) : RGCollections.t =
   | StyFuture ps ->
     (*trigger continuation list give back as RgSets*)
     let futureCollection = RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = ps}) in
-    let rgCollection = constructReliabilitySet ps in
+    let rgCollection = constructReliabilityCollection ps in
     setProduct futureCollection rgCollection
   | _ -> RGCollections.empty
 
 
-let rec constructGuaranteeSet (sty : session_type) : RGCollections.t =
+let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
     match sty with
     | StyTrue -> 
         RGCollections.empty
@@ -230,7 +268,7 @@ let rec constructGuaranteeSet (sty : session_type) : RGCollections.t =
     | StyAtom (AtomDelay 1) ->
           RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyTrue})
     | StySeq (sty1, sty2) ->
-        let rgSet1 = constructGuaranteeSet sty1 in
+        let rgSet1 = constructGuaranteeCollection sty1 in
         (* the action set is regset1 the continuation is for all elelment of the set we create sequence of the type *)
         RGCollections.fold (fun rgset acc ->
             RGSet.fold (fun acm acc' ->
@@ -244,12 +282,12 @@ let rec constructGuaranteeSet (sty : session_type) : RGCollections.t =
         ) rgSet1 RGCollections.empty 
     | StyParallel (sty1, sty2) ->
         (*same as rely set  *)
-            let rgSet1 = constructGuaranteeSet sty1 in
-            let rgSet2 = constructGuaranteeSet sty2 in
+            let rgSet1 = constructGuaranteeCollection sty1 in
+            let rgSet2 = constructGuaranteeCollection sty2 in
             doubleProduct rgSet1 rgSet2
     | StyChoice (sty1, sty2) ->
-            let rgSet1 = constructGuaranteeSet sty1 in
-            let rgSet2 = constructGuaranteeSet sty2 in
+            let rgSet1 = constructGuaranteeCollection sty1 in
+            let rgSet2 = constructGuaranteeCollection sty2 in
             RGCollections.union rgSet1 rgSet2
     | StyOffer ps ->
       (*trigger continuation list give back as RgSets*)
@@ -288,9 +326,69 @@ let rec constructGuaranteeSet (sty : session_type) : RGCollections.t =
           rgCollections
     | StyFuture ps ->
         let futureCollection = RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = ps}) in
-        let rgCollection = constructGuaranteeSet ps in
+        let rgCollection = constructGuaranteeCollection ps in
         RGCollections.union futureCollection rgCollection
      | _ -> RGCollections.empty
-    
 
+let match_obligations check_fn rc1 gc2 span_1  span_2 =
+    RGCollections.exists (fun rgset1 ->
+          match find_subset rgset1 gc2 with
+          | Some rgset2 ->
+              RGSet.for_all (fun acm1 ->
+                match find_act acm1 rgset2 with
+                | Some acm2_req ->
+                    check_fn {d = acm1.cont ; span = span_1} {d = acm2_req.cont ; span = span_2}
+                | None -> raise (Failure "Should not happen")
+              ) rgset1
+          | None -> false
+    ) rc1
+
+let compatiblity_check_binary (sty1_ast : session_type ast_node) (sty2_ast : session_type ast_node) : bool =
+    (* Memoization table to detect cycles and cache results *)
+    let visited = Hashtbl.create 16 in
+    
+    let rec check_with_memo (sty1_ast : session_type ast_node) (sty2_ast : session_type ast_node) : bool =
+        let key = (sty1_ast.d, sty2_ast.d) in
+        
+        (* Check if we've already seen this pair (cycle detection) *)
+        match Hashtbl.find_opt visited key with
+        | Some result -> result
+        | None ->
+            (* Assume true initially for cycles, then verify *)
+            Hashtbl.add visited key true;
+            
+            let sty1 = sty1_ast.d in
+            let sty2 = sty2_ast.d in
+            let result = match sty1, sty2 with
+            | StyTrue, StyTrue -> true
+            | _, StyTrue -> false
+            | StyTrue, _ -> false
+            | StyAtom (AtomDelay d1), StyAtom (AtomDelay d2) ->
+                d1 = d2
+            | StyAtom (AtomDelay _d1), StyAtom (AtomicAct _) ->
+                false
+            | StyAtom (AtomicAct _), StyAtom (AtomDelay _d2) ->
+                false
+            | StyAtom (AtomicAct AtomNBMsg m1), StyAtom (AtomicAct AtomNBMsg m2) ->
+                m1 = m2
+            | StyAtom (AtomicAct (AtomBMsg m1)), StyAtom (AtomicAct (AtomBMsg m2)) ->
+                m1 = m2
+            | StyAtom (AtomicAct AtomNBMsg m1), StyAtom (AtomicAct (AtomBMsg m2)) ->
+                m1 = m2
+            | StyAtom (AtomicAct (AtomBMsg m1)), StyAtom (AtomicAct AtomNBMsg m2) ->
+                m1 = m2
+            | _ ->
+                let obligations_1 = match_obligations check_with_memo (constructReliabilityCollection sty1) (constructGuaranteeCollection sty2) sty1_ast.span sty2_ast.span in
+                  if obligations_1 then
+                    (
+                    Printf.eprintf "Type 1: obligations matched for %s by %s\n\n" (string_of_protocol sty1) (string_of_protocol sty2);
+                    let obligations2 = match_obligations check_with_memo (constructReliabilityCollection sty2) (constructGuaranteeCollection sty1) sty2_ast.span sty1_ast.span in
+                      if obligations2 then ( Printf.eprintf "Type 2: obligations matched for %s by %s\n\n" (string_of_protocol sty2) (string_of_protocol sty1); true) else false
+                      )
+                  else false
+            in
+            Hashtbl.replace visited key result;
+            result
+    in
+    check_with_memo sty1_ast sty2_ast
     
