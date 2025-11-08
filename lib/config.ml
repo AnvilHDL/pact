@@ -1,6 +1,7 @@
 type compile_config = {
   debug_mode : bool;
   verbose: bool;
+  verbose_max : bool;
   disable_lt_checks : bool;
   disable_session_checks : bool;
   weak_typecasts : bool;
@@ -11,19 +12,21 @@ type compile_config = {
 
 let parse_args () : compile_config =
   let debug_mode = ref false in
-  let verbose = ref false
-  and disable_lt_checks = ref false
-  and disable_session_checks = ref false
-  and weak_typecasts = ref false
-  and opt_level = ref 2
-  and two_round_graph = ref false
-  and input_filenames = ref [] in
+  let verbose = ref false in
+  let verbose_max = ref false in
+  let disable_lt_checks = ref false in
+  let disable_session_checks = ref false in
+  let weak_typecasts = ref false in
+  let opt_level = ref 2 in
+  let two_round_graph = ref false in
+  let input_filenames = ref [] in
   let add_input_filename s =
     input_filenames := s::!input_filenames
   in
   Arg.parse
     [
       ("-verbose", Arg.Set verbose, "Enable verbose output");
+      ("-verbose-max", Arg.Set verbose_max, "Enable verbose output with maximum detail");
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-disable-session-checks", Arg.Set disable_session_checks, "Disable session type checks");
       ("-weak-typecasts", Arg.Set weak_typecasts, "Allow Typecasts");
@@ -36,6 +39,7 @@ let parse_args () : compile_config =
   {
     debug_mode = !debug_mode;
     verbose = !verbose;
+    verbose_max = !verbose_max;
     disable_lt_checks = !disable_lt_checks;
     disable_session_checks = !disable_session_checks;
     weak_typecasts = !weak_typecasts;

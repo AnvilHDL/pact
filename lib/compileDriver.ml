@@ -94,7 +94,7 @@ let debug_types _out config =
       if List.length pool.d.interface_members > 1 then
         (
           let open SessionCompatiblityv2 in
-        let (check, msg) = check_compatibility_multiparty pool config.verbose in
+        let (check, msg) = check_compatibility_multiparty pool config.verbose_max in
         Printf.eprintf "[Multiparty Compatibility]: %b \n\n" (check);
         Printf.eprintf "Message: %s \n\n" (msg);
         )
