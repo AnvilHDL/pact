@@ -275,7 +275,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
               (id,Some s2, None)
           | Some s1' ->
               (* s1 partially completed, propagate seq(s1', s2) *)
-              Printf.eprintf "Sequence continuation at event %d: s1' = %s, s2 = %s\n" ev.id (Lang.string_of_protocol s1') (Lang.string_of_protocol s2);
+              if config.verbose then Printf.eprintf "Sequence continuation at event %d: s1' = %s, s2 = %s\n" ev.id (Lang.string_of_protocol s1') (Lang.string_of_protocol s2);
               let remaining = Lang.StySeq (s1', s2) in
               if id < 0 then
               List.iter (fun succ_ev ->
@@ -618,7 +618,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
         
         while not (Queue.is_empty bfs_queue) do
           let ev = Queue.pop bfs_queue in
-          Printf.eprintf "\n[Session Type Check] Exploring event %d| Current queue -> [%s]\n" ev.id (String.concat ", " (List.map string_of_int (Queue.fold (fun acc x -> acc @ [x.id]) [] bfs_queue)));
+          if config.verbose then Printf.eprintf "\n[Session Type Check] Exploring event %d| Current queue -> [%s]\n" ev.id (String.concat ", " (List.map string_of_int (Queue.fold (fun acc x -> acc @ [x.id]) [] bfs_queue)));
           
           if ev.id = last_node_id then
             ()
@@ -649,7 +649,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
               ()
             else if check_is_branch_event ev && (not (is_empty_branch ev)) then (
               (* Branch event: just propagate current type to successors *)
-              Printf.eprintf "Branch event %d: propagating session type %s to successors\n" ev.id (Lang.string_of_protocol current_sty);
+              if config.verbose then Printf.eprintf "Branch event %d: propagating session type %s to successors\n" ev.id (Lang.string_of_protocol current_sty);
               List.iter (fun succ_ev ->
                 update_sty g succ_ev.id current_sty g.thread_codespan config.verbose
               ) ev.outs
@@ -697,7 +697,7 @@ let check_session (config : Config.compile_config) (g : event_graph) module_name
         (* Verify that all events were visited *)
         List.iter (fun ev ->
           if not (IntHashtbl.mem visited ev.id) && ev.id <> last_node_id then
-            Printf.eprintf "[Warning]: Event %d was not reachable during session type check\n" ev.id
+           if config.verbose then Printf.eprintf "[Warning]: Event %d was not reachable during session type check\n" ev.id
         ) g.events;
         
         (* Check if final session type is satisfied at loop end *)

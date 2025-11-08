@@ -37,3 +37,13 @@ pool p5{
     i2 : ep_1.req + ep_2.req;
     i3 : ep_2.req
 }
+
+pool p6{
+    ep_1_le -- ep_1_ri : ch,
+    ep_2_le -- ep_2_ri : ch,
+    ep_3_le -- ep_3_ri : ch;
+    i1 : ep_1.req >> ep_1.ack;
+    i2 : ep_1.req >> ep_2.req >> ep_1.ack;
+    i3 : ep_2.req + ep_3.req;
+    i4 : ep_3.req
+}
