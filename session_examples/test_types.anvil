@@ -2,6 +2,7 @@ interface a (ep : left ch) = ep.req + ep.res ;
 interface b (ep : right ch) = ep.req || ep.res ;
 interface c (ep : left ch) = &(ep.req: ep.res, ep.res:ep.req) ;
 
+
 chan ch{
     left req : (logic@#1),
     right ack : (logic@#1)
@@ -46,4 +47,18 @@ pool p6{
     i2 : ep_1.req >> ep_2.req >> ep_1.ack;
     i3 : ep_2.req + ep_3.req;
     i4 : ep_3.req
+}
+
+pool mem_pool{
+    rd_ep_le -- rd_ep_ri : rd_ch,
+    wr_ep_le -- wr_ep_ri : wr_ch;
+    i1 : #1 + (rd_ep_le.req >> rd_ep_le.res >> #1);
+    i2 : &(rd_ep_le.req : F #rd_ep_le.res, wr_ep_ri.req) >> #1;
+    i3 : wr_ep_ri.req >> #1
+}
+
+pool p7{
+    ep_le -- ep_ri : ch;
+    i1 : ep.req || ep.res;
+    i2 : ep.req >> ep.res
 }
