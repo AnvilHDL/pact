@@ -1918,11 +1918,14 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
           (
               let check, err = SessionCompatiblityv2.compatiblity_check_multiparty session_with_id ep_itfc_id_map config.verbose_max ps.span in
               let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
-              if not check then
+              if check then Printf.eprintf "[Info] Compatibility check passed for pool instance %s in process %s\n" ps.d.p_id module_name
+              else
                 raise (Except.TypeError (
                   Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err)
                   :: ast_spans
-                ))            
+                ))
+              
+                
           )
       ) p.pool_insts ;
 
