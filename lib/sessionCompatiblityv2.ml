@@ -345,12 +345,31 @@ let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
             RGCollections.union rgSet1 rgSet2
     | StyOffer ps ->
       (*trigger continuation list give back as RgSets*)
+      let ps_filtered = List.filter (fun oty ->
+        match oty.trigger with
+        | AtomDelay _ -> false
+        | _ -> true
+      ) ps in
+      let wildcard_arm = List.find_opt (fun oty ->
+        match oty.trigger with
+        | AtomDelay _ -> true
+        | _ -> false
+      ) ps in
       let rgSets = List.map (fun oty ->
         match oty.trigger with
         | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
         | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
         | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
-      ) ps in
+      ) ps_filtered in
+        let wildcard_collection = if Option.is_some wildcard_arm then 
+            let oty = Option.get wildcard_arm in
+            if oty.continuation = None then
+            None
+            else
+            Some (constructGuaranteeCollection (Option.get oty.continuation) )
+        else
+            None
+        in
       let parallelPerm = createParallelPermutations rgSets in
       let all_blocking = List.for_all (fun oty ->
         match oty.trigger with
@@ -358,26 +377,52 @@ let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
         | _ -> false
         ) ps in
       let new_set =  if (not all_blocking) then rgSets@parallelPerm else rgSets@parallelPerm@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
-     RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
+     let gcol = RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
+        in
+        (
+            match wildcard_collection with
+            | Some wc_coll -> RGCollections.union gcol wc_coll
+            | None -> gcol
+        )
     | StyXOffer ps ->
         (*trigger continuation list give back as RgSets*)
+        let ps_filtered = List.filter (fun oty ->
+          match oty.trigger with
+          | AtomDelay _ -> false
+          | _ -> true
+        ) ps in
+        let wildcard_arm = List.find_opt (fun oty ->
+          match oty.trigger with
+          | AtomDelay _ -> true
+          | _ -> false
+        ) ps in
          let rgSets = List.map (fun oty ->
             match oty.trigger with
             | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
             | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
             | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
-        ) ps in
+        ) ps_filtered in
         let all_blocking = List.for_all (fun oty ->
           match oty.trigger with
           | AtomicAct (AtomBMsg _) -> true
           | _ -> false
          ) ps in
+         let wildcardCollection = match wildcard_arm with
+        | Some oty ->
+            if oty.continuation = None then None
+            else Some (constructGuaranteeCollection (Option.get oty.continuation))
+        | None -> None
+         in
         if all_blocking then
           let new_set = rgSets@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
           RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
         else
           let rgCollections = RGCollections.of_list rgSets in
-          rgCollections
+            (
+                match wildcardCollection with
+                | Some wc_coll -> RGCollections.union rgCollections wc_coll
+                | None -> rgCollections
+            )
     | StyFuture ps ->
         let futureCollection = RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = ps}) in
         let rgCollection = constructGuaranteeCollection ps in
