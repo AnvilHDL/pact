@@ -84,7 +84,7 @@ end)
 let find_subset_acts (se1 : RGSet.t) (se2 : RGSet.t) : bool =
     RGSet.for_all (fun acm1 ->
         RGSet.exists (fun acm2 ->
-            ActionSet.equal acm1.acts acm2.acts
+            ActionSet.equal acm1.acts acm2.acts || acm1.acts = ActionSet.empty
         ) se2
     ) se1
 
@@ -218,12 +218,33 @@ let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
         setProduct rgSet1 rgSet2
   | StyOffer ps ->
     (*trigger continuation list give back as RgSets*)
+    let ps_filtered = List.filter (fun oty ->
+      match oty.trigger with
+      | AtomDelay _ -> false
+      | _ -> true
+    ) ps in
+    let wildcard_arm = List.find_opt (fun oty ->
+      match oty.trigger with
+      | AtomDelay _ -> true
+      | _ -> false
+    ) ps in
    let rgSets = List.map (fun oty ->
     match oty.trigger with
     | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
-    | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
-    ) ps in
+    | AtomDelay _ -> raise (Failure "Should not happen (in offer construction)")
+    ) ps_filtered in
+
+    let (wildcard_collection : RGCollections.t option) = if Option.is_some wildcard_arm then 
+            let oty = Option.get wildcard_arm in
+            if oty.continuation = None then
+            None
+            else
+            Some (constructReliabilityCollection (Option.get oty.continuation) )
+        else
+          None
+    in
+        
     let all_blocking = List.for_all (fun oty ->
       match oty.trigger with
       | AtomicAct (AtomBMsg _) -> true
@@ -232,18 +253,39 @@ let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
         
     let parallelPerm = createParallelPermutations rgSets in
     let new_set = if (not all_blocking) then rgSets@parallelPerm else rgSets@parallelPerm@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
-    List.fold_left (fun acc rgset ->
+    let origRC = List.fold_left (fun acc rgset ->
         RGCollections.add rgset acc
     ) RGCollections.empty new_set
-      
+    in
+    (
+    match wildcard_collection with
+    | Some wc_coll -> RGCollections.union origRC wc_coll
+    | None -> origRC
+      )
   | StyXOffer ps ->
     (*trigger continuation list give back as RgSets*)
+    let ps_filtered = List.filter (fun oty ->
+      match oty.trigger with
+      | AtomDelay _ -> false
+      | _ -> true
+    ) ps in
+    let wildcard_arm = List.find_opt (fun oty ->
+      match oty.trigger with
+      | AtomDelay _ -> true
+      | _ -> false
+    ) ps in
    let rgSets = List.map (fun oty ->
     match oty.trigger with
     | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
-    | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
-    ) ps in
+    | AtomDelay _ -> raise (Failure "Should not happen (in xoffer construction)")
+    ) ps_filtered in
+    let wildcardCollection = match wildcard_arm with
+    | Some oty ->
+        if oty.continuation = None then None
+        else Some (constructReliabilityCollection (Option.get oty.continuation))
+    | None -> None
+    in 
     let all_blocking = List.for_all (fun oty ->
       match oty.trigger with
       | AtomicAct (AtomBMsg _) -> true
@@ -254,7 +296,11 @@ let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
       RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
     else
     let rgCollections = RGCollections.of_list rgSets in
-    rgCollections
+    (
+        match wildcardCollection with
+        | Some wc_coll -> RGCollections.union rgCollections wc_coll
+        | None -> rgCollections
+    )
   | StyFuture ps ->
     (*trigger continuation list give back as RgSets*)
     let futureCollection = RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = ps}) in
@@ -536,6 +582,10 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                     match remaining_stys with
                     | [] -> ()
                     | sty1 :: rest ->
+                        match sty1 with
+                        | StyTrue -> sty_list_satisfied := sty1 :: !sty_list_satisfied;helper rest
+                        | StyAtom AtomDelay _ -> sty_list_satisfied := sty1 :: !sty_list_satisfied;helper rest
+                        | _ -> helper rest;
                         let matched = ref false in
                         let rec try_match sty_list_to_try =
                             match sty_list_to_try with
@@ -558,7 +608,7 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                             helper rest
                 in
                 helper sty_list_filtered;
-                let remaining_data = List.filter (fun (_, _, orig_ast) -> not (List.mem orig_ast.d !sty_list_satisfied)) session_data in
+                let remaining_data = List.filter (fun (curr_sty, _, _orig_ast) -> not (List.mem curr_sty.d !sty_list_satisfied)) session_data in
                 let remaining_stys = List.map (fun (sty_ast, _, _) -> sty_ast.d) remaining_data in
                 
                 if verbose then begin
