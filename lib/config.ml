@@ -4,6 +4,7 @@ type compile_config = {
   verbose_max : bool;
   disable_lt_checks : bool;
   disable_session_checks : bool;
+  disable_compat_checks : bool;
   weak_typecasts : bool;
   opt_level : int;
   two_round_graph: bool;
@@ -14,6 +15,7 @@ let parse_args () : compile_config =
   let debug_mode = ref false in
   let verbose = ref false in
   let verbose_max = ref false in
+  let disable_compat_checks = ref false in
   let disable_lt_checks = ref false in
   let disable_session_checks = ref false in
   let weak_typecasts = ref false in
@@ -29,6 +31,7 @@ let parse_args () : compile_config =
       ("-verbose-max", Arg.Set verbose_max, "Enable verbose output with maximum detail");
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-disable-session-checks", Arg.Set disable_session_checks, "Disable session type checks");
+      ("-disable-compat-checks", Arg.Set disable_compat_checks, "Disable compatibility checks");
       ("-weak-typecasts", Arg.Set weak_typecasts, "Allow Typecasts");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default)");
       ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds");
@@ -42,6 +45,7 @@ let parse_args () : compile_config =
     verbose_max = !verbose_max;
     disable_lt_checks = !disable_lt_checks;
     disable_session_checks = !disable_session_checks;
+    disable_compat_checks = !disable_compat_checks;
     weak_typecasts = !weak_typecasts;
     opt_level = !opt_level;
     two_round_graph = !two_round_graph;

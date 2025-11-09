@@ -1914,7 +1914,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
           );
           let ep_itfc_id_map = SessionCompatiblityv2.create_ep_id_intfc_id_map pool_def in
 
-          if not config.disable_session_checks then
+          if not config.disable_compat_checks then
           (
               let check, err = SessionCompatiblityv2.compatiblity_check_multiparty session_with_id ep_itfc_id_map config.verbose_max ps.span in
               let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
