@@ -196,18 +196,19 @@ let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
   | StyAtom (AtomDelay 1) ->
         RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyTrue})
   | StySeq (sty1, sty2) ->
-      let rgSet1 = constructReliabilityCollection sty1 in
-      (* the action set is regset1 the continuation is for all elelment of the set we create sequence of the type *)
-      RGCollections.fold (fun rgset acc ->
-          RGSet.fold (fun acm acc' ->
-            let new_cont =match acm.cont with
-            | StyTrue -> sty2
-            | _ -> StySeq (acm.cont, sty2)
-          in
-              let new_acm = RGSet.singleton {acts = acm.acts; cont = new_cont} in
-              RGCollections.add new_acm acc'
-          ) rgset acc
-      ) rgSet1 RGCollections.empty 
+        let rgSet1 = constructReliabilityCollection sty1 in
+        (* For each RGSet, update all continuations but keep the set structure *)
+        RGCollections.fold (fun rgset acc ->
+            let new_rgset = RGSet.fold (fun acm acc_set ->
+              let new_cont = match acm.cont with
+              | StyTrue -> sty2
+              | _ -> StySeq (acm.cont, sty2)
+              in
+              let new_acm = {acts = acm.acts; cont = new_cont} in
+              RGSet.add new_acm acc_set
+            ) rgset RGSet.empty in
+            RGCollections.add new_rgset acc
+        ) rgSet1 RGCollections.empty 
   | StyParallel (sty1, sty2) ->
         let rgSet1 = constructReliabilityCollection sty1 in
         let rgSet2 = constructReliabilityCollection sty2 in
@@ -323,16 +324,17 @@ let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
           RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = StyTrue})
     | StySeq (sty1, sty2) ->
         let rgSet1 = constructGuaranteeCollection sty1 in
-        (* the action set is regset1 the continuation is for all elelment of the set we create sequence of the type *)
+        (* For each RGSet, update all continuations but keep the set structure *)
         RGCollections.fold (fun rgset acc ->
-            RGSet.fold (fun acm acc' ->
-              let new_cont =match acm.cont with
+            let new_rgset = RGSet.fold (fun acm acc_set ->
+              let new_cont = match acm.cont with
               | StyTrue -> sty2
               | _ -> StySeq (acm.cont, sty2)
-            in
-                let new_acm = RGSet.singleton {acts = acm.acts; cont = new_cont} in
-                RGCollections.add new_acm acc'
-            ) rgset acc
+              in
+              let new_acm = {acts = acm.acts; cont = new_cont} in
+              RGSet.add new_acm acc_set
+            ) rgset RGSet.empty in
+            RGCollections.add new_rgset acc
         ) rgSet1 RGCollections.empty 
     | StyParallel (sty1, sty2) ->
         (*same as rely set  *)
@@ -417,11 +419,14 @@ let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
           let new_set = rgSets@[(RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = sty})] in
           RGCollections.singleton (List.fold_left RGSet.union RGSet.empty new_set)
         else
-          let rgCollections = RGCollections.of_list rgSets in
             (
+          let rgCollections = RGCollections.singleton (List.fold_left RGSet.union RGSet.empty rgSets) in
+           let final = (
                 match wildcardCollection with
-                | Some wc_coll -> RGCollections.union rgCollections wc_coll
+                | Some wc_coll -> (RGCollections.union rgCollections wc_coll)
                 | None -> rgCollections
+            ) in
+            final
             )
     | StyFuture ps ->
         let futureCollection = RGCollections.singleton (RGSet.singleton {acts = ActionSet.singleton (Delay 1); cont = ps}) in
