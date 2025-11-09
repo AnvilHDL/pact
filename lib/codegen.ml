@@ -63,7 +63,8 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
     (* connect the wires *)
     
     let connect_endpoints = fun (arg_endpoint : endpoint_def) (param_ident : identifier) ->
-      let endpoint_local = MessageCollection.lookup_endpoint g.messages param_ident |> Option.get in
+      let end_opt = (MessageCollection.lookup_endpoint g.messages param_ident) in
+      let endpoint_local =  if Option.is_some end_opt then Option.get end_opt else failwith (Printf.sprintf "Endpoint not found %s" param_ident) in
       let endpoint_name_local = CodegenFormat.canonicalize_endpoint_name param_ident (List.hd g.threads |> fst) in
       let cc = MessageCollection.lookup_channel_class graphs.channel_classes endpoint_local.channel_class |> Option.get in
       let print_msg_con = fun (msg : message_def) ->
