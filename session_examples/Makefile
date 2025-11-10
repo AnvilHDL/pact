@@ -20,6 +20,9 @@ endif
 ifdef DEBUG
 	ANVIL_FLAGS += -verbose
 endif
+ifdef COMPATOFF
+	ANVIL_FLAGS += -disable-compat-checks
+endif
 
 ifdef NOOPT
 	ANVIL_FLAGS += -O 0

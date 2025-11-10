@@ -1,0 +1,36 @@
+chan ch{
+    left req : (logic@#1),
+    right res : (logic@#1)
+}
+proc foo (ep: left ch) {
+    reg cyc : logic[8];
+    reg dummy : logic;
+    loop{
+        dprint "[Cycle %d] Foo starts" (*cyc) >>
+        offer{
+            send ep.res(*dummy)=>(
+                dprint "[Cycle %d] Here Here" (*cyc) >>
+                set dummy := 1'd1
+            ),
+            x = recv ep.req =>{
+                dprint "[Cycle %d] Here TThere" (*cyc) >>
+                set dummy := x
+            }
+        }
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc test_comb_loop(){
+    chan ep_le -- ep_ri : ch;
+    spawn foo(ep_le);
+    loop{
+        send ep_ri.req(1'd1) >>
+        cycle 4 >>
+        let x = recv ep_ri.res >>
+        dprint "Recieved %d" (x) >>
+        cycle 1
+    }
+}

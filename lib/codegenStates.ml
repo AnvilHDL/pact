@@ -1,3 +1,4 @@
+module IntHashtbl = Hashtbl.Make(Int)
 module EventStateFormatter = struct
   let format_reg_state state_name thread_id ev_id =
     Printf.sprintf "_thread_%d_event_%s_%d" thread_id state_name ev_id
@@ -48,7 +49,41 @@ let collect_reg_states g =
       (* this state needs to distinguish two sources *)
       let sn = EventStateFormatter.format_scorer g.thread_id e.id in
       [("logic[1:0]", sn)]
-    | `Branch _ | `Root _ -> []
+    | `Branch _ -> []
+    | `Root (Some (_, br_side_info)) ->
+      (* Check if this root needs a delay register *)
+      GraphAnalysis.events_prepare_outs g.events;
+      let rec has_only_empty_path_to_recurse event visited =
+        if List.mem event.EventGraph.id visited then false
+        else if event.EventGraph.is_recurse then true
+        else
+          let visited' = event.EventGraph.id :: visited in
+          match event.EventGraph.source with
+          | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) -> 
+            false
+          | `Branch (_, _) | `Root _ ->
+            List.for_all (fun out_event ->
+              has_only_empty_path_to_recurse out_event visited'
+            ) event.EventGraph.outs
+          | `Later (_, _) ->
+            if event.EventGraph.is_recurse then true
+            else List.for_all (fun out_event ->
+              has_only_empty_path_to_recurse out_event visited'
+            ) event.EventGraph.outs
+      in
+      let root_event = g.events |> List.find (fun (e' : EventGraph.event) -> e'.source = `Root None) in
+      let event_min_distance_with_root = GraphAnalysis.event_min_distance_with_later g.events root_event root_event in
+      let has_zero_delay = IntHashtbl.find event_min_distance_with_root e.id = 0 in
+      let has_empty_path = List.for_all (fun out_event ->
+        has_only_empty_path_to_recurse out_event []
+      ) e.outs in
+      let need_to_add_delay = has_zero_delay && has_empty_path in
+      if need_to_add_delay && br_side_info.owner_branch.branch_cond = TrueFalse then
+        let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+        [("logic", sn)]
+      else
+        []
+    | `Root None -> []
   ) g.events
 
 (* prints out declarations for event-related wires and registers *)
@@ -255,16 +290,70 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
       let cn' = EventStateFormatter.format_current g.thread_id e'.id in
       let w = Option.get br_side_info.owner_branch.branch_cond_v.w in
       let wn = CodegenFormat.format_wirename w.thread_id w.id in
+      GraphAnalysis.events_prepare_outs g.events;
+      (* Check if this branch root leads to recurse event through only empty paths (only branches, no delays) *)
+      let rec has_only_empty_path_to_recurse event visited =
+        if List.mem event.EventGraph.id visited then false
+        else if event.EventGraph.is_recurse then true
+        else
+          let visited' = event.EventGraph.id :: visited in
+          match event.EventGraph.source with
+          | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) -> 
+            false
+          | `Branch (_, _) | `Root _ ->
+            (* Continue through outbound edges *)
+            List.for_all (fun out_event ->
+              has_only_empty_path_to_recurse out_event visited'
+            ) event.EventGraph.outs
+          | `Later (_, _) ->
+            (* Later merge - check if it's the recurse event or continue *)
+            if event.EventGraph.is_recurse then true
+            else List.for_all (fun out_event ->
+              has_only_empty_path_to_recurse out_event visited'
+            ) event.EventGraph.outs
+      in
+
+      let root_event = g.events |> List.find (fun (e' : EventGraph.event) -> e'.source = `Root None) in
+
+      let event_min_distance_with_root = GraphAnalysis.event_min_distance_with_later g.events root_event root_event in
+
+
+      let has_zero_delay = IntHashtbl.find event_min_distance_with_root e.id = 0 in
+
+
+
+
+      let has_empty_path = List.for_all (fun out_event ->
+        has_only_empty_path_to_recurse out_event []
+      ) e.outs in
+
+      let need_to_add_delay = if has_zero_delay && has_empty_path then 
+        (Printf.eprintf "[Warning] Adding delay register to prevent combinational loop in event %d\n" e.id; true) else false in
+
       (
         match br_side_info.owner_branch.branch_cond with
         | TrueFalse ->
           if not e'.removed then (
-            print_line
-              @@
-              if br_side_info.branch_side_sel = 0 then
-                Printf.sprintf "assign %s = %s && %s;" cn cn' wn
+            if need_to_add_delay then (
+              (* Add one cycle delay to prevent combinational loop *)
+              let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+              let cond = if br_side_info.branch_side_sel = 0 then
+                Printf.sprintf "%s && %s" cn' wn
               else
-                Printf.sprintf "assign %s = %s && !%s;" cn cn' wn
+                Printf.sprintf "%s && !%s" cn' wn
+              in
+              [
+                Printf.sprintf "assign %s = %s_q;" cn sn;
+                Printf.sprintf "assign %s_n = %s;" sn cond
+              ] |> print_lines
+            ) else (
+              print_line
+                @@
+                if br_side_info.branch_side_sel = 0 then
+                  Printf.sprintf "assign %s = %s && %s;" cn cn' wn
+                else
+                  Printf.sprintf "assign %s = %s && !%s;" cn cn' wn
+            )
           )
         | MatchCases pats ->
           let fst_valid_idx = List.find_index (fun (e : EventGraph.event) -> not e.removed) br_side_info.owner_branch.branches_to |> Option.get in
