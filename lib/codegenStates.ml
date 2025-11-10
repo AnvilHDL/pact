@@ -568,7 +568,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
             (EventStateFormatter.format_current g.thread_id e.id)
             (EventStateFormatter.format_syncstate g.thread_id sa.d.until.id)
         else
-          EventStateFormatter.format_current g.thread_id e.id
+          EventStateFormatter.format_current g.thread_id sa.d.until.id
       in
       match sa.d.ty with
       | Send (msg, td) -> print_send activated msg td
