@@ -546,9 +546,30 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     in
 
     List.iter (fun (sa : EventGraph.sustained_action Lang.ast_node) ->
-      let activated = Printf.sprintf "(%s || %s_q)"
-        (EventStateFormatter.format_current g.thread_id e.id)
-        (EventStateFormatter.format_syncstate g.thread_id sa.d.until.id) in
+      let msg_def_opt = match sa.d.ty with
+        | Send (msg, _) -> Some (lookup_msg_def msg)
+        | Recv msg -> Some (lookup_msg_def msg)
+      in
+      let msg_def = Option.get msg_def_opt |> Option.get in
+      
+      (* Protocol-specific signal assertion:
+         - ValidAck Send: assert valid while waiting for ack (sustained)
+         - ValidAck Recv: assert ack only when valid arrives (immediate)
+         - ValidReady Send: assert valid only when ready arrives (immediate)
+         - ValidReady Recv: assert ready while waiting for valid (sustained) *)
+      let use_sustained = match sa.d.ty with
+        | Send _ -> msg_def.handshake_mode = Lang.ValidAck
+        | Recv _ -> msg_def.handshake_mode = Lang.ValidReady
+      in
+      
+      let activated = 
+        if use_sustained then
+          Printf.sprintf "(%s || %s_q)"
+            (EventStateFormatter.format_current g.thread_id e.id)
+            (EventStateFormatter.format_syncstate g.thread_id sa.d.until.id)
+        else
+          EventStateFormatter.format_current g.thread_id e.id
+      in
       match sa.d.ty with
       | Send (msg, td) -> print_send activated msg td
       | Recv msg -> print_recv activated msg
