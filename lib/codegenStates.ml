@@ -587,12 +587,13 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     match e.source with
     | `Seq (_, `Choice msg_list) ->
       let is_wildcard = is_wildcard_present msg_list in
-      if not is_wildcard then (
-        (* When in waiting state, assert the appropriate signals based on protocol *)
-        let activated = Printf.sprintf "(%s || %s_q)"
+      let activated = if not is_wildcard then (
+           Printf.sprintf "(%s || %s_q)"
           (EventStateFormatter.format_current g.thread_id e.id)
-          (EventStateFormatter.format_syncstate g.thread_id e.id) in
-        
+          (EventStateFormatter.format_syncstate g.thread_id e.id)
+      ) else (
+          EventStateFormatter.format_current g.thread_id e.id
+      ) in
         List.iter (fun (msg : Lang.message_specifier) ->
           if msg.endpoint <> "*" || msg.msg <> "*" then
             let msg_def = lookup_msg_def msg |> Option.get in
@@ -614,7 +615,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
                   true
                   activated
         ) msg_list
-      )
+
     | _ -> ()
   in
   (* assuming reverse topo order, the assign lists will be in topo order *)
