@@ -1895,10 +1895,10 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
           
           (* Apply preprocessing to all session types in the pool instance *)
           let pool_def = lookup_pool_inst_from_pools ps.d.p_ty cunit.pools ps.span in
-          let session_with_id = List.map2 (fun (sty_node, intf_id) interface_member ->
+          let session_with_id = List.map2 (fun (sty_node, _) interface_member ->
             let endpoint_mapping = build_endpoint_mapping interface_member pool_def.d.pool_channels in
             let preprocessed_sty = preprocess_session_type endpoint_mapping sty_node.d in
-            ({sty_node with d = preprocessed_sty}, intf_id)
+            ({sty_node with d = preprocessed_sty}, interface_member.d.inf_mem_id)
           ) session_with_id pool_def.d.interface_members in
 
           (* Map each left endpoint to the list of all interface IDs that use it *)

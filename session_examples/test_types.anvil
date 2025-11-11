@@ -57,27 +57,15 @@ pool mem_pool{
     i3 : wr_ep_ri.req >> #1
 }
 
-pool p7{
+pool p7{//true
     ep_le -- ep_ri : ch;
     i1 : ep.req || ep.res;
     i2 : ep.req >> ep.res
 }
 
-interface mux_main (
-    ar_req_ep : right reg_out_ch<ar_sel_pack_t>,
-    mst_req_ep : left ar_mast_ch <ar_pack_t>,
-    r_sr_ep : right reg_out_ch <r_pack_t>,
-    fifo_ep : right fifo_ch<select_t>,
-    slv_ep1 : right slv_r_ch<r_pack_t>,
-    slv_ep2 : right slv_r_ch<r_pack_t>,
-    slv_ep3 : right slv_r_ch<r_pack_t>,
-    slv_ep4 : right slv_r_ch<r_pack_t>,
-    slv_ep5 : right slv_r_ch<r_pack_t>,
-    slv_ep6 : right slv_r_ch<r_pack_t>,
-    slv_ep7 : right slv_r_ch<r_pack_t>,
-    slv_ep8 : right slv_r_ch<r_pack_t>
-) =^(
-        fifo_ep.full : r_sr_ep.spill >> #fifo_ep.pop >> (slv_ep1.res + slv_ep2.res + slv_ep3.res + slv_ep4.res + slv_ep5.res + slv_ep6.res + slv_ep7.res + slv_ep8.res),
-        fifo_ep.empty : mst_req_ep.rdy >> ar_req_ep.spill >> mst_req_ep.data >> #fifo_ep.push,
-        * : & (mst_req_ep.rdy : ar_req_ep.spill >> mst_req_ep.data >> #fifo_ep.push, r_sr_ep.spill : fifo_ep.pop >> (slv_ep1.res + slv_ep2.res + slv_ep3.res + slv_ep4.res + slv_ep5.res + slv_ep6.res + slv_ep7.res + slv_ep8.res))
-    ) >> #1 ;
+pool p8{
+    ep -- ep_ri : ch;
+    i1 : ep1.m1 >> F #ep2.m2;
+    i2 : ep2.m2;
+    i3 : #ep1.m1
+}

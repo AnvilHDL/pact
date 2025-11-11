@@ -534,6 +534,9 @@ let create_ep_id_intfc_id_map (pool_def_o : interface_pool_def ast_node) : ident
 
 
 let product_acts (gc_list : RGCollections.t list) =
+    if gc_list = [] then
+        RGCollections.empty
+    else
     (* for each element in the collection,do a product on actions only *)
     let gc_list_projected_to_acts = List.map (fun rgcoll ->
         RGCollections.map (fun rgset ->
@@ -553,6 +556,9 @@ let product_acts (gc_list : RGCollections.t list) =
 
 let union_product_acts (gc_list : RGCollections.t list) =
     (* for each element in the collection,do a union on actions sets only not merge actions *)
+    if gc_list = [] then
+        RGCollections.empty
+    else
     let gc_list_projected_to_acts = List.map (fun rgcoll ->
         RGCollections.map (fun rgset ->
             RGSet.map (fun acm ->
@@ -568,7 +574,6 @@ let union_product_acts (gc_list : RGCollections.t list) =
     in
     fold_union (List.hd gc_list_projected_to_acts) (List.tl gc_list_projected_to_acts)
     
-
 
 
 let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identifier) list)) (_ep_intfc_map : identifier list Utils.string_map) (verbose : bool) (_span : code_span) =
@@ -660,7 +665,6 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                 helper sty_list_filtered;
                 let remaining_data = List.filter (fun (curr_sty, _, _orig_ast) -> not (List.mem curr_sty.d !sty_list_satisfied)) session_data in
                 let remaining_stys = List.map (fun (sty_ast, _, _) -> sty_ast.d) remaining_data in
-                
                 if verbose then begin
                     Printf.eprintf "[Info] %d processes after simple matching:\n" (List.length remaining_stys);
                     List.iteri (fun i sty ->
@@ -692,25 +696,66 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                         end
                         else begin
                             let other_data = List.filter (fun (other_ast, _, _) -> other_ast.d <> sty) remaining_data in
-                            let gc_list = List.map (fun (current_other_ast, _, orig_other_ast) ->
-                                (* If the current type is StyTrue, use the original type's guarantees *)
-                                match current_other_ast.d with
-                                | StyTrue -> constructGuaranteeCollection orig_other_ast.d
-                                | _ -> constructGuaranteeCollection current_other_ast.d
-                            ) other_data in
-                            let parallel_gc_list = product_acts gc_list in
-                            let union_acts = union_product_acts gc_list in
-                            let prod_gc_others = RGCollections.union parallel_gc_list union_acts in
                             
-                            if verbose then begin
-                                Printf.eprintf "[INFO] %d other processes providing guarantees\n" (List.length other_data);
-                                Printf.eprintf "\nReliability collection:\n%s\n" (string_of_rgcollections rc_sty);
-                                Printf.eprintf "Product of other guarantees:\n%s\n" (string_of_rgcollections prod_gc_others);
-                            end;
+
                             
                             (* Check if there exists at least one reliability set that leads to completion *)
                             let found_path = RGCollections.exists (fun rgset_rely ->
                                 if verbose then Printf.eprintf "\n[Info] Trying reliability set: %s\n" (string_of_rgset rgset_rely);
+                                (* create product from only those types whose messages apear in the reliability set from the _ep_intfc_id *)
+                                let other_ids = List.map (fun (_, id_other, _) -> id_other) other_data in
+                                let needed_other_interface_id  = RGSet.fold(
+                                    fun acm_rely acc_ids ->
+                                        let acts_list = ActionSet.to_list acm_rely.acts in
+                                        List.fold_left (fun acc id_act ->
+                                            match id_act with
+                                            | Msg m ->
+                                                (* find interface ids for this message _ep_intfc_id map*)
+                                                let matching_intf_ids = Utils.StringMap.find m.endpoint _ep_intfc_map in
+                                                if List.length matching_intf_ids <> 2 then
+                                                    raise (Failure (Printf.sprintf "Expected exactly two interface IDs for endpoint %s, found %d"
+                                                        m.endpoint (List.length matching_intf_ids)));
+                                                let intf_id = List.filter (fun intf_id -> intf_id <> current_id) matching_intf_ids in
+                                                (
+                                                match intf_id with
+                                                | [needed_id] -> if List.mem needed_id acc then acc else needed_id :: acc
+                                                | _ -> raise (Failure (Printf.sprintf "Expected exactly one matching interface ID different from current ID %s for endpoint %s"
+                                                    current_id m.endpoint))
+                                                )                                        
+
+
+                                            | _  -> other_ids@acc
+                                        ) acc_ids acts_list
+                                )rgset_rely [] in
+
+                                if verbose then begin
+                                    Printf.eprintf "[Info] Needed interface IDs for this reliability set: [%s]\n"
+                                        (String.concat "; " needed_other_interface_id);
+                                end;
+
+                                let (needed_other_data_with_gc, needed_other_data_only) = List.fold_left (fun (acc_gc, acc_data) (other_ast, id_other, orig_other_ast) ->
+                                    let found = List.exists (fun needed_id ->
+                                        String.equal needed_id id_other
+                                    ) needed_other_interface_id in
+                                    if found then
+                                        let gc = match other_ast.d with
+                                        | StyTrue -> constructGuaranteeCollection orig_other_ast.d
+                                        | _ -> constructGuaranteeCollection other_ast.d
+                                        in
+                                        (acc_gc @ [gc], acc_data @ [(other_ast, id_other, orig_other_ast)])
+                                    else
+                                        (acc_gc, acc_data)
+                                ) ([], []) other_data in
+
+                                let union_acts = union_product_acts needed_other_data_with_gc in
+                                let parallel_gc_list = product_acts needed_other_data_with_gc in
+                                let prod_gc_others = RGCollections.union parallel_gc_list union_acts in
+
+                            if verbose then begin
+                                Printf.eprintf "[INFO] %d other processes providing guarantees\n" (List.length needed_other_data_only);
+                                Printf.eprintf "\nReliability collection:\n%s\n" (string_of_rgcollections rc_sty);
+                                Printf.eprintf "Product of other guarantees:\n%s\n" (string_of_rgcollections prod_gc_others);
+                            end;
                                 
                                 match find_subset rgset_rely prod_gc_others with
                                 | None -> 
@@ -720,7 +765,6 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                                 | Some rgset_guarantee ->
                                     if verbose then
                                         Printf.eprintf "[MATCHED] Reliability requirement satisfied by guarantee set: %s\n" (string_of_rgset rgset_guarantee);
-                                    
 
                                     let all_actions_ok = RGSet.for_all (fun acm_rely ->
                                         match find_act acm_rely rgset_guarantee with
@@ -729,11 +773,11 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                                                 raise (Failure (Printf.sprintf "[ERROR] Action %s not found in guarantee set, should not happen\n" (string_of_actionset acm_rely.acts)));
                                             false
                                         | Some _ ->
-                                            let other_data_with_idx = List.mapi (fun idx data -> (idx, data)) other_data in
+                                            (* Only compute continuations for types in needed_other_data *)
+                                            let needed_data_with_idx = List.mapi (fun idx data -> (idx, data)) needed_other_data_only in
                                             
-
-                                            let all_continuations = List.filter_map (fun (idx, (current_other_ast, id_other, orig_other_ast)) ->
-                                                let gc_other = List.nth gc_list idx in
+                                            let needed_continuations = List.filter_map (fun (idx, (current_other_ast, id_other, orig_other_ast)) ->
+                                                let gc_other = List.nth needed_other_data_with_gc idx in
                                                 let found = RGCollections.fold (fun rgset acc_opt ->
                                                     match acc_opt with
                                                     | Some _ -> acc_opt
@@ -745,10 +789,20 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
                                                 match found with
                                                 | Some cont_data -> Some cont_data
                                                 | None -> Some ({d = current_other_ast.d; span = code_span_dummy}, id_other, orig_other_ast)
-                                            ) other_data_with_idx in
+                                            ) needed_data_with_idx in
                                             
+                                            (* Add types that weren't needed - they remain unchanged *)
+                                            let unneeded_continuations = List.filter_map (fun (other_ast, id_other, orig_other_ast) ->
+                                                let is_needed = List.exists (fun needed_id ->
+                                                    String.equal needed_id id_other
+                                                ) needed_other_interface_id in
+                                                if not is_needed then
+                                                    Some ({d = other_ast.d; span = code_span_dummy}, id_other, orig_other_ast)
+                                                else
+                                                    None
+                                            ) other_data in
 
-                                            let all_cont_data = ({d = acm_rely.cont; span = code_span_dummy}, current_id, orig_ast) :: all_continuations in
+                                            let all_cont_data = ({d = acm_rely.cont; span = code_span_dummy}, current_id, orig_ast) :: needed_continuations @ unneeded_continuations in
 
                                             let active_cont_data = List.map (fun (cont, id, orig) -> if cont.d = StyTrue then (orig,id,orig) else (cont,id,orig)) all_cont_data in
 
@@ -807,13 +861,71 @@ let compatiblity_check_multiparty (session_ids: (((session_type ast_node)*identi
 
     let session_data_initial = List.map (fun (sty_ast, id) -> (sty_ast, id, sty_ast)) session_ids in
     check_multiparty_with_memo_internal session_data_initial
+
+let rec highest_level_endpoint (session_type : session_type) : identifier list =
     
+    match session_type with
+    | StyAtom (AtomicAct (AtomNBMsg m)) -> [m.endpoint]
+    | StyAtom (AtomicAct (AtomBMsg m)) -> [m.endpoint]
+    | StyAtom (AtomDelay _) -> []
+    | StySeq (s1, s2) | StyParallel (s1, s2) | StyChoice (s1, s2) -> (match highest_level_endpoint s1 with
+        | [] -> highest_level_endpoint s2
+        | eps1 -> eps1 @ highest_level_endpoint s2
+    )
+    | StyOffer ps | StyXOffer ps ->
+        (
+        let endpoints = List.flatten (List.map (fun oty ->
+            match oty.trigger with
+            | AtomicAct (AtomNBMsg m) -> [m.endpoint]
+            | AtomicAct (AtomBMsg m) -> [m.endpoint]
+            | AtomDelay _ -> []
+        ) ps) in
+        let endpoints_continuation = List.flatten (List.map (fun oty ->
+            match oty.continuation with
+            | Some cont -> highest_level_endpoint cont
+            | None -> []
+        ) ps) in
+        endpoints @ endpoints_continuation
+        )
+
+    | StyFuture s -> highest_level_endpoint s
+    | StyTrue -> []
+let create_ep_id_intfc_id_map_with_debug (pool_def : interface_pool_def ast_node) : identifier list Utils.string_map =
+    (* match with highest level endpoint,without duplicates *)
+    List.fold_left(
+    fun acc_map interface_member ->
+        match interface_member.d.interface_def with
+        | Some intf_in ->
+            let eps = highest_level_endpoint intf_in in
+            List.fold_left (fun map ep ->
+                let existing_ids = match Utils.StringMap.find_opt ep map with
+                    | Some ids -> ids
+                    | None -> []
+                in
+                let unique_ids = List.fold_left (fun acc id ->
+                    if List.mem id acc then acc else id :: acc
+                ) existing_ids [interface_member.d.inf_mem_id] in
+                Utils.StringMap.add ep unique_ids map
+            ) acc_map eps
+        | None -> raise (Failure "Interface member missing definition")
+
+    ) Utils.StringMap.empty pool_def.d.interface_members 
+(* for each pool member map based on endpoint of the message used at highest level *)
 
 let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (verbose : bool) : (bool * string) =
-        let ep_intfc_map = create_ep_id_intfc_id_map pool_def in
-        let session_ids = List.filter_map (fun intf_member ->
-            match intf_member.d.interface_def with
-            | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
-            | None -> raise (Failure "Interface member missing definition")
-        ) pool_def.d.interface_members in
-        compatiblity_check_multiparty session_ids ep_intfc_map verbose pool_def.span
+    let ep_intfc_map = create_ep_id_intfc_id_map_with_debug pool_def in
+    if verbose then
+        (
+        Printf.eprintf "[Debug] Endpoint to Interface ID map: %d\n" (Utils.StringMap.cardinal ep_intfc_map);
+        Printf.eprintf "[Debug] Endpoint mappings:\n";
+        Utils.StringMap.iter (fun ep intf_ids ->
+            Printf.eprintf "  Endpoint %s: Interface IDs [%s]\n" ep (String.concat "; " intf_ids)
+        ) ep_intfc_map;
+        );
+    
+    let session_ids = List.filter_map (fun intf_member ->
+        match intf_member.d.interface_def with
+        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
+        | None -> raise (Failure "Interface member missing definition")
+    ) pool_def.d.interface_members in
+    compatiblity_check_multiparty session_ids ep_intfc_map verbose pool_def.span
