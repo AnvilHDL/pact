@@ -757,7 +757,9 @@ expr:
 | LEFT_BRACKET; li = separated_list(COMMA, node(expr)); RIGHT_BRACKET
   { Lang.List li }
 | KEYWORD_XOFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
-  { Lang.XOffer offer_arms }
+  { Lang.XOffer (offer_arms, None) }
+| KEYWORD_XOFFER; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
+  { Lang.XOffer (offer_arms, Some selector) }
 | KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
   { Lang.Offer offer_arms }
 ;

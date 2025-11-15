@@ -300,11 +300,12 @@ let rec recurse_unfold expr_full_node expr_node =
       SharedAssign (ident, unfold e')
     | List es ->
       List (List.map unfold es)
-    | XOffer arms ->
+    | XOffer (arms, selector) ->
       XOffer (
         List.map (fun (arm_type, e_body) ->
           (arm_type, unfold e_body)
-        ) arms
+        ) arms,
+        selector
       )
     | Offer arms ->
       Offer (
@@ -1138,7 +1139,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     ) else
       td_false
     
-  | XOffer offer_arms ->
+  | XOffer (offer_arms, _state_selector) ->
     (* Create branches for each offer arm - all can start in parallel *)
     (* create a special condition node *)
 

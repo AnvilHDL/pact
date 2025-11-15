@@ -456,7 +456,7 @@ and expr =
   | Ready of message_specifier (** [ready(a, b)] *)
   | Probe of message_specifier (** [probe(a, b)] *)
   | Match of expr_node * ((expr_node * expr_node option) list)
-  | XOffer of ((offer_arm_type * expr_node) list)
+  | XOffer of ((offer_arm_type * expr_node) list) * (identifier option)  (** exclusive offer with optional selector wire *)
   | Offer of ((offer_arm_type * expr_node) list)
   | Read of lvalue (** reading a value from a register (leading to a borrow) *)
   | Debug of debug_op
@@ -822,11 +822,12 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (expr: ex
       ident,
       subst e
     )
-  | XOffer arms ->
+  | XOffer (arms, selector) ->
     XOffer (
       List.map (fun (arm_type, e_body) ->
         (arm_type, subst e_body)
-      ) arms
+      ) arms,
+      selector
     )
   | Offer arms ->
     Offer (

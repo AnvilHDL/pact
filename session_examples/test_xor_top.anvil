@@ -3,11 +3,11 @@ chan ch {
     left ack : (logic@#1)
 }
 
-interface tryand_interface (ep : left ch) = ^(ep.req : #5, ep.ack : #3) >> #1 ;
+interface tryand_interface (ep : left ch) = ^(ep.req : #5, ep.ack : #3, *) >> #1 ;
 proc tryand(tryand_interface){
     reg cyc : logic[8];
     loop{
-       xoffer{
+       xoffer pid{
             x= recv ep.req => (
                 dprint "[Cycle %d] try received req: %d" (*cyc, x) >>
                 cycle 5
@@ -16,7 +16,8 @@ proc tryand(tryand_interface){
                 dprint "[Cycle %d] try received ack: %d" (*cyc, x)
                 >>
                 cycle 3
-            )
+            ),
+            # => dprint "[Cycle %d] try received nothing" (*cyc)
         } >> 
         dprint "[Cycle %d] completed xoffer" (*cyc) >>
         cycle 1
