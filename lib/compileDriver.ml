@@ -131,8 +131,37 @@ let automata_debug _out config =
         (Except.Text "Type error:")::msg
           |> raise_compile_error None
   );
-  let _session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
-  ()
+  let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
+  let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
+    let open Lang in
+    let open SessionCompatiblity in
+  (* First build and print automaton for session types *)
+  List.iter (fun (sdef : session_def ast_node) ->
+    let auto = build_automaton sdef.d.body.d sdef.d.body.span in
+    let out_channel = Printf.sprintf "automaton_%s.dot" sdef.d.name in
+    let out = open_out out_channel in
+    print_automaton_dot auto out;
+    close_out out;
+  ) session_type_defs;
+
+  List.iter (fun (pool : interface_pool_def ast_node) ->
+    let session_ids = List.filter_map (fun intf_member ->
+        match intf_member.d.interface_def with
+        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
+        | None -> raise (Failure "Interface member missing definition")
+    ) pool.d.interface_members in
+    Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
+    let compat, err = try check_compatiblity_multiparty session_ids config.verbose pool.span with
+      | Except.TypeError msg ->
+        (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
+      | Failure msg -> (false, msg)
+      | _ -> (false, "Unknown error")
+      
+
+    in
+    Printf.eprintf "Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
+  ) pool_defs;
+  Printf.eprintf "\n"
 
 let debug_types out config =
   let open Config in
