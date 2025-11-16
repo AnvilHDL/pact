@@ -1,5 +1,6 @@
 type compile_config = {
   debug_mode : bool;
+  debug_choice : int;
   verbose: bool;
   verbose_max : bool;
   disable_lt_checks : bool;
@@ -12,7 +13,6 @@ type compile_config = {
 }
 
 let parse_args () : compile_config =
-  let debug_mode = ref false in
   let verbose = ref false in
   let verbose_max = ref false in
   let disable_compat_checks = ref false in
@@ -20,6 +20,7 @@ let parse_args () : compile_config =
   let disable_session_checks = ref false in
   let weak_typecasts = ref false in
   let opt_level = ref 2 in
+  let debug_choice = ref (-1) in
   let two_round_graph = ref false in
   let input_filenames = ref [] in
   let add_input_filename s =
@@ -35,13 +36,14 @@ let parse_args () : compile_config =
       ("-weak-typecasts", Arg.Set weak_typecasts, "Allow Typecasts");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default)");
       ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds");
-      ("-debug", Arg.Set debug_mode, "Enable debug mode for testing")
+      ("-debug", (Arg.Set_int debug_choice), "Enable debug mode for testing")
     ]
     add_input_filename
-    "anvil [-verbose] [-disable-lt-checks] [-O <opt-level>] [-two-round] <file1> [<file2>] ...";
+    "anvil [-verbose] [-disable-lt-checks] [-O <opt-level>] [-debug <debug-choice>] [-two-round] <file1> [<file2>] ...";
   {
-    debug_mode = !debug_mode;
+    debug_mode = (!debug_choice <> -1);
     verbose = !verbose;
+    debug_choice = !debug_choice;
     verbose_max = !verbose_max;
     disable_lt_checks = !disable_lt_checks;
     disable_session_checks = !disable_session_checks;

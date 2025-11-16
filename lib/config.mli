@@ -3,6 +3,7 @@
 (** Set of configurations that control the compilation process. *)
 type compile_config = {
   debug_mode : bool; (** enable debug mode for testing*)
+  debug_choice : int; (** debug choice for testing *)
   verbose : bool; (** output verbose details related to compilation to stderr *)
   verbose_max : bool; (** output verbose details related to compilation to stderr *)
   disable_lt_checks : bool; (** disable all lifetime and borrow related checks *)

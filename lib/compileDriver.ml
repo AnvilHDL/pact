@@ -63,8 +63,7 @@ let rec parse_recursive cunits parsed_files config filename =
     ) cunit.imports
   )
 
-let debug_types _out config =
-  (* parse types first *)
+let rely_guarantee_debug _out config  =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
@@ -121,6 +120,26 @@ let debug_types _out config =
   )pools;
 
   Printf.eprintf "\n"
+
+let automata_debug _out config =
+  let toplevel_filename = List.hd config.Config.input_filenames in
+  let cunits = ref [] in
+  (
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    with
+      | Except.TypeError msg ->
+        (Except.Text "Type error:")::msg
+          |> raise_compile_error None
+  );
+  let _session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
+  ()
+
+let debug_types out config =
+  let open Config in
+  match config.debug_choice with
+  | 0 -> rely_guarantee_debug out config
+  | 1 -> automata_debug out config
+  | _ -> raise (Failure "Unknown debug choice")
       
 
 let compile out config =

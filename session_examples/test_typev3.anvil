@@ -1,0 +1,3 @@
+interface a (ep : left ch) = ep.req + ep.res ;
+interface b (ep : right ch) = ep.req || ep.res ;
+interface c (ep : left ch) = &(ep.req: ep.res, ep.res:ep.req) ;
