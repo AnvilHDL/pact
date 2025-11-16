@@ -7,7 +7,8 @@ interface tryand_interface (ep : left ch) = ^(ep.req : #5, ep.ack : #3, *) >> #1
 proc tryand(tryand_interface){
     reg cyc : logic[8];
     loop{
-       xoffer pid{
+       let prio = 2'd2 >>
+       xoffer prio{
             x= recv ep.req => (
                 dprint "[Cycle %d] try received req: %d" (*cyc, x) >>
                 cycle 5
@@ -33,10 +34,19 @@ proc test_xor_top(){
     reg cyc : logic[8];
     
     loop{
-        send ep_ri.req(1'd1) >>
-        dprint "[Cycle %d] Top sent req" (*cyc) >>
-        send ep_ri.ack(1'd1) >>
-        dprint "[Cycle %d] Top sent ack" (*cyc) >>
+        (
+            cycle 4 >>
+            (
+                send ep_ri.ack(1'd1) >>
+                dprint "[Cycle %d] Top sent ack" (*cyc)
+            );
+
+            (
+                send ep_ri.req(1'd1) >>
+                dprint "[Cycle %d] Top sent req" (*cyc)
+            )
+
+        ) >>
         cycle 1
     }
     loop{

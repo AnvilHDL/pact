@@ -1002,3 +1002,11 @@ and aux2 p =
     | None -> string_of_atomic_action_with_gap trigger
     | Some p_continuation -> string_of_atomic_action_with_gap trigger ^ " : " ^ aux p_continuation
 in aux p
+
+
+let print_warning err_msg filename span_list =
+  let out = stderr in
+  Printf.fprintf out "[Warning]: %s\n" err_msg;
+  List.iter (fun span ->
+    print_code_span ~indent:2 ~trunc:(-5) out filename span
+  ) span_list

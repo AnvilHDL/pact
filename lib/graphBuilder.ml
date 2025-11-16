@@ -1139,7 +1139,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     ) else
       td_false
     
-  | XOffer (offer_arms, _state_selector) ->
+  | XOffer (offer_arms, state_selector) ->
     (* Create branches for each offer arm - all can start in parallel *)
     (* create a special condition node *)
 
@@ -1173,9 +1173,23 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
 
     let cond_td = Typing.offer_condition graph ctx offer_msg_list in
     let ctx = BuildContext.wait graph ctx cond_td.lt.live in
-    (* At this point one of the messages must have been received *)
+    
+    (*==================== At this point one of the messages must have been received ==========================================================*)
     (* Now we match 1'd1 with respective valid ready port of branch conditions *)
-    let (new_wires, cond_w) = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (1, 1)) graph.wires in
+    let length_offering = List.length offer_arms in
+    let bit_len = (Utils.int_log2 length_offering) in
+
+    let find_wire_ctx ct id =
+      let binding = Typing.context_lookup ct id in
+      let td = unwrap_or_err (Printf.sprintf "Could not find a binding for %s" id)  e.span binding in
+      let w = unwrap_or_err (Printf.sprintf "No wire associated with this binding %s" id)  e.span td.binding_val.w in
+      if w.size <> bit_len then
+        raise (Except.TypeError [Except.Text (Printf.sprintf "State selector wire size mismatch: expected %d but got %d" bit_len w.size); Except.codespan_local e.span])
+      else
+      (graph.wires, w)
+    in
+
+    let new_wires, sel_w = if Option.is_some state_selector then (find_wire_ctx ctx.typing_ctx (Option.get state_selector)) else WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (bit_len, 0)) graph.wires in
     graph.wires <- new_wires;
 
 let wire_list =
@@ -1183,39 +1197,86 @@ let wire_list =
         if msg_def.dir = Inp then
           let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
           graph.wires <- wires';
-          let td = Typing.immediate_data graph (Some msg_valid_port) `Logic ctx.current in
-          acc @ [td]
+          acc @ [msg_valid_port]
         else
           let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
           graph.wires <- wires';
-          let td = Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current in
-          acc @ [td]
+          acc @ [msg_ack_port]
       ) [] msg_list in
+      let is_wildcard_present = List.exists (fun msg_spec ->
+            msg_spec.endpoint = "*" && msg_spec.msg = "*"
+      ) offer_msg_list in
+      let updated_wire_list' =
+        if is_wildcard_present && ((List.length wire_list) = 1)  then
+          (
+            let wires', ww = WireCollection.add_unary graph.thread_id ci.typedefs Not (List.hd wire_list) graph.wires in
+            graph.wires <- wires';
+            wire_list @ [ww]
+          )
+        else(
+          let ww = List.fold_left (fun hd wire ->
+            let (wires', new_wire) = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs Or hd (`Single wire) graph.wires in
+            graph.wires <- wires';
+            new_wire
+          ) (List.hd wire_list) (List.tl wire_list) in
+          let wc,  ww_not = WireCollection.add_unary graph.thread_id ci.typedefs Not ww graph.wires in
+          graph.wires <- wc;
+          wire_list @ [ww_not]
+        ) in
+
+    let max_len = int_of_float (2. ** float_of_int bit_len) in
+    let extended_zero_needed = max_len - length_offering in
+    let updated_wire_list =
+      if extended_zero_needed > 0 then
+        (
+        (* add 1 bit wires of zero *)
+          List.fold_left (fun acc _ ->
+          let (wires', zero_wire) = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (1, 0)) graph.wires in
+          graph.wires <- wires';
+          acc @ [zero_wire]
+        ) updated_wire_list' (List.init extended_zero_needed (fun _ -> ()))
+        )
+      else
+        updated_wire_list'
+    in
+    if List.length updated_wire_list < max_len then
+      raise (event_graph_error_default (Printf.sprintf "Compiler error in xoffer: wire list length less than expected! current = %d| expected = %d" (List.length updated_wire_list) max_len) e.span) ;
+
+
+      let index_values = List.fold_left (fun acc idx ->
+        let wc, incr_wr = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (bit_len, idx)) graph.wires in
+        graph.wires <- wc;
+        let wtd = Typing.immediate_data graph (Some incr_wr) `Logic ctx.current in
+
+        acc @ [wtd]
+      ) [] (List.init max_len (fun idx -> idx)) in
+      let selector_indexes = List.fold_left (fun acc idx ->
+        let wires, wr = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs Add sel_w (`Single (Option.get idx.w)) graph.wires in
+          graph.wires <- wires;
+          acc @ [wr]
+      ) [] index_values in
+      let wires,valid_ready_array = WireCollection.add_concat graph.thread_id ci.typedefs ci.macro_defs (List.rev updated_wire_list) graph.wires in
+      graph.wires <- wires;
+
+      let sw_cond_wires = List.fold_left (fun acc idx ->
+        let (wires', sw_cond_w) = WireCollection.add_slice graph.thread_id valid_ready_array (NonConst idx) (1) graph.wires in
+        graph.wires <- wires';
+        acc @ [sw_cond_w]
+      ) [] selector_indexes in
+
+      let cond_value_pairs = List.combine sw_cond_wires selector_indexes in
+      (* take the last value out *)
+      let cond_value_pairs_filtered = cond_value_pairs |> List.take (max_len - 1) in
+
+      let (wires, cond_w) = WireCollection.add_switch graph.thread_id ci.typedefs cond_value_pairs_filtered (List.nth selector_indexes (max_len - 1)) graph.wires in
+      graph.wires <- wires;
+
     
       let is_wildcard_present = List.exists (fun msg_spec ->
-      msg_spec.endpoint = "*" && msg_spec.msg = "*"
-    ) offer_msg_list in
-
-let timed_data_wildcard = (
-      let wire_not_td = List.map (
-          fun branch_td ->
-            let (wires', w_not) = WireCollection.add_unary graph.thread_id ci.typedefs Not (unwrap_or_err "Invalid branch condition" e.span branch_td.w) graph.wires in
-            graph.wires <- wires';
-            w_not
-        ) wire_list in
-        let wire_not_td_singleton = List.map (fun w -> `Single w) wire_not_td in
-        let wires,wire = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (1, 1)) graph.wires in
-        graph.wires <- wires;
-        let wire_none_active =
-          List.fold_left (fun acc_w w_not ->
-            let (wires', w_and) = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs And acc_w w_not graph.wires in
-            graph.wires <- wires';
-            w_and
-          ) wire wire_not_td_singleton in
-        Typing.immediate_data graph (Some wire_none_active) `Logic ctx.current
-    ) in
-    let wire_list = if is_wildcard_present then wire_list @ [timed_data_wildcard] else wire_list in
-
+            msg_spec.endpoint = "*" && msg_spec.msg = "*"
+      ) offer_msg_list in
+    
+      let required_branch_conditions = List.take length_offering index_values in
     let wildcard_arm =
       List.find_opt (fun (offer_arm, _) ->
         match offer_arm with
@@ -1229,7 +1290,7 @@ let timed_data_wildcard = (
     let branch_count = List.length offer_arms in
     let branch_info = {
       branch_cond_v = {w = Some cond_w; lt = EventGraphOps.lifetime_const ctx.current; reg_borrows = []; dtype = unit_dtype};
-      branch_cond = MatchCases wire_list;
+      branch_cond = MatchCases required_branch_conditions;
       branch_count = branch_count;
       branches_to = [];
       branches_val = [];
