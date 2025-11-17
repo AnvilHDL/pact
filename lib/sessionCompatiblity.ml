@@ -218,7 +218,7 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
   (* check if both set are equal *)
   let set1 = List.fold_left (fun acc ep -> IntSet.add (Hashtbl.hash ep) acc) IntSet.empty ms1_ep in
   let set2 = List.fold_left (fun acc ep -> IntSet.add (Hashtbl.hash ep) acc) IntSet.empty ms2_ep in
-  IntSet.equal set1 set2
+   (not (IntSet.equal set1 set2))  ||  (( IntSet.cardinal set1 < 1 ) && ( IntSet.cardinal set2 < 1 ))
 
 
 
@@ -242,7 +242,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       let left_end = build st1 current in
       let choice_state = TypeAutomaton.new_state auto false in
       let fair_c = infer_fair_choice st1 st2 in
-      if not fair_c then
+      if fair_c then
         TypeAutomaton.add_transition auto left_end choice_state (LabelSet.singleton ChoiceLabel) true
       else
       TypeAutomaton.add_transition auto left_end choice_state (LabelSet.singleton ChoiceLabel) false;
