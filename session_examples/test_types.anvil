@@ -69,3 +69,15 @@ pool p8{
     i2 : ep2.m2;
     i3 : #ep1.m1
 }
+
+pool p9{
+    ep_le -- ep_ri : ch;
+    i1 : (ep.full >> ep.pop) + (ep.empty >> ep.push) + &(ep.push , ep.pop);
+    i2 : ^(ep.full : ep.pop, ep.empty : ep.push, * : &(ep.push ,ep.pop))
+}
+
+pool p10{
+    ep_le -- ep_ri : ch;
+    i1 : (ep.full >> ep.pop) + (ep.empty >> ep.push) + &(ep.push , ep.pop);
+    i2 : ^(ep.full : ep.pop, ep.empty : ep.push)
+}

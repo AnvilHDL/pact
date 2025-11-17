@@ -135,7 +135,6 @@ let check_label_satisfiability (l1: label_kind) (l2: label_kind) : bool =
   (* Choice synchronization must match *)
   | ChoiceLabel, OfferingLabel _ -> true
   | OfferingLabel _, ChoiceLabel -> true
-  | ChoiceLabel, ChoiceLabel -> true
 
   
 
@@ -189,6 +188,45 @@ let label1_satisfied = LabelSet.for_all (fun l1 ->
   ) labels1 in
   label1_satisfied
 
+
+
+let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
+  let rec first_messages (st: Lang.session_type) : Lang.message_specifier list =
+    match st with
+    | Lang.StyAtom (Lang.AtomicAct (Lang.AtomBMsg m)) -> [m]
+    | Lang.StyAtom (Lang.AtomicAct (Lang.AtomNBMsg m)) -> [m]
+    | Lang.StySeq (s1, _) -> (first_messages s1)
+    | Lang.StyChoice (s1, s2) -> (first_messages s1) @ (first_messages s2)
+    | Lang.StyOffer offerings | Lang.StyXOffer offerings ->
+      List.flatten (List.map (fun o ->
+        match o.Lang.trigger with
+        | Lang.AtomicAct (Lang.AtomBMsg m) -> [m]
+        | Lang.AtomicAct (Lang.AtomNBMsg m) -> [m]
+        | _ -> []
+      ) offerings)
+    | Lang.StyParallel (s1, s2) -> (first_messages s1) @ (first_messages s2)
+    | Lang.StyFuture s -> first_messages s
+    | Lang.StyAtom (Lang.AtomDelay _) -> []
+    | Lang.StyTrue -> []
+  in
+  let msgs1 = first_messages b1 in
+  let msgs2 = first_messages b2 in
+
+  let ms1_ep = List.map (fun m -> m.endpoint) msgs1 in
+  let ms2_ep = List.map (fun m -> m.endpoint) msgs2 in
+
+  (* check if both set are equal *)
+  let set1 = List.fold_left (fun acc ep -> IntSet.add (Hashtbl.hash ep) acc) IntSet.empty ms1_ep in
+  let set2 = List.fold_left (fun acc ep -> IntSet.add (Hashtbl.hash ep) acc) IntSet.empty ms2_ep in
+  IntSet.equal set1 set2
+
+
+
+  
+
+  
+
+
 let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) :  TypeAutomaton.t =
   let auto = TypeAutomaton.create () in
   
@@ -203,6 +241,10 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
     | Lang.StyChoice (st1, st2) -> (* Internal choice m1 + m2 *)
       let left_end = build st1 current in
       let choice_state = TypeAutomaton.new_state auto false in
+      let fair_c = infer_fair_choice st1 st2 in
+      if not fair_c then
+        TypeAutomaton.add_transition auto left_end choice_state (LabelSet.singleton ChoiceLabel) true
+      else
       TypeAutomaton.add_transition auto left_end choice_state (LabelSet.singleton ChoiceLabel) false;
       build st2 choice_state
     | Lang.StyTrue -> 
