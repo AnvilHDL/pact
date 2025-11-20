@@ -135,9 +135,10 @@ let automata_debug _out config =
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
     let open Lang in
     let open SessionCompatiblity in
+    let open SessionCompatiblityv3 in
   (* First build and print automaton for session types *)
   List.iter (fun (sdef : session_def ast_node) ->
-    let auto = build_automaton sdef.d.body.d sdef.d.body.span in
+    let auto = SessionCompatiblityv3.build_automaton sdef.d.body.d sdef.d.body.span in
     let out_channel = Printf.sprintf "automaton_%s.dot" sdef.d.name in
     let out = open_out out_channel in
     print_automaton_dot auto out;

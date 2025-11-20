@@ -1,3 +1,8 @@
-interface a (ep : left ch) = ep.req + ep.res ;
-interface b (ep : right ch) = ep.req || ep.res ;
-interface c (ep : left ch) = &(ep.req: ep.res, ep.res:ep.req) ;
+interface seq (ep : left ch) = (ep.req >> ep.ack) ;
+
+interface nb_seq (ep : left ch) = #ep.req >> ep.ack ;
+
+interface Fd (ep : left ch) = F ep.req >> ep.ack ;
+
+interface choice (ep : left ch) = (ep.req + ep.ack) ;
+
