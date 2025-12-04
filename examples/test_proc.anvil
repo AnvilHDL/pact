@@ -5,11 +5,20 @@
 // }
 proc test_proc(){
     loop{
+<<<<<<< HEAD
         if(1){
             cycle 3
         }
         else{
             cycle 5
         }
+=======
+        let req = recv ep.req >>
+        send ep.resp (1'd1) >>
+        cycle 1 >>
+        let _ = recv ep.req2 >>
+        dprint "received Message %d" (req) >>
+        cycle 1
+>>>>>>> experimental
     }
 }

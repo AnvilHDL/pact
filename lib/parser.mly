@@ -473,7 +473,7 @@ progress_contract:
 
 //For passing the list of channels that are nessacary to communicate with the instantiation of the process
 proc_def_arg_list:
-  l = separated_list(COMMA, node(proc_def_arg))
+|  l = separated_list(COMMA, node(proc_def_arg))
   { l }
 ;
 
@@ -492,6 +492,7 @@ proc_def_arg:
       dir = chan_dir;
       foreign = false;
       opp = None;
+      num_instances = None;
     } : Lang.endpoint_def
   }
 | KEYWORD_FOREIGN; ident = IDENT; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
@@ -503,8 +504,39 @@ proc_def_arg:
       dir = chan_dir;
       foreign = true;
       opp = None;
+      num_instances = None;
     } : Lang.endpoint_def
   }
+| ident = IDENT; LEFT_BRACKET; n = INT; RIGHT_BRACKET; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
+  {
+    {
+      name = ident;
+      channel_class = fst chan_class;
+      channel_params = snd chan_class;
+      dir = chan_dir;
+      foreign = false;
+      opp = None;
+      num_instances = Some n;
+    } : Lang.endpoint_def
+  }
+| KEYWORD_FOREIGN; ident = IDENT; LEFT_BRACKET; n = INT; RIGHT_BRACKET; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
+  {
+    {
+      name = ident;
+      channel_class = fst chan_class;
+      channel_params = snd chan_class;
+      dir = chan_dir;
+      foreign = true;
+      opp = None;
+      num_instances = Some n;
+    } : Lang.endpoint_def
+  }
+;
+
+foreign_tag:
+| KEYWORD_FOREIGN
+  { true }
+| {false}
 ;
 
 // Specifies the dirn of comm (inp or out)
@@ -516,52 +548,40 @@ channel_direction:
 ;
 // channels are instantantiated with endpoint aquisition by native channel inside the proc
 channel_def:
-| left_endpoint = IDENT; DOUBLE_MINUS;
-  right_endpoint = IDENT; COLON;
+| left_foreign = foreign_tag; left_endpoint = IDENT; DOUBLE_MINUS;
+  right_foreign = foreign_tag; right_endpoint = IDENT; COLON;
   chan_class = channel_class_concrete
   {
+    let visibility = match left_foreign, right_foreign with
+      | true, true -> Lang.BothForeign
+      | false, true -> Lang.RightForeign
+      | _ -> Lang.LeftForeign
+    in
     {
       channel_class = fst chan_class;
       channel_params = snd chan_class;
       endpoint_left = left_endpoint;
       endpoint_right = right_endpoint;
-      visibility = Lang.LeftForeign;
+      visibility = visibility;
+      n_instances = None;
     } : Lang.channel_def
   }
-| KEYWORD_FOREIGN; left_endpoint = IDENT; DOUBLE_MINUS;
-  right_endpoint = IDENT; COLON;
-  chan_class = channel_class_concrete
+| left_foreign = foreign_tag; left_endpoint = IDENT; DOUBLE_MINUS;
+  right_foreign = foreign_tag; right_endpoint = IDENT; COLON;
+  chan_class = channel_class_concrete LEFT_BRACKET; n = INT; RIGHT_BRACKET
   {
+    let visibility = match left_foreign, right_foreign with
+      | true, true -> Lang.BothForeign
+      | false, true -> Lang.RightForeign
+      | _ -> Lang.LeftForeign
+    in
     {
       channel_class = fst chan_class;
       channel_params = snd chan_class;
       endpoint_left = left_endpoint;
       endpoint_right = right_endpoint;
-      visibility = Lang.RightForeign;
-    } : Lang.channel_def
-  }
-| left_endpoint = IDENT; DOUBLE_MINUS;
-  KEYWORD_FOREIGN; right_endpoint = IDENT; COLON;
-  chan_class = channel_class_concrete
-  {
-    {
-      channel_class = fst chan_class;
-      channel_params = snd chan_class;
-      endpoint_left = left_endpoint;
-      endpoint_right = right_endpoint;
-      visibility = Lang.RightForeign;
-    } : Lang.channel_def
-  }
-| KEYWORD_FOREIGN; left_endpoint = IDENT; DOUBLE_MINUS;
-  KEYWORD_FOREIGN; right_endpoint = IDENT; COLON;
-  chan_class = channel_class_concrete
-  {
-    {
-      channel_class = fst chan_class;
-      channel_params = snd chan_class;
-      endpoint_left = left_endpoint;
-      endpoint_right = right_endpoint;
-      visibility = Lang.BothForeign;
+      visibility = visibility;
+      n_instances = Some n;
     } : Lang.channel_def
   }
 ;
@@ -575,7 +595,7 @@ channel_class_concrete:
 
 // Instantiating the proc for comm
 spawn:
-| proc = IDENT; LEFT_PAREN; params = separated_list(COMMA, IDENT); RIGHT_PAREN
+| proc = IDENT; LEFT_PAREN; params = separated_list(COMMA,args_spawn); RIGHT_PAREN
   {
     {
       proc = proc;
@@ -595,7 +615,7 @@ spawn:
   }
 
 | proc = IDENT; LEFT_ABRACK; compile_params = separated_list(COMMA, param_value); RIGHT_ABRACK;
-  LEFT_PAREN; params = separated_list(COMMA, IDENT); RIGHT_PAREN
+  LEFT_PAREN; params = separated_list(COMMA, args_spawn); RIGHT_PAREN
   {
     {
       proc = proc;
@@ -624,6 +644,14 @@ ifc_inst:
       pifc_id = id;
     } : Lang.ifc_instantiation
   }
+args_spawn:
+| ident = IDENT
+  { Lang.SingleEp ident }
+| ident = IDENT; LEFT_BRACKET; start = INT; PLUS; COLON; size = INT; RIGHT_BRACKET
+  { Lang.RangeEp (ident, start, size) }
+| ident = IDENT; LEFT_BRACKET; index = INT; RIGHT_BRACKET;
+  { Lang.SingleEp (Printf.sprintf "%s[%d]" ident index)  }
+
 param_value:
 | n = INT
   { Lang.IntParamValue n }
@@ -1094,10 +1122,17 @@ plus_minus:
 
 //Message string
 message_specifier:
-  endpoint = IDENT; PERIOD; msg_type = IDENT
+|  endpoint = IDENT; PERIOD; msg_type = IDENT
   {
     {
       endpoint = endpoint;
+      msg = msg_type;
+    } : Lang.message_specifier
+  }
+| endpoint = IDENT; LEFT_BRACKET; index = INT; RIGHT_BRACKET; PERIOD; msg_type = IDENT
+  {
+    {
+      endpoint = Printf.sprintf "%s[%d]" endpoint index;
       msg = msg_type;
     } : Lang.message_specifier
   }

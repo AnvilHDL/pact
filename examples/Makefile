@@ -13,6 +13,7 @@ ifdef LTOFF
     ANVIL_FLAGS += -disable-lt-checks
 endif
 
+<<<<<<< HEAD
 ifdef DEBUG
 	ANVIL_FLAGS += -verbose
 endif
@@ -21,6 +22,8 @@ ifdef NOOPT
 	ANVIL_FLAGS += -O 0
 endif
 
+=======
+>>>>>>> experimental
 $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
 	dune exec anvil $(ANVIL_FLAGS) $< > $@
 
@@ -34,4 +37,8 @@ run: obj_dir/V$(MODULE_NAME)
 	@ $< $(TIMEOUT)
 
 clean:
+<<<<<<< HEAD
 	rm -rf *.anvil.sv *_driver.cpp obj_dir
+=======
+	rm -rf *obj_dir *.anvil.sv *_driver.cpp
+>>>>>>> experimental

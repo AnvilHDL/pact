@@ -149,6 +149,7 @@ type endpoint_def = {
   used within this process? *)
   opp: identifier option; (** if the endpoint is created locally, the other endpoint associated
   with the same channel *)
+  num_instances : int option (** number of instances for arrayed channels *)
 }
 
 type macro_def = {
@@ -282,6 +283,7 @@ type channel_def = {
   endpoint_left: identifier;
   endpoint_right: identifier;
   visibility: channel_visibility;
+  n_instances : int option; (** number of instances for arrayed channels To Do: add support for parametrization *) 
 }
 
 type interface_pool_def = {
@@ -505,7 +507,7 @@ type spawn_def = {
   proc: identifier;
   (* channels to pass as args *)
   (* TODO: this naming collides with compile-time parameters *)
-  mutable params: identifier list; (** names of the endpoints passed to the spawned process *)
+  mutable params: args_spawn list; (** names of the endpoints passed to the spawned process *)
   interface_params: (ifc_instantiation list) option; (** interface name and endpoint name pairs passed to the spawned process *)
   compile_params: param_value list; (** concrete param value list *)
 }
@@ -513,6 +515,10 @@ and ifc_instantiation = {
   pid : identifier;
   pifc_id : identifier;
 }
+
+and args_spawn = 
+  | SingleEp of identifier
+  | RangeEp of identifier *int * int  (** name, start, size*)
 
 (* TODO: specify the type? *)
 type shared_var_def = {
@@ -764,7 +770,7 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (expr: ex
   | Index (arr, idx) ->
       let new_arr = subst arr in
       let new_idx = match idx with
-        | Single e -> Single (subst e)
+        | Single e -> Printf.eprintf "Single"; Single (subst e)
         | Range (e1, e2) -> Range (subst e1, subst e2)
       in
       Index (new_arr, new_idx)
@@ -835,9 +841,11 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (expr: ex
         (arm_type, subst e_body)
       ) arms
     )
+  | Read lv ->
+    Read (substitute_lvalue id value lv)
   | Recurse | Literal _ | Cycle _
   | Identifier _ | Ready _ | Probe _
-  | Read _ | Recv _
+  | Recv _
   | Sync _ -> expr.d
 
   in
@@ -1010,3 +1018,15 @@ let print_warning err_msg filename span_list =
   List.iter (fun span ->
     print_code_span ~indent:2 ~trunc:(-5) out filename span
   ) span_list
+
+let preprocess_ep_spawn_args (args : args_spawn list) : identifier list =
+  List.concat_map
+    (function
+      | SingleEp name -> [name]
+      | RangeEp (name, start, size) ->
+        (
+          [List.init size (fun i -> Printf.sprintf "%s[%d]" name (start + i))] |> List.concat
+
+        )
+    ) 
+    args

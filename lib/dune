@@ -6,4 +6,5 @@
 (library
  (name anvil)
  (public_name anvil)
- (libraries menhirLib))
+ (libraries menhirLib yojson)
+)

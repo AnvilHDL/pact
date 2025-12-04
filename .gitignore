@@ -8,9 +8,13 @@
 !sim_main.cpp
 **/obj_dir/
 **/logs/
+<<<<<<< HEAD
 lib/self-notes.md
 **/*.anvil.sv
 session_examples/*.dot
 **/*.png
 **/*.log
 **/*.out
+=======
+**/*.anvil.sv
+>>>>>>> experimental
