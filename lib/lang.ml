@@ -991,12 +991,6 @@ and aux2 p =
 in aux p
 
 
-let print_warning err_msg filename span_list =
-  let out = stderr in
-  Printf.fprintf out "[Warning]: %s\n" err_msg;
-  List.iter (fun span ->
-    print_code_span ~indent:2 ~trunc:(-5) out filename span
-  ) span_list
 
 let preprocess_ep_spawn_args (args : args_spawn list) : identifier list =
   List.concat_map
