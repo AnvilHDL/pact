@@ -782,7 +782,7 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | Index (arr, idx) ->
       let new_arr = subst arr in
       let new_idx = match idx with
-        | Single e -> Printf.eprintf "Single"; Single (subst e)
+        | Single e -> Single (subst e)
         | Range (e1, e2) -> Range (subst e1, subst e2)
       in
       Index (new_arr, new_idx)
