@@ -35,6 +35,8 @@ module Typing = struct
         | `Root Some (e, _) -> [e]
         | `Later (e1, e2) -> [e1; e2]
         | `Branch (_, { branches_val; _ }) -> branches_val
+        | `UntilEntry (e, info) -> [e; info.until_body_end] (* parent and body_end for recursion *)
+        | `UntilExit info -> [info.until_stop_cond] (* exit depends on stop condition *)
       in
       let new_preds = List.fold_left
         (fun preds e -> Utils.IntSet.union preds e.preds)
@@ -369,6 +371,8 @@ let rec recurse_unfold expr_full_node expr_node =
       SharedAssign (ident, unfold e')
     | List es ->
       List (List.map unfold es)
+    | Until (cond, body) ->
+      Until (unfold cond, unfold body)
     | Recurse -> failwith "Shouldn't reach here!"
     in
     {expr_node with d = expr'}
@@ -1100,6 +1104,37 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
   | Recurse ->
     ctx.current.is_recurse <- true;
     Typing.const_data graph None unit_dtype ctx.current
+  | Until (cond, body) ->
+    
+    (* Start evaluating the condition - this runs in parallel *)
+    let td_cond = visit_expr graph ci ctx cond in
+    
+
+    let until_info = {
+      until_entry =  ctx.current; (* placeholder, will be set *)
+      until_stop_cond = td_cond.lt.live;
+      until_body_end = ctx.current; (* placeholder, will be set *)
+    } in
+    
+    let body_entry = Typing.event_create graph (`UntilEntry (ctx.current, until_info)) in
+    until_info.until_entry <- body_entry;
+    
+    let ctx_body = {ctx with current = body_entry} in
+    let td_body = visit_expr graph ci ctx_body body in
+    
+    let body_end = td_body.lt.live in
+    until_info.until_body_end <- body_end;
+    
+    let exit_event = Typing.event_create graph (`UntilExit until_info) in
+    
+    let lt = {
+      live = exit_event;
+      dead = Utils.list_unordered_join td_cond.lt.dead td_body.lt.dead
+    } in
+    let reg_borrows' = Utils.list_unordered_join td_cond.reg_borrows td_body.reg_borrows in
+    {w = None; lt; reg_borrows = reg_borrows'; dtype = unit_dtype}
+
+
   | Tuple _ -> raise (event_graph_error_default "Unimplemented expression!" e.span)
 
 

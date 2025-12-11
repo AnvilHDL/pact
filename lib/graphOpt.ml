@@ -464,6 +464,11 @@ module CombSimplPass = struct
           (* we just need to replace things *)
           ev.actions <- actions;
           ev.sustained_actions <- sustained_actions;
+          let replace_until_info info = {
+            until_entry = replace_event info.until_entry;
+            until_stop_cond = replace_event info.until_stop_cond;
+            until_body_end = replace_event info.until_body_end;
+          } in
           let source' = match ev.source with
           | `Root None -> `Root None
           | `Root (Some (ev', br_side_info)) ->
@@ -478,6 +483,10 @@ module CombSimplPass = struct
           | `Seq (ev', d) -> `Seq (replace_event ev', d)
           | `Branch (ev', br_info) ->
             `Branch (replace_event ev', replace_branch_info br_info)
+          | `UntilEntry (ev', info) ->
+            `UntilEntry (replace_event ev', replace_until_info info)
+          | `UntilExit info ->
+            `UntilExit (replace_until_info info)
           in
           ev.source <- source'
         ) else (

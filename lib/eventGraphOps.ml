@@ -42,6 +42,10 @@ let print_graph (g: event_graph) =
     | `Root None -> Printf.eprintf "> %d: root\n" ev.id
     | `Root (Some (ev', br_side_info)) ->
         Printf.eprintf "> %d: branch-root %d %d\n" ev.id br_side_info.branch_side_sel ev'.id
+    | `UntilEntry (ev', info) ->
+        Printf.eprintf "> %d: until-entry %d stop:%d body_end:%d\n" ev.id ev'.id info.until_stop_cond.id info.until_body_end.id
+    | `UntilExit info ->
+        Printf.eprintf "> %d: until-exit stop:%d\n" ev.id info.until_stop_cond.id
   ) g.events
 
 let print_dot_graph g out =
@@ -77,6 +81,11 @@ let print_dot_graph g out =
     | `Root None -> ()
     | `Root (Some (ev', br_side_info)) ->
       print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+    | `UntilEntry (ev', info) ->
+      print_edge ev' ev "UE";
+      print_edge info.until_body_end ev "UL" (* loop back *)
+    | `UntilExit info ->
+      print_edge info.until_stop_cond ev "UX"
   ) g.events;
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH IN DOT FORMAT\n"

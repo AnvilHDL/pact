@@ -405,6 +405,7 @@ and expr =
   | Recv of recv_pack
   | SharedAssign of identifier * expr_node (** make ready a shared value *)
   | List of expr_node list (** array/list of expressions *)
+  | Until of expr_node * expr_node (** until (cond) { body } *)
   | Recurse
 and expr_node = expr ast_node
 
@@ -721,6 +722,8 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
       let new_recv_pack = {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx} in
       Recv new_recv_pack
   | Sync _ -> expr.d
+  | Until (cond, body) ->
+      Until (subst cond, subst body)
 
   in
   { expr with d = new_expr }

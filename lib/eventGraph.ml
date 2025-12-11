@@ -147,6 +147,13 @@ and branch_side_info = {
 }
 
 
+(** Information about an Until loop *)
+and until_loop_info = {
+  mutable until_entry : event; (** the entry point of the loop (where body starts) *)
+  until_stop_cond : event; (** when this event fires, the loop exits *)
+  mutable until_body_end : event; (** the end of the body, which recurses back to entry *)
+}
+
 (** Describes when an event is reached. *)
 and event_source = [
   | `Root of (event * branch_side_info) option (** at the beginning of the thread (initially already reached),
@@ -155,6 +162,8 @@ and event_source = [
   | `Later of event * event (** reached when both events have been reached *)
   | `Seq of event * atomic_delay (** reached when a {{!atomic_delay}delay} takes place after another event is reached *)
   | `Branch of event * branch_info (** branching out into two branches. This event is reached when the end of either side is reached *)
+  | `UntilEntry of event * until_loop_info (** entry point of an until loop - reached when parent is active AND stop condition not yet fired, OR body_end recurses back *)
+  | `UntilExit of until_loop_info (** exit point of an until loop - reached when stop condition fires *)
 ]
 
 (** An action that starts at an event but may last multiple cycles.

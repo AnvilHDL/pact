@@ -37,7 +37,7 @@ let collect_reg_states g =
       (* this state needs to distinguish two sources *)
       let sn = EventStateFormatter.format_scorer g.thread_id e.id in
       [("logic[1:0]", sn)]
-    | `Branch _ | `Root _ -> []
+    | `Branch _ | `Root _ | `UntilEntry _ | `UntilExit _ -> []
   ) g.events
 
 (* prints out declarations for event-related wires and registers *)
@@ -237,6 +237,18 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end" (* ending always_comb *)
           )
       )
+    | `UntilEntry (parent, info) ->
+      (* Until loop entry: active when (parent active AND stop_cond not fired) OR body_end loops back *)
+      let cn_parent = EventStateFormatter.format_current g.thread_id parent.id in
+      let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
+      let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
+      Printf.sprintf "assign %s = (%s && !%s) || %s;" cn cn_parent cn_stop cn_body_end
+      |> print_line
+    | `UntilExit info ->
+      (* Until loop exit: active when stop condition fires *)
+      let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
+      Printf.sprintf "assign %s = %s;" cn cn_stop
+      |> print_line
   in
   List.iter print_compute_next g.events
 

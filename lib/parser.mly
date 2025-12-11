@@ -76,6 +76,7 @@
 %token KEYWORD_ENUM         (* enum *)
 %token KEYWORD_WITH         (* with *)
 %token KEYWORD_TRY          (* try *)
+%token KEYWORD_UNTIL        (* until *)
 %token <int>INT             (* int literal *)
 %token <string>IDENT        (* identifier *)
 %token <string>BIT_LITERAL  (* bit literal *)
@@ -550,6 +551,8 @@ expr:
   { Lang.Debug Lang.DebugFinish }
 | LEFT_BRACKET; li = separated_list(COMMA, node(expr)); RIGHT_BRACKET
   { Lang.List li }
+| KEYWORD_UNTIL; cond = node(expr); LEFT_BRACE; body = node(expr); RIGHT_BRACE
+  { Lang.Until (cond, body) }
 ;
 
 expr_in_parenthese:
