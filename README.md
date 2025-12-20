@@ -1,8 +1,16 @@
-# AnvilHDL: A Timing-Safe Hardware Description Language
+<p align="center">
+  <a href="https://anvil.kisp-lab.org/" aria-label="AnvilHDL website">
+    <picture>
+      <img alt="AnvilHDL" src="docs/logo/anvil-horizontal.png" height="84">
+    </picture>
+  </a>
+</p>
 
-**Anvil** is a hardware description language (HDL) that describes digital circuit designs at the register-transfer level (RTL). It introduces a novel type system to guarantee timing safety without abstracting away the low-level control required for efficient hardware design.
+# A General-Purpose Timing-Safe Hardware Description Language
 
-> **Note** The motivation and design are discussed and evaluated in depth in our research paper: [**Anvil: A General-Purpose Timing-Safe Hardware Description Language**](https://arxiv.org/abs/2503.19447) which will apear at ASPLOS 2026.
+**AnvilHDL** is a hardware description language (HDL) that describes digital circuit designs at the register-transfer level (RTL). It introduces a novel type system to guarantee timing safety without abstracting away the low-level control required for efficient hardware design. Designs created in AnvilHDL interface easily with those in SystemVerilog.
+
+> **Note** The motivation and design are discussed and evaluated in depth in our research paper: [**Anvil: A General-Purpose Timing-Safe Hardware Description Language**](https://arxiv.org/abs/2503.19447), which will appear at ASPLOS 2026.
 
 -----
 
@@ -11,27 +19,27 @@
 ### 1. Online Playground
 
 The easiest way to experience AnvilHDL is in your browser.
-[**Try the Online Playground**](https://anvil.capstone.kisp-lab.org/) (No installation required!)
+[**Try the Online Playground**](https://anvil.kisp-lab.org/) (No installation required!)
 
 ### 2. Interactive Tutorial
 
-Learn the language basics through our guided tour : [**Short Tutorial with interactive examples**](https://project-starch.github.io/Anvil-Docs/helloWorld.html)
+Learn the language basics through our guided tour : [**Short Tutorial with interactive examples**](https://docs.anvil.kisp-lab.org/helloWorld.html)
 
 
 ### 3. Full Documentation
-Up to date documentation is available online at [**AnvilHDL Docs**](https://project-starch.github.io/Anvil-Docs/)
+Up to date documentation is available online at [**AnvilHDL Docs**](https://docs.anvil.kisp-lab.org/)
 
 -----
 
 ## Design Goals
 
-Anvil addresses critical challenges in RTL design through three core pillars:
+AnvilHDL addresses critical challenges in RTL design through three core pillars:
 
 | Feature | Description |
 | :--- | :--- |
-| **Timing-safety** | Any value referenced across cycles is guaranteed to be **stable** and **meaningful**. Anvil prevents common RTL mistakes, such as using a value before it is ready or mutating a register while its dependent values must remain stable. |
-| **Composability** | Timing safety is preserved across module boundaries. Designers can create modular components and compose them with confidence. Anvil uses **dynamic timing contracts** to enforce timing properties between modules. |
-| **Expressiveness** | Safety is achieved via the type system, not by hiding the hardware. Anvil exposes registers, wires, and clock cycles, allowing the designer to retain **low-level control** suitable for general-purpose hardware development. |
+| **Timing-safety** | Any value referenced across cycles is guaranteed to be **stable** and **meaningful**. AnvilHDL prevents common RTL mistakes, such as using a value before it is ready or mutating a register while its dependent values must remain stable. |
+| **Composability** | Timing safety is preserved across module boundaries. Designers can create modular components and compose them with confidence. AnvilHDL uses **dynamic timing contracts** to enforce timing properties between modules. |
+| **Expressiveness** | Safety is achieved via the type system, not by hiding the hardware. AnvilHDL exposes registers, wires, and clock cycles, allowing the designer to retain **low-level control** suitable for general-purpose hardware development. |
 
 -----
 
@@ -57,7 +65,7 @@ opam install . --deps-only
 eval $(opam env) && dune build  # or for release build: dune build --release
 ```
 
-This will set up the Anvil compiler locally.
+This will set up the AnvilHDL compiler locally.
 
 For global installation, you can run:
 
@@ -77,7 +85,7 @@ opam reinstall .
 
 ## Compiler Usage
 
-Run the Anvil compiler using `dune`. **Note**: For a global installation, replace `dune exec anvil --` with `anvil`.
+Run the AnvilHDL compiler using `dune`. **Note**: For a global installation, replace `dune exec anvil --` with `anvil`.
 
 ```bash
 dune exec anvil -- [OPTIONS] <anvil-source-file>
@@ -105,6 +113,10 @@ cd examples
 
 # Build a specific module (defaults to 'top' if unspecified)
 make MODULE_NAME=<name>
+
+# Build with tracing enabled
+# After simulation, you can find the waveform at logs/trace.vcd
+make MODULE_NAME=<name> TRACE_ON=1
 
 # Simulate the design
 make run MODULE_NAME=<name> TIMEOUT=1000
@@ -141,7 +153,7 @@ AnvilHDL is currently **experimental** and under active development. We welcome 
 
 ## Citing AnvilHDL
 
-If you use AnvilHDL in your project, we would love to hear your feedback -- your insights can help us improve the language. If you plan to cite AnvilHDL in your work, please use the following reference:
+If you plan to cite AnvilHDL in your work, please use the following reference:
 
 ```text
 J. Z. Yu, A. R. Jha, U. Mathur, T. E. Carlson, and P. Saxena, “Anvil: a general-purpose timing-safe hardware description language,” in Proceedings of the 31st ACM international conference on architectural support for programming languages and operating systems, in ASPLOS ’26. Pittsburgh, PA, USA: Association for Computing Machinery, 2026. [Online]. Available: https://arxiv.org/abs/2503.19447
@@ -162,3 +174,12 @@ or in BibTeX format:
    note={To appear. Preprint available at arXiv:2503.19447}
 }
 ```
+
+## Discussing AnvilHDL
+
+If you use AnvilHDL, we would love to hear your feedback!
+Please join https://anvilhdl.zulipchat.com/ for discussions.
+
+> **Acknowledgement**: We want to thank [**Zulip**](https://zulip.com/)
+> for sponsoring the community chat channel and enabling discussions.
+> Zulip is an organized team chat app designed for efficient communication.

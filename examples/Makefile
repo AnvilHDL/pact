@@ -1,6 +1,11 @@
 MODULE_NAME ?= top
 TOP_MODULE ?= $(MODULE_NAME)
-VERILATOR_FLAGS ?= --top $(MODULE_NAME) -j 1
+
+ifdef TRACE_ON
+	VERILATOR_FLAGS ?= --top $(MODULE_NAME) -j 1 --trace --trace-structs
+else
+	VERILATOR_FLAGS ?= --top $(MODULE_NAME) -j 1
+endif
 
 TEST_DRIVER = sim_main.cpp
 
@@ -8,37 +13,24 @@ all: obj_dir/V$(MODULE_NAME)
 
 .PHONY: run clean
 
-<<<<<<< HEAD
 ANVIL_FLAGS= --
-ifdef LTOFF
-    ANVIL_FLAGS += -disable-lt-checks
-=======
-ANVIL_FLAGS = --
-
 ifdef LTOFF
     ANVIL_FLAGS += -disable-lt-checks
 endif
 
-ifdef NOOPT
-	ANVIL_FLAGS += -O 0
+ifdef CHECK
+	ANVIL_FLAGS += -just-check
 endif
 
 ifdef VERBOSE
 	ANVIL_FLAGS += -verbose
->>>>>>> wild
-endif
-
-<<<<<<< HEAD
-ifdef DEBUG
-	ANVIL_FLAGS += -verbose
 endif
 
 ifdef NOOPT
 	ANVIL_FLAGS += -O 0
 endif
 
-=======
->>>>>>> experimental
+
 $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
 	dune exec anvil $(ANVIL_FLAGS) $< > $@
 
@@ -52,8 +44,16 @@ run: obj_dir/V$(MODULE_NAME)
 	@ $< $(TIMEOUT)
 
 clean:
-<<<<<<< HEAD
-	rm -rf *.anvil.sv *_driver.cpp obj_dir
-=======
-	rm -rf *obj_dir *.anvil.sv *_driver.cpp
->>>>>>> experimental
+	rm -rf *obj_dir *.anvil.sv *_driver.cpp *.error
+
+help:
+	@echo "Makefile targets and options:"
+	@echo ""
+	@echo "  MODULE_NAME=foo   Specify the top module name (default: top)"
+	@echo "  clean             Clean generated files"
+	@echo "  run               Build and run the simulation for MODULE_NAME"
+	@echo ""
+	@echo "  VERBOSE=1         Enable verbose output during compilation"
+	@echo "  TRACE_ON=1        Enable waveform tracing in simulation"
+	@echo "  LTOFF=1           Disable lifetime checks during Anvil compilation"
+	@echo "  CHECK=1           Only type-check Anvil code (no SV generation)"

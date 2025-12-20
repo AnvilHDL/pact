@@ -61,6 +61,7 @@ rule read =
   | "probe"   { KEYWORD_PROBE }
   | "put"     { KEYWORD_PUT }
   | "until"    { KEYWORD_UNTIL }
+  | "void"    { KEYWORD_VOID }
   | "shared"  { KEYWORD_SHARED }
   | "assigned" { KEYWORD_ASSIGNED }
   | "by"      { KEYWORD_BY }
