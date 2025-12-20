@@ -123,8 +123,6 @@ val event_is_msg_end : Lang.message_specifier -> EventGraph.event -> bool
 (** Returns the list of immediate predecessors. *)
 val imm_preds : EventGraph.event -> EventGraph.event list
 
-val transform_event_graph : (EventGraph.event_graph) -> (EventGraph.event_graph_prime)
-
 val exists_path_prime : (EventGraph.event_graph_prime) -> int -> int -> bool
 
 val find_all_paths_prime : (EventGraph.event_graph_prime) -> int -> int -> int list list

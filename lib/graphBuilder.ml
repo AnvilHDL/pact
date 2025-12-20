@@ -46,6 +46,8 @@ module Typing = struct
         | `Root Some (e, _) -> [e]
         | `Later (e1, e2) -> [e1; e2]
         | `Branch (_, { branches_val; _ }) -> branches_val
+        | `UntilEntry (e, info) -> [e; info.until_body_end] (* parent and body_end for recursion *)
+        | `UntilExit info -> [info.until_stop_cond] (* exit depends on stop condition *)
       in
       let new_preds = List.fold_left
         (fun preds e -> Utils.IntSet.union preds e.preds)
@@ -396,6 +398,8 @@ let rec recurse_unfold expr_full_node expr_node =
           (arm_type, unfold e_body)
         ) arms
       )
+    | Until (cond, body) ->
+      Until (unfold cond, unfold body)
     | Recurse -> failwith "Shouldn't reach here!"
     in
     {expr_node with d = expr'}
@@ -485,8 +489,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let err_string = DTypeCheck.fmt_assign lval lvi.lval_dtype td.dtype in
     check_dtype err_string (Some lvi.lval_dtype) td.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
     ctx.current.actions <- (RegAssign (lvi, td) |> tag_with_span e.span)::ctx.current.actions;
-    let g = GateHelper.add_reg_event graph.gate_context lval ctx.current e.span Lang.GateWrite in
-    graph.gate_context <- g;
     Typing.cycles_data graph 1 ctx.current
   | Call (id, arg_list) ->
       let func = List.find_opt (fun (f: Lang.func_def) -> f.name = id) ci.func_defs
@@ -700,8 +702,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     } in
 
     let (br_side_true, ctx_true) = BuildContext.branch_side graph ctx branch_info 0 in
-    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ctx_true.current e.span  in
-    graph.gate_context <- gc;
     let td1 = visit_expr graph ci ctx_true e1 in
     let (br_side_false, ctx_false) = BuildContext.branch_side graph ctx branch_info 1 in
     let td2 = visit_expr graph ci ctx_false e2 in
@@ -769,8 +769,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let td2 = visit_expr graph ci ctx_false e2 in
 
     branch_info.branches_to <- [ctx_true.current; ctx_false.current];
-    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ctx_true.current e.span in
-    graph.gate_context <- gc;
     branch_info.branches_val <- [td1.lt.live; td2.lt.live];
 
     BuildContext.branch_merge ctx [ctx_true_no_binding; ctx_false];
@@ -941,8 +939,6 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let full_sz = TypedefMap.data_type_size ci.typedefs ci.macro_defs r.d_type in
     let (_dt,off,le,_w,td'') = get_borrow_info 0 full_sz r.d_type w'' rlval td in
     let borrow = {borrow_range = sub_reg_range reg_ident off le; borrow_start = ctx.current; borrow_source_span = e.span} in
-    let g = GateHelper.add_reg_event graph.gate_context rlval ctx.current e.span Lang.GateRead in
-    graph.gate_context <- g;
     { td'' with dtype = _dt; reg_borrows = borrow :: td''.reg_borrows }
   | Debug op ->
     (
@@ -972,13 +968,11 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let err_string = DTypeCheck.fmt_send send_pack.send_msg_spec.endpoint msg_dtype td.dtype in
     check_dtype err_string (Some msg_dtype) td.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
     let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx.current in
-    let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live e.span in
     ctx.current.sustained_actions <-
       ({
         until = ntd.lt.live;
         ty = Send (send_pack.send_msg_spec, td)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
-    graph.gate_context <- gc;
     ntd
 | Offer offer_arms ->
     let offer_msg_list = List.map (fun (offer_arm, _) ->
@@ -1121,10 +1115,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
             check_dtype err_string (Some msg_dtype) td_data.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
             
             let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_branch.current in
-            let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live e.span in
             ctx_branch.current.sustained_actions <-
               ({until = ntd.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data)} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            graph.gate_context <- gc;
             let ctx' = BuildContext.wait graph ctx_branch ntd.lt.live in
             visit_expr graph ci ctx' arm_expr
 
@@ -1137,10 +1129,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
             let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
             graph.wires <- wires';
             let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx_branch.current in
-            let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live e.span in
             ctx_branch.current.sustained_actions <-
               ({until = ntd.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            graph.gate_context <- gc;
             
             let ctx_with_binding = BuildContext.add_binding ctx_branch id ntd in
             let ctx' = BuildContext.wait graph ctx_with_binding ntd.lt.live in
@@ -1386,10 +1376,8 @@ let wire_list =
             check_dtype err_string (Some msg_dtype) td_data.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
             
             let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_branch.current in
-            let gc = GateHelper.add_msg_event graph.gate_context send_pack.send_msg_spec ntd.lt.live e.span in
             ctx_branch.current.sustained_actions <-
               ({until = ntd.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data)} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            graph.gate_context <- gc;
             let ctx' = BuildContext.wait graph ctx_branch ntd.lt.live in
             visit_expr graph ci ctx' arm_expr
 
@@ -1402,10 +1390,9 @@ let wire_list =
             let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
             graph.wires <- wires';
             let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx_branch.current in
-            let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live e.span in
+              
             ctx_branch.current.sustained_actions <-
               ({until = ntd.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            graph.gate_context <- gc;
             
             (* Bind the received value and continue *)
             let ctx_with_binding = BuildContext.add_binding ctx_branch id ntd in
@@ -1464,10 +1451,8 @@ let wire_list =
     let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
     graph.wires <- wires';
     let ntd = Typing.recv_msg_data graph (Some w) recv_pack.recv_msg_spec msg ctx.current in
-    let gc = GateHelper.add_msg_event graph.gate_context recv_pack.recv_msg_spec ntd.lt.live e.span in
     ctx.current.sustained_actions <-
       ({until = ntd.lt.live; ty = Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx.current.sustained_actions;
-    graph.gate_context <- gc;
     ntd
   | Indirect (e', fieldname) ->
     let td = visit_expr graph ci ctx e' in
@@ -1628,6 +1613,37 @@ let wire_list =
   | Recurse ->
     ctx.current.is_recurse <- true;
     Typing.const_data graph None unit_dtype ctx.current
+  | Until (cond, body) ->
+    
+    (* Start evaluating the condition - this runs in parallel *)
+    let td_cond = visit_expr graph ci ctx cond in
+    
+
+    let until_info = {
+      until_entry =  ctx.current; (* placeholder, will be set *)
+      until_stop_cond = td_cond.lt.live;
+      until_body_end = ctx.current; (* placeholder, will be set *)
+    } in
+    
+    let body_entry = Typing.event_create graph (`UntilEntry (ctx.current, until_info)) in
+    until_info.until_entry <- body_entry;
+    
+    let ctx_body = {ctx with current = body_entry} in
+    let td_body = visit_expr graph ci ctx_body body in
+    
+    let body_end = td_body.lt.live in
+    until_info.until_body_end <- body_end;
+    
+    let exit_event = Typing.event_create graph (`UntilExit until_info) in
+    
+    let lt = {
+      live = exit_event;
+      dead = Utils.list_unordered_join td_cond.lt.dead td_body.lt.dead
+    } in
+    let reg_borrows' = Utils.list_unordered_join td_cond.reg_borrows td_body.reg_borrows in
+    {w = None; lt; reg_borrows = reg_borrows'; dtype = unit_dtype}
+
+
   | Tuple _ -> raise (event_graph_error_default "Unimplemented expression!" e.span)
 
 
@@ -1654,14 +1670,6 @@ let recurse_unfold_for_checks ci shared_vars_info graph expr_node =
     cur_expr := recurse_unfold !cur_expr expr_node
   done;
   !cur_expr
-
-let build_control_group (gates : Lang.control_gate) = 
-  {
-    gid = (gates.gate_id.d, gates.gate_id.span);
-    gqual = gates.gate_class;
-    trigger_cond = if Option.is_some gates.trigger_cond then Some (let t= (Option.get gates.trigger_cond) in {mid = t; g_events = []}) else None;
-    gmem = List.map (fun gm -> {mid = gm; g_events = []}) gates.gate_elements;
-  }
 (* Builds the graph representation for each process To Do: Add support for commands outside loop (be executed once or continuosly)*)
 let build_proc (config : Config.compile_config) sched module_name param_values
               (ci' : cunit_info) (proc : proc_def) : proc_graph =
@@ -1683,10 +1691,6 @@ let build_proc (config : Config.compile_config) sched module_name param_values
     ) ci'.macro_defs proc.params param_values in
 
   
-  let control_groups = match proc.body with
-  | Extern _ -> []
-  | Native p -> List.map (fun g -> build_control_group g) p.control_gates 
-  in
   let ci = {
     file_name = ci'.file_name;
     typedefs = ci'.typedefs;
@@ -1759,7 +1763,6 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           is_general_recursive = false;
           thread_codespan = e.span;
           comb = false;
-          gate_context = control_groups;
           protocols = protocol_map;
           interface_protocol =  proc_interface_protocol;
         } in
@@ -1772,7 +1775,6 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           tmp_graph.last_event_id <- (EventGraphOps.find_last_event tmp_graph).id;
           tmp_graph.is_general_recursive <- tmp_graph.last_event_id <> td.lt.live.id;
           (* Optimisation *)
-          (* LifetimeCheck.gate_check config ci tmp_graph;           *)
           let tmp_graph = GraphOpt.optimize config true ci tmp_graph in
           if not config.disable_lt_checks then (
             LifetimeCheck.lifetime_check config ci tmp_graph
@@ -2157,12 +2159,3 @@ let syntax_tree_precheck (_config : Config.compile_config) cunit =
       | _ -> ()
     ) cc.messages
   ) cunit.channel_classes;
-
-  List.iter (fun (proc : proc_def) ->
-    match proc.body with
-    | Extern _ -> ()
-    | Native p ->
-      List.iter (fun g ->
-        GateHelper.gate_sanity_check g p.regs proc.args
-      )p.control_gates
-  ) cunit.procs

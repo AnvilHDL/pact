@@ -22,7 +22,6 @@ val string_of_actions : EventGraph.action -> string
 
 val sub_reg_range : Lang.identifier -> int -> int -> EventGraph.subreg_range
 
-val print_dot_graph_from_event_graph_prime : EventGraph.event_graph_prime -> out_channel -> unit
 
 val print_graph_with_session_types : EventGraph.event_graph -> out_channel ->unit
 

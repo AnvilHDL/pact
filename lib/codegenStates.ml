@@ -49,7 +49,7 @@ let collect_reg_states g =
       (* this state needs to distinguish two sources *)
       let sn = EventStateFormatter.format_scorer g.thread_id e.id in
       [("logic[1:0]", sn)]
-    | `Branch _ -> []
+    | `Branch _ | `UntilEntry _ | `UntilExit _ -> []
     | `Root (Some (_, br_side_info)) ->
       (* Check if this root needs a delay register *)
       GraphAnalysis.events_prepare_outs g.events;
@@ -59,7 +59,7 @@ let collect_reg_states g =
         else
           let visited' = event.EventGraph.id :: visited in
           match event.EventGraph.source with
-          | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) -> 
+          | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) | `UntilEntry _ | `UntilExit _ -> 
             false
           | `Branch (_, _) | `Root _ ->
             List.for_all (fun out_event ->
@@ -298,7 +298,7 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
         else
           let visited' = event.EventGraph.id :: visited in
           match event.EventGraph.source with
-          | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) -> 
+          | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) | `UntilEntry _ | `UntilExit _ -> 
             false
           | `Branch (_, _) | `Root _ ->
             (* Continue through outbound edges *)
@@ -407,6 +407,18 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end" (* ending always_comb *)
           )
       )
+    | `UntilEntry (parent, info) ->
+      (* Until loop entry: active when (parent active AND stop_cond not fired) OR body_end loops back *)
+      let cn_parent = EventStateFormatter.format_current g.thread_id parent.id in
+      let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
+      let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
+      Printf.sprintf "assign %s = (%s && !%s) || %s;" cn cn_parent cn_stop cn_body_end
+      |> print_line
+    | `UntilExit info ->
+      (* Until loop exit: active when stop condition fires *)
+      let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
+      Printf.sprintf "assign %s = %s;" cn cn_stop
+      |> print_line
   in
   List.iter print_compute_next g.events
 

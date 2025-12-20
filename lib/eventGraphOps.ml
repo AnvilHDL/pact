@@ -43,6 +43,10 @@ let print_graph (g: event_graph) =
     | `Root None -> Printf.eprintf "> %d: root\n" ev.id
     | `Root (Some (ev', br_side_info)) ->
         Printf.eprintf "> %d: branch-root %d %d\n" ev.id br_side_info.branch_side_sel ev'.id
+    | `UntilEntry (ev', info) ->
+        Printf.eprintf "> %d: until-entry %d stop:%d body_end:%d\n" ev.id ev'.id info.until_stop_cond.id info.until_body_end.id
+    | `UntilExit info ->
+        Printf.eprintf "> %d: until-exit stop:%d\n" ev.id info.until_stop_cond.id
   ) g.events
 
 let print_dot_graph g out =
@@ -79,6 +83,11 @@ let print_dot_graph g out =
     | `Root None -> ()
     | `Root (Some (ev', br_side_info)) ->
       print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+    | `UntilEntry (ev', info) ->
+      print_edge ev' ev "UE";
+      print_edge info.until_body_end ev "UL" (* loop back *)
+    | `UntilExit info ->
+      print_edge info.until_stop_cond ev "UX"
   ) g.events;
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH IN DOT FORMAT\n"
@@ -131,39 +140,14 @@ let print_graph_with_session_types g out =
     | `Root None -> ()
     | `Root (Some (ev', br_side_info)) ->
       print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+    | `UntilEntry (ev', info) ->
+      print_edge ev' ev "UE";
+      print_edge info.until_body_end ev "UL" (* loop back *)
+    | `UntilExit info ->
+      print_edge info.until_stop_cond ev "UX"
   ) g.events;
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH WITH SESSION TYPES IN DOT FORMAT\n"
-let print_dot_graph_from_event_graph_prime (g: event_graph_prime) out =
-  Printf.fprintf out "// BEGIN Prime GRAPH IN DOT FORMAT";
-  Printf.fprintf out "// can render to PDF with 'dot -Tpdf -O <filename>'\n";
-  Printf.fprintf out "digraph {\n";
-  let ev_node_name ev_id = Printf.sprintf "event%d" ev_id in
-  let print_edge e1 e2 label =
-    Printf.fprintf out "  %s -> %s [label = \"%s\"];\n"
-      (ev_node_name e1)
-      (ev_node_name e2)
-      label
-  in
-  List.iter (fun ev ->
-    List.iter (fun (child : event_child) ->
-      match child.edge with
-      | `Later _ -> print_edge ev.ev_id child.cid "L"
-      | `Seq (_, l) ->
-        (match l with
-        | `Cycles n -> print_edge ev.ev_id child.cid (Printf.sprintf "#%d" n)
-        | `Send _ -> print_edge ev.ev_id child.cid "S"
-        | `Choice _ -> print_edge ev.ev_id child.cid "IC"
-        | `Recv _ -> print_edge ev.ev_id child.cid "R"
-        | `Sync _ -> print_edge ev.ev_id child.cid "G"
-        )
-      | `Branch _ -> print_edge ev.ev_id child.cid "B"
-      | `Root _ -> print_edge ev.ev_id child.cid "R"
-    ) ev.child;
-  ) g.event_nodes;
-
-  Printf.fprintf out "}\n";
-  Printf.fprintf out "// END Prime GRAPH IN DOT FORMAT\n"
 
 let find_last_event g =
   List.find (
