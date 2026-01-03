@@ -2,10 +2,12 @@ proc test_until() {
     reg count : logic[8];
     loop{
         until (cycle 10) {
-            dprint "[Cycle %d] In until block\n" (*count) >>
-            cycle 4
-
+            cycle 4 >>
+            dprint "[Cycle %d] In until block" (*count)
         } >>
+        cycle 1 >>
+        dprint "[Cycle %d] Once Cycle after body exit" (*count) >>
+        cycle 1>>
         dfinish >>
         cycle 1
     }

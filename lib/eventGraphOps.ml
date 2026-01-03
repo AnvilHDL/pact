@@ -87,7 +87,8 @@ let print_dot_graph g out =
       print_edge ev' ev "UE";
       print_edge info.until_body_end ev "UL" (* loop back *)
     | `UntilExit info ->
-      print_edge info.until_stop_cond ev "UX"
+      print_edge info.until_stop_cond ev "UX";
+      print_edge info.until_body_end ev "UX"
   ) g.events;
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH IN DOT FORMAT\n"

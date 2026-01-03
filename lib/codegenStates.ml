@@ -49,7 +49,10 @@ let collect_reg_states g =
       (* this state needs to distinguish two sources *)
       let sn = EventStateFormatter.format_scorer g.thread_id e.id in
       [("logic[1:0]", sn)]
-    | `Branch _ | `UntilEntry _ | `UntilExit _ -> []
+    | `Branch _ | `UntilEntry _  -> []
+    | `UntilExit _ -> 
+      let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+      [("logic", sn)]
     | `Root (Some (_, br_side_info)) ->
       (* Check if this root needs a delay register *)
       GraphAnalysis.events_prepare_outs g.events;
@@ -409,16 +412,21 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
       )
     | `UntilEntry (parent, info) ->
       (* Until loop entry: active when (parent active AND stop_cond not fired) OR body_end loops back *)
+      (* ToDo : Note this implies if the condition is immediately true it will not run the body even once/maybe we should allow to loop at least once *)
       let cn_parent = EventStateFormatter.format_current g.thread_id parent.id in
       let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
       let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
       Printf.sprintf "assign %s = (%s && !%s) || %s;" cn cn_parent cn_stop cn_body_end
       |> print_line
     | `UntilExit info ->
-      (* Until loop exit: active when stop condition fires *)
+      (* Until loop exit: active when stop condition fires and loop body ends *)
       let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
-      Printf.sprintf "assign %s = %s;" cn cn_stop
-      |> print_line
+      let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
+      let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+      [
+        Printf.sprintf "assign %s = %s && (%s || %s_q) ;" cn cn_body_end cn_stop sn;
+        Printf.sprintf "assign %s_n = (%s && !%s) || (!%s && %s_q) ;" sn cn_stop cn_body_end  cn_body_end sn
+      ] |> print_lines
   in
   List.iter print_compute_next g.events
 

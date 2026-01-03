@@ -51,7 +51,7 @@ Below is a categorized list of the available examples, along with brief descript
 | [subreg_var](subreg_var.anvil)                         | Sub-register / bit-slice borrowing with variable indices |
 | [test_in](test_in.anvil)                               | `in` construct                                           |
 | [test_match_endpoint](test_match_endpoint.anvil)       | State machine encoding using `match` and `func`          |
-| [test_until](test_until.anvil)| tests `until` loops |
+| [test_until](test_until.anvil)                         | tests `until` loops                                      |
 
 > **Total:** 17 examples
 

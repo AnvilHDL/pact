@@ -47,7 +47,7 @@ module Typing = struct
         | `Later (e1, e2) -> [e1; e2]
         | `Branch (_, { branches_val; _ }) -> branches_val
         | `UntilEntry (e, info) -> [e; info.until_body_end] (* parent and body_end for recursion *)
-        | `UntilExit info -> [info.until_stop_cond] (* exit depends on stop condition *)
+        | `UntilExit info -> [info.until_stop_cond; info.until_body_end] (* exit depends on stop condition/as well as the body finishing *)
       in
       let new_preds = List.fold_left
         (fun preds e -> Utils.IntSet.union preds e.preds)
