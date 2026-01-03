@@ -39,16 +39,15 @@
 %token DOUBLE_AND           (* && *)
 %token OR                   (* | *)
 %token DOUBLE_OR            (* || *)
-%token KEYWORD_CONTROL      (* control *)
 %token AT                   (* @ *)
 %token TILDE                (* ~ *)
 %token PERIOD               (* . *)
 %token KEYWORD_LOOP         (* loop *)
 %token KEYWORD_PROC         (* proc *)
-%token KEYWORD_WHEN         (* when *)
 %token KEYWORD_INTERFACE      (* Interface *)
 %token DOLLAR               (* $ *)       
 %token KEYWORD_CHAN         (* chan *)
+%token KEYWORD_REC         (* rec *)
 %token KEYWORD_LEFT         (* left *)
 %token KEYWORD_RIGHT        (* right *)
 %token KEYWORD_PUT          (* put *)
@@ -244,17 +243,7 @@ proc_def_body:
       regs = [];
       threads = [];
       shared_vars = [];
-      control_gates = [];
     }
-  }
-
-| KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
-  {
-    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv; trigger_cond = None})::body.control_gates}
-  }
-| KEYWORD_CONTROL; LEFT_ABRACK; gt = gate_qualifiers; RIGHT_ABRACK; trigger = triggercon; LEFT_BRACE; qv = separated_list(SEMICOLON, gate_vars); RIGHT_BRACE; name = node(IDENT); SEMICOLON body = proc_def_body;
-  {
-    let open Lang in {body with control_gates = ({gate_id = name;gate_class = gt; gate_elements = qv; trigger_cond = Some trigger})::body.control_gates}
   }
 | KEYWORD_LOOP; reset_by = message_specifier?; LEFT_BRACE; thread_prog = node(expr); RIGHT_BRACE; body=proc_def_body //For thread definitions
   {
@@ -392,6 +381,12 @@ session_def:
 local_session_type:
 | SHARP; n = INT
   { Lang.StyAtom (Lang.AtomDelay n) }
+| KEYWORD_LET; id = IDENT; EQUAL; ex = local_session_type; KEYWORD_IN; body = local_session_type
+  { Lang.StyLet (id, ex, body) }
+| KEYWORD_REC; id = IDENT; PERIOD; body = local_session_type
+  { Lang.StyRec (id, body) }
+| id = IDENT
+  { Lang.StyVar id }
 | act = atomic_action
   { Lang.StyAtom (Lang.AtomicAct act) }
 | act1 = local_session_type ;DOUBLE_GT; act2 = local_session_type
@@ -418,7 +413,10 @@ offering_arm:
   { { Lang.trigger = Lang.AtomDelay 0; Lang.continuation = Some cont } : Lang.offering_session_type }
 | ASTERISK
   { { Lang.trigger = Lang.AtomDelay 0; Lang.continuation = None } : Lang.offering_session_type }
-
+| DOLLAR; x= local_session_type; COLON; cont = local_session_type
+  { { Lang.trigger = Lang.AtomTerminal x; Lang.continuation = Some cont } : Lang.offering_session_type }
+| DOLLAR; x= local_session_type
+  { { Lang.trigger = Lang.AtomTerminal x; Lang.continuation = None } : Lang.offering_session_type }
 atomic_action:
 | id = message_specifier
   { Lang.AtomBMsg id }
@@ -1190,33 +1188,3 @@ typed_arg:
     {
       { arg_name = name; arg_type = None } : Lang.typed_arg
     }
-
-gate_qualifiers:
-  | AND
-    { Lang.GateAnd }
-  | XOR
-    { Lang.GateXor }
-  | DOUBLE_OR
-    { Lang.GateOr }
-  | DOLLAR
-    { Lang.GateSecret }
-    
-
-gate_vars:
-  | msg_spec = message_specifier
-    { Msg(msg_spec) : Lang.gate_vars }
-  | op = gate_op; reg_ident = IDENT
-    { Register(op,reg_ident) : Lang.gate_vars }
-
-gate_op:
-| ASTERISK
-  { Lang.GateRead }
-| COLON_EQ
-  { Lang.GateWrite }
-| ASTERISK; COLON_EQ
-  { Lang.GateReadWrite }
-
-triggercon:
-| KEYWORD_WHEN; LEFT_ABRACK cond = gate_vars RIGHT_ABRACK
-  { cond }
-;

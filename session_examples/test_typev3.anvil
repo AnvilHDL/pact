@@ -1,8 +1,10 @@
-interface seq (ep : left ch) = (ep.req >> ep.ack) ;
+// interface seq (ep : left ch) = (ep.req >> ep.ack) ;
 
-interface nb_seq (ep : left ch) = #ep.req >> ep.ack ;
+// interface nb_seq (ep : left ch) = #ep.req >> ep.ack ;
 
-interface Fd (ep : left ch) = F ep.req >> ep.ack ;
+// interface Fd (ep : left ch) = F ep.req >> ep.ack ;
 
-interface choice (ep : left ch) = (ep.req + ep.ack) ;
+// interface choice (ep : left ch) = (ep.req + ep.ack) ;
 
+interface recType1(ep : left ch) = 
+    let t = ep.req in (t || rec X . ^ ($t , ep.ack : X )) ;

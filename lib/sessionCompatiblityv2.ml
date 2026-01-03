@@ -234,6 +234,7 @@ let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
     | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomDelay _ -> raise (Failure "Should not happen (in offer construction)")
+    | _ -> raise (Except.TypeError [Text ("Unexpected trigger type in offer"^(string_of_atomic_action_with_gap oty.trigger))])
     ) ps_filtered in
 
     let (wildcard_collection : RGCollections.t option) = if Option.is_some wildcard_arm then 
@@ -280,6 +281,7 @@ let rec constructReliabilityCollection (sty : session_type) : RGCollections.t =
     | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
     | AtomDelay _ -> raise (Failure "Should not happen (in xoffer construction)")
+    | _ -> raise (Except.TypeError [Text ("Unexpected trigger type in xoffer"^(string_of_atomic_action_with_gap oty.trigger))])
     ) ps_filtered in
     let wildcardCollection = match wildcard_arm with
     | Some oty ->
@@ -362,6 +364,7 @@ let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
         | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
         | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
         | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+        | _ -> raise (Except.TypeError [Text ("Unexpected trigger type in offer"^(string_of_atomic_action_with_gap oty.trigger))])
       ) ps_filtered in
         let wildcard_collection = if Option.is_some wildcard_arm then 
             let oty = Option.get wildcard_arm in
@@ -403,6 +406,7 @@ let rec constructGuaranteeCollection (sty : session_type) : RGCollections.t =
             | AtomicAct AtomNBMsg label-> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
             | AtomicAct (AtomBMsg label) -> RGSet.singleton {acts = ActionSet.singleton (Msg label); cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
             | AtomDelay _ -> RGSet.singleton {acts = ActionSet.empty; cont = if Option.is_some oty.continuation then Option.get oty.continuation else StyTrue}
+            | _ -> raise (Except.TypeError [Text ("Unexpected trigger type in xoffer"^(string_of_atomic_action_with_gap oty.trigger))])
         ) ps_filtered in
         let all_blocking = List.for_all (fun oty ->
           match oty.trigger with
@@ -879,6 +883,7 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
             | AtomicAct (AtomNBMsg m) -> [m.endpoint]
             | AtomicAct (AtomBMsg m) -> [m.endpoint]
             | AtomDelay _ -> []
+            | _ -> raise (Except.TypeError [Text ("Unsupported atomic action in highest level endpoint extraction"^(string_of_atomic_action_with_gap oty.trigger))])
         ) ps) in
         let endpoints_continuation = List.flatten (List.map (fun oty ->
             match oty.continuation with
@@ -890,6 +895,7 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
 
     | StyFuture s -> highest_level_endpoint s
     | StyTrue -> []
+    | _ -> raise (Except.TypeError [Text ("Unsupported session type for highest level endpoint extraction"^(Lang.string_of_protocol session_type))])
 let create_ep_id_intfc_id_map_with_debug (pool_def : interface_pool_def ast_node) : identifier list Utils.string_map =
     (* match with highest level endpoint,without duplicates *)
     List.fold_left(

@@ -100,6 +100,7 @@ type atomic_action =
 and atomic_action_with_gap =
   | AtomDelay of int (** atomic delay action *)
   | AtomicAct of atomic_action
+  | AtomTerminal of session_type (** terminal action for interface session types *)
 
 and session_type =
   | StySeq of session_type * session_type (** sequence *)
@@ -110,6 +111,10 @@ and session_type =
   | StyFuture of session_type (** future operator (F) **)
   | StyTrue (** true session type **)
   | StyOffer of offering_session_type list (** offer operator (dual of choice) **)
+  | StyLet of identifier * session_type * session_type (** let binding for session types **)
+  | StyRec of identifier * session_type (** recursive session type **)
+  | StyVar of identifier (** session type variable **)
+
 
 and offering_session_type = {
   trigger: atomic_action_with_gap;
@@ -527,29 +532,6 @@ type shared_var_def = {
   assigning_thread: int;
   shared_lifetime: sig_lifetime;
 }
-type gate_op =
-  | GateRead
-  | GateWrite
-  | GateReadWrite
-
-
-type gate_vars =
-  | Msg of message_specifier
-  | Register of gate_op*identifier
-
-
-type gate_qualifier =
-  | GateAnd
-  | GateXor
-  | GateOr
-  | GateSecret
-
-type control_gate = {
-  gate_id : identifier ast_node;
-  gate_class: gate_qualifier;
-  gate_elements: gate_vars list;
-  trigger_cond : gate_vars option;  (* optional trigger variable *)
-}
 
 type interface_spawn = {
   intfc_id : identifier;
@@ -565,7 +547,6 @@ type proc_def_body = {
   spawns: spawn_def ast_node list;
   regs: reg_def ast_node list;
   shared_vars: shared_var_def ast_node list;  (* New field *)
-  control_gates: control_gate list;
   (* prog: expr; *)
   threads: (expr_node * message_specifier option) list; (** the second component is the optional reset signal *)
 }
@@ -689,16 +670,6 @@ and string_of_index (idx : index) : string =
   | Single e -> "Single (" ^ string_of_expr e.d ^ ")"
   | Range (e1, e2) -> "Range (" ^ string_of_expr e1.d ^ ", " ^ string_of_expr e2.d ^ ")"
 
-and string_of_gvar gv : string = 
-  match gv with
-  | Msg msg_spec -> "Msg " ^ string_of_msg_spec msg_spec
-  | Register (op, id) ->
-      let op_str = match op with
-        | GateRead -> "Read"
-        | GateWrite -> "Write"
-        | GateReadWrite -> "ReadWrite"
-      in
-      "Register " ^ op_str ^ " : " ^ id
 
 and string_of_data_type (dtype : data_type) : string =
   match dtype with
@@ -961,18 +932,7 @@ in get_lv lv
       StyAtom (AtomicAct (add_ep_to_atomic_action ep atm))
   | StySeq (p1, p2) -> *)
 
-let string_of_atomic_action atomic_action =
-  match atomic_action with
-  | AtomBMsg id -> string_of_msg_spec id
-  | AtomNBMsg id -> "#" ^ string_of_msg_spec id
-
-  
-let string_of_atomic_action_with_gap = function
-  | AtomicAct act -> string_of_atomic_action act
-  | AtomDelay n -> Printf.sprintf "#<%d>" n
-
-
-let string_of_protocol p =
+let rec string_of_protocol p =
 let rec aux p =
   match p with
   | StySeq (p1, p2) ->
@@ -985,18 +945,43 @@ let rec aux p =
       "( " ^ String.concat " & " (List.map aux2 ps) ^ " )"
   | StyXOffer ps ->
       "( " ^ String.concat " ^ " (List.map aux2 ps) ^ " )"
-  | StyAtom act -> string_of_atomic_action_with_gap act
+  | StyAtom act -> string_of_aa_with_gap act
   | StyFuture p_inner ->
       "F( " ^ aux p_inner ^ " )"
   | StyParallel (p1, p2) ->
       "( " ^ aux p1 ^ " || " ^ aux p2 ^ " )"
+  | StyRec (id, p_body) ->
+      "μ " ^ id ^ ".( " ^ aux p_body ^ " )"
+  | StyVar id ->
+      id
+  | StyLet (id, p_def, p_body) ->
+      "let " ^ id ^ " = " ^ aux p_def ^ " in " ^ aux p_body
+and string_of_atomic_action atomic_action =
+  match atomic_action with
+  | AtomBMsg id -> string_of_msg_spec id
+  | AtomNBMsg id -> "#" ^ string_of_msg_spec id
+and string_of_aa_with_gap = function
+  | AtomicAct act -> string_of_atomic_action act
+  | AtomDelay n -> Printf.sprintf "#<%d>" n
+  | AtomTerminal sty -> "( end of " ^ string_of_protocol sty ^ " )"
 and aux2 p =
   match p with
   | {trigger; continuation} ->
     match continuation with
-    | None -> string_of_atomic_action_with_gap trigger
-    | Some p_continuation -> string_of_atomic_action_with_gap trigger ^ " : " ^ aux p_continuation
+    | None -> string_of_aa_with_gap trigger
+    | Some p_continuation -> string_of_aa_with_gap trigger ^ " : " ^ aux p_continuation
 in aux p
+
+let  string_of_atomic_action act =
+  match act with
+  | AtomBMsg id -> string_of_msg_spec id
+  | AtomNBMsg id -> "#" ^ string_of_msg_spec id
+  
+let string_of_atomic_action_with_gap = function
+  | AtomicAct act -> string_of_atomic_action act
+  | AtomDelay n -> Printf.sprintf "#<%d>" n
+  | AtomTerminal sty -> "( end of " ^ string_of_protocol sty ^ " )"
+
 
 
 

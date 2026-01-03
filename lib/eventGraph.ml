@@ -176,19 +176,6 @@ and sustained_action = {
   ty : sustained_action_type
 }
 
-(** members of the gate control groups  *)
-and gate_mem = {
-  mid : Lang.gate_vars;
-  mutable g_events : (event * Lang.code_span) list;
-}
-
-(** Individual control group  *)
-and gate_class = {
-  gid : (Lang.identifier * Lang.code_span);
-  gqual : Lang.gate_qualifier;
-  trigger_cond : gate_mem option;
-  gmem : gate_mem list
-}
 
 (** An event graph, usually corresponding to a single looping thread.
 All parameters in an event graph have been concretised. *)

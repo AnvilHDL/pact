@@ -208,6 +208,7 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
     | Lang.StyFuture s -> first_messages s
     | Lang.StyAtom (Lang.AtomDelay _) -> []
     | Lang.StyTrue -> []
+    | _ -> raise (TypeError [Text ("Unsupported session type for fair choice inference "^(string_of_protocol st))])
   in
   let msgs1 = first_messages b1 in
   let msgs2 = first_messages b2 in
@@ -433,7 +434,8 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       TypeAutomaton.add_transition auto current current (LabelSet.singleton (Future None)) false;
       (* Or start the actual behavior *)
       build st current
-  
+    | _ ->
+      raise (TypeError [Text ("Unsupported session type for automaton construction "^(string_of_protocol s_type)); Except.codespan_local default_span])
 
   and create_synchronous_product (auto: TypeAutomaton.t) (st1: Lang.session_type) (st2: Lang.session_type) (current_start_node: int) (default_span : code_span) : int =
     (* 1. Build sub-automata for st1 and st2 *)

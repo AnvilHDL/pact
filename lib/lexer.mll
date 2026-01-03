@@ -32,9 +32,7 @@ rule read =
   | '-'       { MINUS }
   | "--"      { DOUBLE_MINUS }
   | '^'       { XOR }
-  | "control" { KEYWORD_CONTROL }
   | "interface" { KEYWORD_INTERFACE }
-  | "when"    { KEYWORD_WHEN }
   | "offer"   { KEYWORD_OFFER }
   | "xoffer"  { KEYWORD_XOFFER }
   | "$"       { DOLLAR }
@@ -102,6 +100,7 @@ rule read =
   | "generate_seq" { KEYWORD_GENERATE_SEQ }
   | "recursive" { KEYWORD_RECURSIVE }
   | "recurse" { KEYWORD_RECURSE }
+  | "rec"    { KEYWORD_REC }
   | "struct"  { KEYWORD_STRUCT }
   | "enum"    { KEYWORD_ENUM }
   | "with"    { KEYWORD_WITH }

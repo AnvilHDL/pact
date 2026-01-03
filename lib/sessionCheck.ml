@@ -420,6 +420,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           | Lang.AtomicAct (Lang.AtomBMsg m) -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
           | Lang.AtomicAct (Lang.AtomNBMsg m) -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
           | Lang.AtomDelay _ -> Printf.sprintf "Wildcard Delay"
+          | _ -> raise (Except.TypeError [Text "Unsupported atomic action in offering session type"; Except.codespan_local default_span])
         ) offerings));
       let msg_list = List.find_map (fun (e : event) ->
         match e.source with `Seq ( _ , `Choice msg_list) -> Some msg_list
@@ -439,6 +440,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         | Lang.AtomicAct (Lang.AtomBMsg msg) -> msg
         | Lang.AtomicAct (Lang.AtomNBMsg msg) -> msg
         | Lang.AtomDelay _ -> {endpoint = "*"; msg = "*"}  (* Wildcard for delay *)
+        | _ -> raise (Except.TypeError [Text "Unsupported atomic action in offering session type"; Except.codespan_local default_span])
       ) offerings in
       if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
         let rec build_choice_from_offerings (offerings : offering_session_type list) =
@@ -506,6 +508,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           | Lang.AtomicAct (Lang.AtomBMsg m) -> Printf.sprintf "BMsg(%s, %s)" m.endpoint m.msg
           | Lang.AtomicAct (Lang.AtomNBMsg m) -> Printf.sprintf "NBMsg(%s, %s)" m.endpoint m.msg
           | Lang.AtomDelay _ -> Printf.sprintf "Wildcard Delay"
+          | _ -> raise (Except.TypeError [Text "Unsupported atomic action in offering session type"; Except.codespan_local default_span])
         ) offerings));
       let msg_list = List.find_map (fun (e : event) ->
         match e.source with `Seq ( _ , `Choice msg_list) -> Some msg_list
@@ -525,6 +528,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
         | Lang.AtomicAct (Lang.AtomBMsg msg) -> msg
         | Lang.AtomicAct (Lang.AtomNBMsg msg) -> msg
         | Lang.AtomDelay _ -> {endpoint = "*"; msg = "*"}  (* Wildcard for delay *)
+        | _ -> raise (Except.TypeError [Text "Unsupported atomic action in offering session type"; Except.codespan_local default_span])
       ) offerings in
       if List.exists (fun m -> List.exists (fun expected_m -> m.endpoint = expected_m.endpoint && m.msg = expected_m.msg) msg_list_offering) msg_list then (
       let rec build_choice_from_offerings (offerings : offering_session_type list) =
@@ -582,6 +586,7 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           (-1, Some sty, Some (err_msg, default_span))
         )
       )
+      | _ -> raise(Except.TypeError [Text "Unsupported session type in session judgement"; Except.codespan_local default_span])
 
 
 (** Check session type conformance for entire event graph *)

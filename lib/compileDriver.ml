@@ -164,11 +164,30 @@ let automata_debug _out config =
   ) pool_defs;
   Printf.eprintf "\n"
 
+let generalized_type_debug _out config =
+  let toplevel_filename = List.hd config.Config.input_filenames in
+  let cunits = ref [] in
+  (
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    with
+      | Except.TypeError msg ->
+        (Except.Text "Type error:")::msg
+          |> raise_compile_error None
+  );
+  let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
+    let open Lang in
+    Printf.eprintf "\nGeneralized Types:\n\n";
+    List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
+      Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol sdef.d.body.d);
+    ) session_type_defs
+  
+
 let debug_types out config =
   let open Config in
   match config.debug_choice with
   | 0 -> rely_guarantee_debug out config
   | 1 -> automata_debug out config
+  | 2 -> generalized_type_debug out config
   | _ -> raise (Failure "Unknown debug choice")
       
 

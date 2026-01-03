@@ -1974,6 +1974,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
               match action with
               | Lang.AtomDelay n -> Lang.AtomDelay n
               | Lang.AtomicAct atomic -> Lang.AtomicAct (replace_in_atomic_action atomic)
+              | _ -> raise (Except.UnimplementedError [Text ("Unsupported atomic action with gap in preprocessing!"^(string_of_atomic_action_with_gap action)); Except.codespan_local ps.span]) 
             in
             
             let rec preprocess_sty (sty : Lang.session_type) : Lang.session_type =
@@ -2000,6 +2001,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
                   in
                   Lang.StyOffer (List.map process_offering offerings)
               | Lang.StyTrue -> Lang.StyTrue
+              | _ -> raise (Except.UnimplementedError [Text "Unsupported session type with interface parameters in preprocessing!"])
             in
             preprocess_sty sty
           in
