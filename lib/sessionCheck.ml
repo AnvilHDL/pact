@@ -4,6 +4,33 @@ open EventGraph
 
 module IntHashtbl = Hashtbl.Make(Int)
 
+
+let substitute_session_type_in_session_type (sty : session_type) (id : string) (sub_sty : session_type) (default_span : code_span): session_type =
+  let aux (s : session_type) : session_type =
+    match s with
+    | StyXOffer offerings ->
+        StyXOffer (List.map (fun o ->
+          match o.trigger with
+          | Lang.AtomTerminal styx ->
+            (match styx with
+             | StyVar vid when vid = id -> raise (Except.TypeError [Text "Nested terminal substitution not supported"; Except.codespan_local default_span])
+             | _ -> o)
+          | _ -> o
+        ) offerings)
+    | StyOffer offerings ->
+        StyOffer (List.map (fun o ->
+          match o.trigger with
+          | Lang.AtomTerminal styx ->
+            (match styx with
+             | StyVar vid when vid = id -> raise (Except.TypeError [Text "Nested terminal substitution not supported"; Except.codespan_local default_span])
+             | _ -> o)
+          | _ -> o
+        ) offerings)
+    | StyVar vid when vid = id -> sub_sty
+    | _ -> s
+  in
+  aux sty
+
 let is_empty_branch (e : event) : bool = 
             (
               let first_node = match e.source with
@@ -23,7 +50,7 @@ let is_empty_branch (e : event) : bool =
 let is_empty_branch_special_one (e : event) : bool = 
 (
 
-              let first_node = match e.source with
+            let first_node = match e.source with
               | `Root (Some (ev, _branch_side_info)) when _branch_side_info.branch_side_sel = 1 && _branch_side_info.owner_branch.branch_cond = TrueFalse  && match ev.source with `Seq (_, `Choice _) -> true | _ -> false ->
                 true
               | _ -> false
@@ -41,7 +68,8 @@ let get_event_id_for_atomic_action (ev : event) (g : event_graph) (atom : Lang.a
   let atom_delay = match atom with
     | Lang.AtomicAct (Lang.AtomBMsg msg) -> Some msg
     | Lang.AtomicAct (Lang.AtomNBMsg msg) -> Some msg
-    | _ -> None
+    | Lang.AtomDelay _ -> None
+    | _ -> raise (Except.TypeError [Text (Printf.sprintf "Unsupported atomic action %s for event id retrieval" (Lang.string_of_atomic_action_with_gap atom)); Except.codespan_local g.thread_codespan])
   in
   if match atom with | Lang.AtomDelay _-> true | _ -> false then (
     let id = List.find_map (fun e ->
@@ -586,7 +614,10 @@ let rec session_judgement (st : Lang.session_type ast_node) (ev : event) (config
           (-1, Some sty, Some (err_msg, default_span))
         )
       )
-      | _ -> raise(Except.TypeError [Text "Unsupported session type in session judgement"; Except.codespan_local default_span])
+      | StyLet (id, pdef,pbody) ->
+          let sty = substitute_session_type_in_session_type pbody id pdef default_span in
+          session_judgement {st with d = sty} ev config default_span graph
+      | _ -> raise (Except.UnimplementedError [Text (Printf.sprintf "Session judgement not implemented for session type %s" (Lang.string_of_protocol sty)); Except.codespan_local default_span])
 
 
 (** Check session type conformance for entire event graph *)
