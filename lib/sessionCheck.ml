@@ -837,3 +837,539 @@ let check_session
       let file_handler = Out_channel.open_text (Printf.sprintf "%sgraph.dot" module_name) in
       EventGraphOps.print_graph_with_session_types g file_handler;
       Out_channel.close file_handler
+
+type session_judgement_result = {
+  judgement : bool;
+  error_message : string option;
+}
+
+let default_session_judgement_result = {
+  judgement = true;
+  error_message = None;
+}
+
+let match_offerings_with_msgs
+    (offerings : offering_session_type list)
+    (msgs : Lang.message_specifier list) : bool =
+    List.for_all (fun msg ->
+      List.exists (fun offering ->
+        match offering.trigger with
+        | Lang.AtomicAct (Lang.AtomBMsg m) ->
+            m.endpoint = msg.endpoint && m.msg = msg.msg
+        | Lang.AtomicAct (Lang.AtomNBMsg m) ->
+            m.endpoint = msg.endpoint && m.msg = msg.msg
+        | Lang.AtomDelay _ -> msg.endpoint = "*" && msg.msg = "*"
+        | _ -> false
+      ) offerings
+    ) msgs
+  
+  let rec delay_judgement
+       (n : int) 
+       (sty_node : session_type ast_node) : session_type option =
+    match sty_node.d with
+    | StyAtom (AtomDelay m) when n <= m -> 
+        if n < m then (Some (Lang.StyAtom (Lang.AtomDelay (m - n)))) else (Some Lang.StyTrue)
+    | StySeq (s1, s2) -> (
+        let delay_judgement_opt = delay_judgement n {sty_node with d = s1} in
+        match delay_judgement_opt with
+        | Some new_sty ->
+            let remaining_sty = match new_sty with
+              | StyTrue -> s2
+              | _ -> StySeq (new_sty, s2)
+            in
+            Some remaining_sty
+        | None -> None
+      )
+    | StyParallel (s1, s2) -> (
+        (* Try to satisfy delay in first branch *)
+        let delay_judgement_opt1 = delay_judgement n {sty_node with d = s1} in
+        match delay_judgement_opt1 with
+        | Some new_sty1 -> Some (StyParallel (new_sty1, s2))
+        | None ->
+            let delay_judgement_opt2 = delay_judgement n {sty_node with d = s2} in
+            match delay_judgement_opt2 with
+            | Some new_sty2 -> Some (StyParallel (s1, new_sty2))
+            | None -> None
+      )
+    | StyChoice (s1, s2) -> (
+        (* Internal choice: try both branches, succeed if either matches *)
+        let delay_judgement_opt1 = delay_judgement n {sty_node with d = s1} in
+        match delay_judgement_opt1 with
+        | Some new_sty1 -> Some new_sty1
+        | None ->
+            let delay_judgement_opt2 = delay_judgement n {sty_node with d = s2} in
+            delay_judgement_opt2
+      )
+    | _ -> None
+  
+  let rec msg_judgement
+      (msgs : Lang.message_specifier)
+      (sty_node : session_type ast_node) : session_type option =
+    match sty_node.d with
+    | StyAtom (Lang.AtomicAct (Lang.AtomBMsg m)) when m.endpoint = msgs.endpoint && m.msg = msgs.msg -> Some Lang.StyTrue
+    | StyAtom (Lang.AtomicAct (Lang.AtomNBMsg m)) when m.endpoint = msgs.endpoint && m.msg = msgs.msg -> Some Lang.StyTrue
+    | StyParallel (s1, s2) -> (
+        (* Try to satisfy message in first branch *)
+        let msg_judgement_opt1 = msg_judgement msgs {sty_node with d = s1} in
+        match msg_judgement_opt1 with
+        | Some new_sty1 -> Some (StyParallel (new_sty1, s2))
+        | None -> (
+            (* Try second branch *)
+            let msg_judgement_opt2 = msg_judgement msgs {sty_node with d = s2} in
+            match msg_judgement_opt2 with
+            | Some new_sty2 -> Some (StyParallel (s1, new_sty2))
+            | None -> None
+          )
+      )
+    | StySeq (s1, s2) -> (
+        let msg_judgement_opt = msg_judgement msgs {sty_node with d = s1} in
+        match msg_judgement_opt with
+        | Some new_sty1 ->
+            let remaining_sty = match new_sty1 with
+              | StyTrue -> s2
+              | _ -> StySeq (new_sty1, s2)
+            in
+            Some remaining_sty
+        | None -> None
+      )
+    | StyChoice (s1, s2) -> (
+        let msg_judgement_opt1 = msg_judgement msgs {sty_node with d = s1} in
+        match msg_judgement_opt1 with
+        | Some new_sty1 -> Some new_sty1
+        | None ->
+            let msg_judgement_opt2 = msg_judgement msgs {sty_node with d = s2} in
+            msg_judgement_opt2
+      )
+    | _ -> None
+  let rec join_judgement
+      (sty_node1 : session_type)
+      (sty_node2 : session_type) : session_type option =
+    match (sty_node1, sty_node2) with
+    | StyParallel (StyTrue, StyTrue), StyParallel (StyTrue, StyTrue) ->
+        Some StyTrue
+    | StyParallel (StyTrue, s1), StyParallel (StyTrue, s2) ->
+        Some (StyParallel (s1, s2))
+    | StyParallel (s1, StyTrue), StyParallel (s2, StyTrue) ->
+        Some (StyParallel (s1, s2))
+    | StyParallel(s1,StyTrue), StyParallel(StyTrue,s2) ->
+        Some (StyParallel (s1, s2))
+    | StyParallel(StyTrue,s1), StyParallel(s2,StyTrue) ->
+        Some (StyParallel (s1, s2))
+    | StyParallel (s1, s2), StyParallel (s3, s4) ->
+      (
+        let join1_opt = join_judgement s1 s3 in
+        let join2_opt = join_judgement s2 s4 in
+        match (join1_opt, join2_opt) with
+        | Some j1, Some j2 -> Some (StyParallel (j1, j2))
+        | _ -> None
+      )
+    | _ -> None
+      
+      
+      
+(* Generalized session type checking : traverse event graph and assign types to node for successors based on edges *)
+let check_generalized_session 
+    (config : Config.compile_config) 
+    (g : event_graph) 
+    module_name =
+  
+  if Option.is_none g.interface_protocol then
+      Printf.eprintf "[Generalized Session Type Check] No interface protocol specified, skipping check.\n"
+  
+  else
+    let protocol_node = Option.get g.interface_protocol in
+    GraphAnalysis.events_prepare_outs g.events;
+
+    if config.verbose then (
+      Printf.eprintf "\n[Generalized Session Type Check] Starting generalized session type check...\n";
+      Printf.eprintf "Checking graph with %d events...\n" (List.length g.events);
+      let file_handler = Out_channel.open_text (Printf.sprintf "%sgraph_before.dot" module_name) in
+      EventGraphOps.print_dot_graph g file_handler;
+      Out_channel.close file_handler;
+    );
+
+
+
+    (* Visit the event graph DFS *)
+    let rec generalized_session_judgement (ev : event) (visited : bool IntHashtbl.t) (context : session_judgement_result) : session_judgement_result  =
+      if IntHashtbl.mem visited ev.id then context
+      else begin
+        IntHashtbl.add visited ev.id true;
+        if config.verbose then
+          Printf.eprintf "Visiting event %d in generalized session type check\n" ev.id;
+        match ev.source with
+        | `Root None ->
+            ev.session_type <- Some protocol_node;
+            {context with 
+              judgement = List.for_all (fun succ_ev -> 
+                let res = (generalized_session_judgement succ_ev visited context) in
+                res.judgement
+              )ev.outs
+            }
+        | `Root (Some (evt, _branch)) -> (
+            match evt.session_type with
+            | Some sty_node ->
+                let rec distribute_seq_over_choice (s : session_type) (cont : session_type) : session_type =
+                  match s with
+                  | StyChoice (s1, s2) ->
+                      StyChoice (distribute_seq_over_choice s1 cont, distribute_seq_over_choice s2 cont)
+                  | StySeq (s1, s2) ->
+                      (* (s1; s2); cont => s1; (s2; cont) - then recurse on s1 *)
+                      distribute_seq_over_choice s1 (StySeq (s2, cont))
+                  | StyParallel (s1, s2) ->
+                      (* (s1 || s2); cont - keep parallel, append cont *)
+                      StySeq (StyParallel (s1, s2), cont)
+                  | _ ->
+                      (* Base case: just sequence *)
+                      StySeq (s, cont)
+                in
+
+                let rec branch_judgement (sty : session_type) : session_judgement_result =
+                  match sty with
+                  | StyChoice (s1, s2) ->
+                      let visited_backup = IntHashtbl.copy visited in
+                      ev.session_type <- Some {sty_node with d = s1};
+                      let jud1 = List.for_all (fun succ_ev ->
+                        let res = (generalized_session_judgement succ_ev visited context) in
+                        res.judgement
+                      ) ev.outs in
+                      if jud1 then
+                        { context with judgement = true }
+                      else (
+                        IntHashtbl.clear visited;
+                        IntHashtbl.iter (fun k v -> IntHashtbl.add visited k v) visited_backup;
+                        IntHashtbl.add visited ev.id true;
+                        ev.session_type <- Some {sty_node with d = s2};
+                        let jud2 = List.for_all (fun succ_ev ->
+                          let res = (generalized_session_judgement succ_ev visited context) in
+                          res.judgement
+                        ) ev.outs in
+                        { context with judgement = jud2 }
+                      )
+                  | StySeq (s1, s2) ->
+                      let distributed = distribute_seq_over_choice s1 s2 in
+                      (match distributed with
+                      | StyChoice _ -> branch_judgement distributed
+                      | _ ->
+                          ev.session_type <- Some {sty_node with d = sty};
+                          let jud = List.for_all (fun succ_ev ->
+                            let res = (generalized_session_judgement succ_ev visited context) in
+                            res.judgement
+                          ) ev.outs in
+                          { context with judgement = jud }
+                      )
+                  | StyParallel (s1, s2) ->
+                      let rec flatten_choice (s : session_type) : session_type list =
+                        match s with
+                        | StyChoice (a, b) -> flatten_choice a @ flatten_choice b
+                        | _ -> [s]
+                      in
+                      let s1_choices = flatten_choice s1 in
+                      let s2_choices = flatten_choice s2 in
+                      
+                      (* Try all combinations of choices from s1 and s2 *)
+                      let rec try_combinations s1_list s2_list =
+                        match s1_list with
+                        | [] -> { context with judgement = false }
+                        | s1_opt :: s1_rest ->
+                            let rec try_s2 s2_list =
+                              match s2_list with
+                              | [] -> try_combinations s1_rest s2_choices
+                              | s2_opt :: s2_rest ->
+                                  let visited_backup = IntHashtbl.copy visited in
+                                  let combined = StyParallel (s1_opt, s2_opt) in
+                                  ev.session_type <- Some {sty_node with d = combined};
+                                  let jud = List.for_all (fun succ_ev ->
+                                    let res = (generalized_session_judgement succ_ev visited context) in
+                                    res.judgement
+                                  ) ev.outs in
+                                  if jud then
+                                    { context with judgement = true }
+                                  else (
+                                    (* Restore and try next combination *)
+                                    IntHashtbl.clear visited;
+                                    IntHashtbl.iter (fun k v -> IntHashtbl.add visited k v) visited_backup;
+                                    IntHashtbl.add visited ev.id true;
+                                    try_s2 s2_rest
+                                  )
+                            in
+                            try_s2 s2_list
+                      in
+                      try_combinations s1_choices s2_choices
+                  | _ -> 
+                      (* For other types (atoms, etc), assign directly *)
+                      ev.session_type <- Some {sty_node with d = sty};
+                      let jud = List.for_all (fun succ_ev ->
+                        let res = (generalized_session_judgement succ_ev visited context) in
+                        res.judgement
+                      ) ev.outs in
+                      { context with judgement = jud }
+                in
+                branch_judgement sty_node.d
+            | None ->
+                raise (Except.TypeError [
+                  Text (Printf.sprintf "Unexpected missing session type at event %d" evt.id);
+                  Except.codespan_local g.thread_codespan
+                ])
+          )
+        | `Seq (evt, atmdelay) -> (
+            match atmdelay with
+            | `Cycles n -> (
+                match evt.session_type with
+                | Some sty_node -> (
+                    let delay_judgement_opt = delay_judgement n sty_node in
+                      match delay_judgement_opt with
+                      | Some new_sty ->
+                          ev.session_type <- Some {sty_node with d = new_sty}; 
+                          let jud = List.for_all (fun succ_ev ->
+                          let res = (generalized_session_judgement succ_ev visited context) in
+                            res.judgement
+                          ) ev.outs in
+                          { context with judgement = jud }
+                      | None ->
+                          { context with judgement = false }
+                    )
+                | None ->
+                    raise (Except.TypeError [
+                      Text (Printf.sprintf "Unexpected missing session type at event %d" evt.id);
+                      Except.codespan_local g.thread_codespan
+                    ])
+              )
+            | `Send msg -> (
+                match evt.session_type with
+                | Some sty_node -> (
+                    let msg_judgement_opt = msg_judgement msg sty_node in
+                    match msg_judgement_opt with
+                    | Some new_sty ->
+                        ev.session_type <- Some {sty_node with d = new_sty};
+                        let jud = List.for_all (fun succ_ev ->
+                          let res = (generalized_session_judgement succ_ev visited context) in
+                          res.judgement
+                        ) ev.outs in
+                        { context with judgement = jud }
+                    | None ->
+                        { context with judgement = false }
+                )
+                | None ->
+                    raise (Except.TypeError [
+                      Text (Printf.sprintf "Unexpected missing session type at event %d" evt.id);
+                      Except.codespan_local g.thread_codespan
+                    ])
+            )
+            | `Recv msg -> (
+                match evt.session_type with
+                | Some sty_node -> (
+                    let msg_judgement_opt = msg_judgement msg sty_node in
+                    match msg_judgement_opt with
+                    | Some new_sty ->
+                        ev.session_type <- Some {sty_node with d = new_sty};
+                        let jud = List.for_all (fun succ_ev ->
+                          let res = (generalized_session_judgement succ_ev visited context) in
+                          res.judgement
+                        ) ev.outs in
+                        { context with judgement = jud }
+                    | None ->
+                        { context with judgement = false }
+                )
+                | None ->
+                    raise (Except.TypeError [
+                      Text (Printf.sprintf "Unexpected missing session type at event %d" evt.id);
+                      Except.codespan_local g.thread_codespan
+                    ])
+            )
+            | `Choice msg_list ->(
+                match evt.session_type with
+                | Some sty_node -> (
+                  match sty_node.d with
+                  | StyOffer offerings ->
+                    (
+                      if List.length offerings < List.length msg_list then
+                        (
+                        Printf.eprintf "Event %d: offerings length %d < msg_list length %d\n" ev.id (List.length offerings) (List.length msg_list);
+                        { context with judgement = false }
+                        )
+                      else
+                        if match_offerings_with_msgs offerings msg_list then
+                          let new_sty = build_choice_from_offerings offerings in
+                          ev.session_type <- Some {sty_node with d = new_sty};
+                          let jud = List.for_all (fun succ_ev ->
+                            let res = (generalized_session_judgement succ_ev visited context) in
+                            res.judgement
+                          ) ev.outs in
+                          { context with judgement = jud }
+                        else
+                          { context with judgement = false }
+                  )
+                  | StyXOffer offerings ->
+                    (
+                      if List.length offerings < List.length msg_list then
+                        ( Printf.eprintf "Event %d: offerings length %d < msg_list length %d\n" ev.id (List.length offerings) (List.length msg_list);
+                          { context with judgement = false }
+                        )
+                      else
+                        if match_offerings_with_msgs offerings msg_list then
+                          let new_sty = build_choice_from_offerings offerings in
+                          ev.session_type <- Some {sty_node with d = new_sty};
+                          let jud = List.for_all (fun succ_ev ->
+                            let res = (generalized_session_judgement succ_ev visited context) in
+                            res.judgement
+                          ) ev.outs in
+                          { context with judgement = jud }
+                        else
+                          { context with judgement = false }
+                    )
+                  | StySeq (s1, s2) ->
+                    (
+                      let rec distribute_seq_over_offering (s : session_type) (cont : session_type) : session_type =
+                        match s with
+                        | StyOffer offerings ->
+                            let new_offerings = List.map (fun o ->
+                              { o with continuation = match o.continuation with | Some cont -> Some (distribute_seq_over_offering cont cont) | None -> None }
+                            ) offerings in
+                            StyOffer new_offerings
+                        | StyXOffer offerings ->
+                            let new_offerings = List.map (fun o ->
+                              { o with continuation = match o.continuation with | Some cont -> Some (distribute_seq_over_offering cont cont) | None -> None }
+                            ) offerings in
+                            StyXOffer new_offerings
+                        | _ ->
+                            StySeq (s, cont)
+                      in
+                      let distributed = distribute_seq_over_offering s1 s2 in
+                      (
+                        match distributed with
+                        | StyOffer offerings ->
+                          (
+                            if List.length offerings < List.length msg_list then
+                              ( Printf.eprintf "Event %d: offerings length %d < msg_list length %d\n" ev.id (List.length offerings) (List.length msg_list);
+                                { context with judgement = false }
+                              )
+                            else
+                              if match_offerings_with_msgs offerings msg_list then
+                                let new_sty = build_choice_from_offerings offerings in
+                                ev.session_type <- Some {sty_node with d = new_sty};
+                                let jud = List.for_all (fun succ_ev ->
+                                  let res = (generalized_session_judgement succ_ev visited context) in
+                                  res.judgement
+                                ) ev.outs in
+                                { context with judgement = jud }
+                              else
+                                { context with judgement = false }
+                          )
+                          | StyXOffer offerings ->
+                            (
+                              if List.length offerings < List.length msg_list then
+                                ( Printf.eprintf "Event %d: offerings length %d < msg_list length %d\n" ev.id (List.length offerings) (List.length msg_list);
+                                  { context with judgement = false }
+                                )
+                              else
+                                if match_offerings_with_msgs offerings msg_list then
+                                  let new_sty = build_choice_from_offerings offerings in
+                                  ev.session_type <- Some {sty_node with d = new_sty};
+                                  let jud = List.for_all (fun succ_ev ->
+                                    let res = (generalized_session_judgement succ_ev visited context) in
+                                    res.judgement
+                                  ) ev.outs in
+                                  { context with judgement = jud }
+                                else
+                                  { context with judgement = false }
+                            )
+                          | _ -> {context with judgement = false}                       
+                        )
+                  )
+                  (* | StyParallel (s1, s2) ->
+                    
+
+                    context
+                    ) *)
+                  | _ -> {context with judgement = false}
+                )
+                | None ->
+                    raise (Except.TypeError [
+                      Text (Printf.sprintf "Unexpected missing session type at event %d" evt.id);
+                      Except.codespan_local g.thread_codespan
+                    ])
+            )
+            | _ -> 
+                raise (Except.UnimplementedError [
+                  Text  ("Generalized session type judgement not implemented for event id " ^ string_of_int ev.id);
+                  Except.codespan_local g.thread_codespan
+                ])
+        )
+        | `Later (evt_a, evt_b) -> (
+          let sty_node_opt_a = evt_a.session_type in
+          let sty_node_opt_b = evt_b.session_type in
+          match (sty_node_opt_a, sty_node_opt_b) with
+          | (Some sty_node_a, Some sty_node_b) -> (
+              let join_judgement_opt = join_judgement sty_node_a.d sty_node_b.d in
+              match join_judgement_opt with
+              | Some new_sty ->
+                  ev.session_type <- Some {sty_node_a with d = new_sty};
+                  let jud = List.for_all (fun succ_ev ->
+                    let res = (generalized_session_judgement succ_ev visited context) in
+                    res.judgement
+                  ) ev.outs in
+                  { context with judgement = jud }
+              | None ->
+                  { context with judgement = false }
+            )
+          | _ ->
+              raise (Except.TypeError [
+                Text (Printf.sprintf "Unexpected missing session type at event ids %d or %d" evt_a.id evt_b.id);
+                Except.codespan_local g.thread_codespan
+              ])
+        )
+        | `Branch (_, branch) -> (
+            (* find the branch parent who has a type and assign that type *)
+            (*  *)
+            let found = ref false in
+            List.iter (
+              fun parent_ev ->
+                match parent_ev.session_type with
+                | Some styd_node ->
+                    if !found = true then raise (Except.TypeError [
+                      Text (Printf.sprintf "Multiple branch parents with session types , should not happen");
+                      Except.codespan_local g.thread_codespan
+                    ]);
+                    found := true;
+                    ev.session_type <- Some styd_node
+                | None -> ()
+            ) branch.branches_val;
+            if !found = false then
+              raise (Except.TypeError [
+                Text (Printf.sprintf "No branch parent with session type found for branch event %d | Should not happen" ev.id);
+                Except.codespan_local g.thread_codespan
+              ]);
+            let jud = List.for_all (fun succ_ev ->
+              let res = (generalized_session_judgement succ_ev visited context) in
+              res.judgement
+            ) ev.outs in
+            { context with judgement = jud }            
+        )
+        | _ ->
+            raise (Except.UnimplementedError [
+              Text  ("Generalized session type judgement not implemented for event id " ^ string_of_int ev.id);
+              Except.codespan_local g.thread_codespan
+            ])
+      end in
+
+    let visited = IntHashtbl.create (List.length g.events) in
+    let root_ev = List.find (fun e -> e.source = `Root None) g.events in
+    let result  = generalized_session_judgement root_ev visited default_session_judgement_result in
+    if result.judgement then begin
+        Printf.eprintf "[Generalized Session Type Check] Generalized session type check completed successfully.\n";
+        let file_name = Printf.sprintf "%sgraph.dot" module_name in
+        let file_handler = Out_channel.open_text file_name in
+        EventGraphOps.print_graph_with_session_types g file_handler;
+        Out_channel.close file_handler
+    end else
+      let file_name = Printf.sprintf "%sgraph.dot" module_name in
+      let file_handler = Out_channel.open_text file_name in
+      EventGraphOps.print_graph_with_session_types g file_handler;
+      Out_channel.close file_handler;
+      raise (Except.TypeError [
+        Text "Generalized session type violation detected in event graph.";
+        Except.codespan_local g.thread_codespan
+      ]);
+    
+    (* Output final graph with annotated session types *)
