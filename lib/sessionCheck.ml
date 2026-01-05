@@ -766,7 +766,7 @@ let check_session
               ) ev.outs
             ) else (
               (* Run session judgement - updates types internally *)
-              let (_id, continuation, error_opt) = session_judgement 
+              let (_id, _continuation, error_opt) = session_judgement 
                 {protocol_node with Lang.d = current_sty} 
                 ev 
                 config 

@@ -13,3 +13,4 @@ session_examples/*.dot
 **/*.png
 **/*.log
 **/*.out
+**.dot
