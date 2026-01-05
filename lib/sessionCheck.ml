@@ -659,6 +659,7 @@ let rec session_judgement
             m.endpoint = expected_m.endpoint && m.msg = expected_m.msg
           ) msg_list_offering
         ) msg_list then (
+          Printf.eprintf "Exclusive choice matched at event %d\n" ev.id;
           let new_sty = build_choice_from_offerings offerings in
           let evid = List.find_map (fun e ->
             match e.source with
@@ -673,6 +674,9 @@ let rec session_judgement
             | _ -> None
           ) ev.outs in
           let evid = Option.value evid ~default:(-1) in
+          update_sty graph evid new_sty default_span config.verbose;
+          Printf.eprintf "Exclusive choice continuation session type at event %d: %s\n" 
+            evid (Lang.string_of_protocol new_sty);
           (evid, Some new_sty, None)
         ) else (
           let err_msg = "Session type mismatch: none of the offered messages match the expected choices" in
@@ -762,7 +766,7 @@ let check_session
               ) ev.outs
             ) else (
               (* Run session judgement - updates types internally *)
-              let (_id, _continuation, error_opt) = session_judgement 
+              let (_id, continuation, error_opt) = session_judgement 
                 {protocol_node with Lang.d = current_sty} 
                 ev 
                 config 
