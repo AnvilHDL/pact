@@ -1260,7 +1260,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     
     (*==================== At this point one of the messages must have been received ==========================================================*)
     (* Now we match 1'd1 with respective valid ready port of branch conditions *)
-    let length_offering = List.length offer_arms in
+    let length_offering = List.length offer_arm_filtered in
     let bit_len = (Utils.int_log2 length_offering) in
 
     let find_wire_ctx ct id =
