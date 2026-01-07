@@ -118,7 +118,13 @@ let rec build_choice_from_offerings (offerings : offering_session_type list) =
           ),
           build_choice_from_offerings rest
         )
-    | _ -> build_choice_from_offerings rest
+    | _ -> 
+      let s = match first.continuation with
+      | Some sty -> StyChoice(sty, Lang.StyTrue)
+      | None -> StyTrue in
+      Lang.StyParallel(s,
+      build_choice_from_offerings rest)
+
 
 let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) : head_continuation_pair list =
   match sty_node with
