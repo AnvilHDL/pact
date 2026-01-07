@@ -266,12 +266,38 @@ let check_generalized_session
                         hc.visited <- true
                       end;
                       m.endpoint = msg.endpoint && m.msg = msg.msg
+                  | Offers offer_arms ->
+
+                    let parent_has_try_send = List.exists ( fun a ->
+                      match a.d with
+                      | ImmediateSend (m, _) when m.endpoint = msg.endpoint && m.msg = msg.msg -> true
+                      | _ -> false
+                    )ev.actions in
+                    let offering_only_has_msgs = List.for_all ( fun o ->
+                      match o.trigger with
+                      | Lang.AtomicAct (Lang.AtomBMsg m) ->
+                          m.endpoint = msg.endpoint && m.msg = msg.msg
+                      | Lang.AtomicAct (Lang.AtomNBMsg m) ->
+                          m.endpoint = msg.endpoint && m.msg = msg.msg
+                      | Lang.AtomDelay _ -> true
+                      | _ -> false
+                    )offer_arms in
+                      Printf.eprintf "Debug: Matching send message %s|%s with offerings %s at event %d | try_send = %s, | offering_only_has_msgs = %s\n"
+                      msg.endpoint msg.msg (string_of_protocol  (StyXOffer offer_arms)) child_ev.id (string_of_bool parent_has_try_send) (string_of_bool offering_only_has_msgs);
+                    if parent_has_try_send && offering_only_has_msgs then begin
+                      let new_sty = build_choice_from_offerings offer_arms in
+                      child_ev.session_type <- Some {protocol_node with d = new_sty};
+                      hc.visited <- true;
+                      true
+                    end
+                  else false
+                    
                   | __ -> false
                 ) head_conts in
 
                 if not found then
-                  error_handler g (Printf.sprintf "Expected Send message at event %d | However found %s"
-                    child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
+                  error_handler g (Printf.sprintf "Expected Send message (%s) at event %d | However found %s"
+                   (string_of_msg_spec msg) child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
                 Queue.add child_ev next_queue
                   
                   
@@ -290,6 +316,30 @@ let check_generalized_session
                         hc.visited <- true
                       end;
                       m.endpoint = msg.endpoint && m.msg = msg.msg
+                  | Offers offer_arms ->
+                    Printf.eprintf "Debug: Matching recv message %s|%s with offerings at event %d\n"
+                      msg.endpoint msg.msg child_ev.id;
+                    let parent_has_try_send = List.exists ( fun a ->
+                      match a.d with
+                      | ImmediateRecv m when m.endpoint = msg.endpoint && m.msg = msg.msg -> true
+                      | _ -> false
+                    )ev.actions in
+                    let offering_only_has_msgs = List.for_all ( fun o ->
+                      match o.trigger with
+                      | Lang.AtomicAct (Lang.AtomBMsg m) ->
+                          m.endpoint = msg.endpoint && m.msg = msg.msg
+                      | Lang.AtomicAct (Lang.AtomNBMsg m) ->
+                          m.endpoint = msg.endpoint && m.msg = msg.msg
+                      | Lang.AtomDelay _ -> true
+                      | _ -> false
+                    )offer_arms in
+                    if parent_has_try_send && offering_only_has_msgs then begin
+                      let new_sty = build_choice_from_offerings offer_arms in
+                      child_ev.session_type <- Some {protocol_node with d = new_sty};
+                      hc.visited <- true;
+                      true
+                    end
+                  else false
                   | __ -> false
                 ) head_conts in
 
