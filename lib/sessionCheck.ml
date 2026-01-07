@@ -7,6 +7,7 @@ module IntHashtbl = Hashtbl.Make(Int)
 type big_atomic_action =
   | Atom of atomic_action_with_gap
   | Offers of offering_session_type list
+  | XOffers of offering_session_type list
   | Terminal
 
 type head_continuation_pair = {
@@ -26,6 +27,7 @@ let print_string_of_head_cont_pair hc =
   let head_str = match hc.head with
     | Atom act -> string_of_atomic_action_with_gap act
     | Offers off -> string_of_protocol (StyOffer off)
+    | XOffers xoff -> string_of_protocol (StyXOffer xoff)
     | Terminal -> string_of_protocol StyTrue
   in
   let cont_str = string_of_protocol hc.cont in
@@ -155,11 +157,11 @@ let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) : 
     let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = StyFuture s; is_choice = true} in
     possible_delay :: head_conts
   | StyXOffer offerings ->
-      let continuation = build_choice_from_xofferings offerings in
-      [{default_head_continuation_pair with head = Offers offerings; cont = continuation}]
+      (* let continuation = build_choice_from_xofferings offerings in *)
+      [{default_head_continuation_pair with head = XOffers offerings; cont = StyTrue}]
   | StyOffer offerings ->
-      let continuation = build_choice_from_offerings offerings in
-      [{default_head_continuation_pair with head = Offers offerings; cont = continuation}]
+      (* let continuation = build_choice_from_offerings offerings in *)
+      [{default_head_continuation_pair with head = Offers offerings; cont = StyTrue}]
   | StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue}]
   | _ -> raise (Except.TypeError [
       Text (Printf.sprintf "Unsupported session type %s for head-continuation extraction"
@@ -239,7 +241,23 @@ let check_generalized_session
                       let msgs = msg_list in
                       let matches = match_offerings_with_msgs offerings msgs in
                       if matches then begin
-                        child_ev.session_type <- Some {protocol_node with d = hc.cont};
+                        let co = match hc.cont with 
+                        |StyTrue -> build_choice_from_offerings offerings 
+                        | _-> StySeq (build_choice_from_offerings offerings, hc.cont) 
+                      in
+                        child_ev.session_type <- Some {protocol_node with d = co};
+                        hc.visited <- true
+                      end;
+                      matches
+                  | XOffers offerings ->
+                      let msgs = msg_list in
+                      let matches = match_offerings_with_msgs offerings msgs in
+                      if matches then begin
+                        let co = match hc.cont with 
+                        |StyTrue -> build_choice_from_xofferings offerings 
+                        | _-> StySeq (build_choice_from_xofferings offerings, hc.cont) 
+                      in
+                        child_ev.session_type <- Some {protocol_node with d = co};
                         hc.visited <- true
                       end;
                       matches
@@ -332,6 +350,7 @@ let check_generalized_session
                 let offer_atoms = List.filter_map (fun hc ->
                   match hc.head with
                   | Offers _ -> Some hc
+                  | XOffers _ -> Some hc
                   | _ -> None
                 ) head_conts in
                 if List.length has_immediate_actions > 0 then begin
@@ -341,10 +360,11 @@ let check_generalized_session
                         let found_hc_opt =
                           List.find_opt (fun hc ->
                             match hc.head with
-                            | Offers offerings ->
-                                List.exists (fun offering ->
+                            | XOffers offerings | Offers offerings ->
+                                List.for_all (fun offering ->
                                   match offering.trigger with
-                                  | Lang.AtomicAct (Lang.AtomBMsg m)
+                                  | Lang.AtomicAct (Lang.AtomBMsg m) ->
+                                      m.endpoint = msg.endpoint && m.msg = msg.msg
                                   | Lang.AtomicAct (Lang.AtomNBMsg m) ->
                                       m.endpoint = msg.endpoint && m.msg = msg.msg
                                   | Lang.AtomDelay _ -> true
@@ -358,11 +378,14 @@ let check_generalized_session
                             child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
                         else
                           let hc = Option.get found_hc_opt in
+                          Printf.eprintf "Found matching head-continuation for ImmediateRecv at event %d: %s\n"
+                            child_ev.id (print_string_of_head_cont_pair hc);
                           List.iter (fun h ->
                             if h = hc then h.visited <- true
                           ) head_conts;
                           let cont = match hc.head with
                             | Offers offerings -> offerings
+                            | XOffers offerings -> offerings
                             | _ -> []
                           in
                           if List.length cont > 2 then
@@ -374,26 +397,42 @@ let check_generalized_session
                                 (List.nth cont 0, List.nth cont 1)
                               else
                                 (List.nth cont 1, List.nth cont 0)
-                              
+                      
                             in
-                              Printf.eprintf "Assigning %s to event %d from ImmediateRecv\n"
-                              (Lang.string_of_protocol (match own_cont.continuation with Some st -> st | None -> StyTrue)) child_ev.id;
-                            child_ev.session_type <- Some {protocol_node with d = match own_cont.continuation with Some st -> st | None -> StyTrue};
+                            let own_contin = match own_cont.continuation, hc.cont with
+                              | None , StyTrue -> StyTrue
+                              | Some st, StyTrue -> st
+                              | Some st, st' -> StySeq (st, st')
+                              | None, st' -> st' 
+                            in
+                            let other_contin = match other_cont.continuation, hc.cont with
+                              | None , StyTrue -> StyTrue
+                              | Some st, StyTrue -> st
+                              | Some st, st' -> StySeq (st, st')
+                              | None, st' -> st' 
+                            in
+
+
+                            child_ev.session_type <- Some {protocol_node with d = own_contin};
                             
                             let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
                             if List.length child_other_branch = 1 then
                               let other_ev = List.hd child_other_branch in
-                              other_ev.session_type <- Some {protocol_node with d = match other_cont.continuation with Some st -> st | None -> StyTrue}
+                              Printf.eprintf "Assigning session type %s to other branch event %d\n"
+                                (Lang.string_of_protocol other_contin) other_ev.id;
+                              other_ev.session_type <- Some {protocol_node with d = other_contin};
+                              Queue.add child_ev next_queue;
+                              Queue.add other_ev next_queue
+
                     | ImmediateSend (msg,_) -> (
                         let found_hc_opt =
                           List.find_opt (fun hc ->
                             match hc.head with
-                            | Offers offerings ->
-                                List.exists (fun offering ->
+                            | XOffers offerings | Offers offerings ->
+                                List.for_all (fun offering ->
                                   match offering.trigger with
-                                  | Lang.AtomicAct (Lang.AtomBMsg m)
-                                  | Lang.AtomicAct (Lang.AtomNBMsg m) ->
-                                      m.endpoint = msg.endpoint && m.msg = msg.msg
+                                  | Lang.AtomicAct (Lang.AtomBMsg m) -> m.endpoint = msg.endpoint && m.msg = msg.msg
+                                  | Lang.AtomicAct (Lang.AtomNBMsg m) ->m.endpoint = msg.endpoint && m.msg = msg.msg
                                   | Lang.AtomDelay _ -> true
                                   | _ -> false
                                 ) offerings
@@ -405,11 +444,13 @@ let check_generalized_session
                             child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
                         else
                           let hc = Option.get found_hc_opt in
+                          Printf.eprintf "Found matching head-continuation for ImmediateSend at event %d: %s\n"
+                            child_ev.id (print_string_of_head_cont_pair hc);
                           List.iter (fun h ->
                             if h = hc then h.visited <- true
                           ) head_conts;
                           let cont = match hc.head with
-                            | Offers offerings -> offerings
+                            | XOffers offerings | Offers offerings -> offerings
                             | _ -> []
                           in
                           if List.length cont > 2 then
@@ -422,21 +463,39 @@ let check_generalized_session
                               else
                                 (List.nth cont 1, List.nth cont 0)
                               in
-                            Printf.eprintf "Assigning %s to event %d from ImmediateSend of %s\n"
-                              (Lang.string_of_protocol (StyOffer cont)) child_ev.id (string_of_msg_spec msg);
+                             let own_contin = match own_cont.continuation, hc.cont with
+                              | None , StyTrue -> StyTrue
+                              | Some st, StyTrue -> st
+                              | Some st, st' -> StySeq (st, st')
+                              | None, st -> st
+                            in
+                            let other_contin = match other_cont.continuation, hc.cont with
+                              | Some st, StyTrue -> st
+                              | Some st, st' -> StySeq (st, st')
+                              | None, st -> st
+                            in
                             
-                            child_ev.session_type <- Some {protocol_node with d = match own_cont.continuation with Some st -> st | None -> StyTrue};
+                            child_ev.session_type <- Some {protocol_node with d = own_contin};
                             let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
+
                             if List.length child_other_branch = 1 then
                               let other_ev = List.hd child_other_branch in
-                              other_ev.session_type <- Some {protocol_node with d = match other_cont.continuation with Some st -> st | None -> StyTrue}
+                              Printf.eprintf "Assigning session type %s to other branch event %d\n"
+                                (Lang.string_of_protocol other_contin) other_ev.id;
+                              other_ev.session_type <- Some {protocol_node with d = other_contin};
+                              Queue.add child_ev next_queue;
+                              Queue.add other_ev next_queue
+
                     )
 
                     | _ -> ()
                   ) has_immediate_actions
                 end
                 else if not is_empty_branch then
-                  child_ev.session_type <- Some {protocol_node with d = current_sty} 
+                  (
+                  child_ev.session_type <- Some {protocol_node with d = current_sty} ;
+                  Queue.add child_ev next_queue
+                  )
                 else begin
                   let found = List.exists (fun hc ->
                     match hc.head with
@@ -449,9 +508,12 @@ let check_generalized_session
                   if not found then
                     error_handler g (Printf.sprintf "Expected Terminal at event %d | However found %s"
                       child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name      
+                    ;
+                  Queue.add child_ev next_queue
               end;
+
             end;    
-                Queue.add child_ev next_queue
+                
             | `Later (ev_a, ev_b) ->
               let all_parents_reached = match ev_a.session_type, ev_b.session_type with
                 | Some _, Some _ -> true
