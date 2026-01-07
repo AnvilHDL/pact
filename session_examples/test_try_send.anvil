@@ -1,0 +1,17 @@
+chan ch{
+    left req : (logic@#1)
+}
+
+interface test_try_send_if (ep : left ch) = ^(ep.req : #5, * : #4);
+proc test_try_send(test_try_send_if){
+    loop{
+        try x = recv ep.req{
+            dprint "Received value: %d" (x) >>
+            cycle 5
+        }
+        else{
+            cycle 4
+        }
+    }
+
+}
