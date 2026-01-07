@@ -936,20 +936,20 @@ let rec string_of_protocol p =
 let rec aux p =
   match p with
   | StySeq (p1, p2) ->
-      "(" ^ aux p1 ^ " >> " ^ aux p2 ^ ")"
+      aux p1 ^ ";" ^ aux p2 
   | StyTrue ->
       "∅"
   | StyChoice (p1, p2) ->
-      "( " ^ aux p1 ^ " + " ^ aux p2 ^ " )"
+      "( " ^ aux p1 ^ "\n+\n" ^ aux p2 ^ " )"
   | StyOffer ps ->
-      "( " ^ String.concat " & " (List.map aux2 ps) ^ " )"
+      "( " ^ String.concat "\n&\n " (List.map aux2 ps) ^ " )"
   | StyXOffer ps ->
-      "( " ^ String.concat " ^ " (List.map aux2 ps) ^ " )"
+      "( " ^ String.concat " \n^\n " (List.map aux2 ps) ^ " )"
   | StyAtom act -> string_of_aa_with_gap act
   | StyFuture p_inner ->
       "F( " ^ aux p_inner ^ " )"
   | StyParallel (p1, p2) ->
-      "( " ^ aux p1 ^ " || " ^ aux p2 ^ " )"
+      "( " ^ aux p1 ^ "\n||\n " ^ aux p2 ^ " )"
   | StyRec (id, p_body) ->
       "μ " ^ id ^ ".( " ^ aux p_body ^ " )"
   | StyVar id ->

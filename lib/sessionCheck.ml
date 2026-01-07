@@ -369,14 +369,17 @@ let check_generalized_session
                             error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
                               child_ev.id) g.thread_codespan module_name
                           else
-                            let own_cont, other_cont =
-                              if (List.hd cont).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
-                                 || (List.hd cont).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
-                                (List.hd cont, List.hd (List.tl cont))
+                            let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
+                              || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
+                                (List.nth cont 0, List.nth cont 1)
                               else
-                                (List.hd (List.tl cont), List.hd cont)
+                                (List.nth cont 1, List.nth cont 0)
+                              
                             in
+                              Printf.eprintf "Assigning %s to event %d from ImmediateRecv\n"
+                              (Lang.string_of_protocol (match own_cont.continuation with Some st -> st | None -> StyTrue)) child_ev.id;
                             child_ev.session_type <- Some {protocol_node with d = match own_cont.continuation with Some st -> st | None -> StyTrue};
+                            
                             let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
                             if List.length child_other_branch = 1 then
                               let other_ev = List.hd child_other_branch in
@@ -413,13 +416,15 @@ let check_generalized_session
                             error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
                               child_ev.id) g.thread_codespan module_name
                           else
-                            let own_cont, other_cont =
-                              if (List.hd cont).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
-                                 || (List.hd cont).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
-                                (List.hd cont, List.hd (List.tl cont))
+                            let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
+                              || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
+                                (List.nth cont 0, List.nth cont 1)
                               else
-                                (List.hd (List.tl cont), List.hd cont)
-                            in
+                                (List.nth cont 1, List.nth cont 0)
+                              in
+                            Printf.eprintf "Assigning %s to event %d from ImmediateSend of %s\n"
+                              (Lang.string_of_protocol (StyOffer cont)) child_ev.id (string_of_msg_spec msg);
+                            
                             child_ev.session_type <- Some {protocol_node with d = match own_cont.continuation with Some st -> st | None -> StyTrue};
                             let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
                             if List.length child_other_branch = 1 then

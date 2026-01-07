@@ -82,6 +82,14 @@ let print_dot_graph g out =
       ) br_info.branches_val
     | `Root None -> ()
     | `Root (Some (ev', br_side_info)) ->
+      let ev_has_imm_act = List.find_opt (fun a ->
+        match a.Lang.d with
+        | ImmediateRecv _ | ImmediateSend _ -> true
+        | _ -> false
+      ) ev.actions in
+      if Option.is_some ev_has_imm_act then
+        print_edge ev' ev "Imm"
+      else
       print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
     | `UntilEntry (ev', info) ->
       print_edge ev' ev "UE";
@@ -140,7 +148,15 @@ let print_graph_with_session_types g out =
       ) br_info.branches_val
     | `Root None -> ()
     | `Root (Some (ev', br_side_info)) ->
-      print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+      let ev_has_imm_act = List.find_opt (fun a ->
+        match a.Lang.d with
+        | ImmediateRecv _ | ImmediateSend _ -> true
+        | _ -> false
+      ) ev.actions in
+      if Option.is_some ev_has_imm_act then
+        print_edge ev' ev "Imm"
+      else
+        print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
     | `UntilEntry (ev', info) ->
       print_edge ev' ev "UE";
       print_edge info.until_body_end ev "UL" (* loop back *)
