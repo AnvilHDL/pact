@@ -51,6 +51,28 @@ let match_offerings_with_msgs
       ) offerings
     ) msgs
 
+let rec remove_type_choice sty1 sty2 =
+  (* remove sty2 from sty1 : as consumed *)
+  match sty1 with
+  | StyChoice (s1, s2) ->
+      if s1 = sty2 then
+        s2
+      else if s2 = sty2 then
+        s1
+      else if s1 = StyTrue then
+        s2
+      else if s2 = StyTrue then
+        s1
+      else
+        StyChoice (remove_type_choice s1 sty2, remove_type_choice s2 sty2)
+      
+  | StySeq (s1, s2) ->
+      StySeq (remove_type_choice s1 sty2, s2)
+  | _ -> sty1
+      
+
+  
+
 (* Error handler that outputs the graph with session types before raising error *)
 let error_handler g err_msg err_span module_name  =
   let file_handler = Out_channel.open_text (Printf.sprintf "%s_error.dot" module_name) in
@@ -93,37 +115,56 @@ let rec build_choice_from_xofferings (offerings : offering_session_type list) =
         )
     | _ -> build_choice_from_xofferings rest
   
-let rec build_choice_from_offerings (offerings : offering_session_type list) =
-    if List.length offerings = 1 then
-    let only = List.hd offerings in
-    match only.trigger with
-    | Lang.AtomicAct trig ->
-        (match only.continuation with
-        | Some sty -> StyChoice(Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty), Lang.StyTrue)
-        | None -> StyChoice(Lang.StyAtom (Lang.AtomicAct trig), Lang.StyTrue)
-        )
-    | _ -> 
-        match only.continuation with
-        | Some sty -> StyChoice(sty, Lang.StyTrue)
-        | None -> Lang.StyTrue
-  else
-    let first = List.hd offerings in
-    let rest = List.tl offerings in
-    match first.trigger with
-    | Lang.AtomicAct trig ->
-        Lang.StyParallel(
-          (match first.continuation with
+let  build_choice_from_offerings (offerings : offering_session_type list) =
+  let rec aux offings =
+    if List.length offings = 1 then
+      let only = List.hd offings in
+      match only.trigger with
+      | Lang.AtomicAct trig ->
+          (match only.continuation with
           | Some sty -> StyChoice(Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty), Lang.StyTrue)
           | None -> StyChoice(Lang.StyAtom (Lang.AtomicAct trig), Lang.StyTrue)
-          ),
-          build_choice_from_offerings rest
-        )
-    | _ -> 
-      let s = match first.continuation with
-      | Some sty -> StyChoice(sty, Lang.StyTrue)
-      | None -> StyTrue in
-      Lang.StyParallel(s,
-      build_choice_from_offerings rest)
+          )
+      | _ -> 
+        raise (Except.TypeError [
+          Text "Unsupported offering trigger in build_choice_from_offerings | Should not happen";
+        ])
+    else
+      let first = List.hd offings in
+      let rest = List.tl offings in
+      match first.trigger with
+      | Lang.AtomicAct trig ->
+          Lang.StyParallel(
+            (match first.continuation with
+            | Some sty -> StyChoice(Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty), Lang.StyTrue)
+            | None -> StyChoice(Lang.StyAtom (Lang.AtomicAct trig), Lang.StyTrue)
+            ),
+            aux rest
+          )
+      | _ -> raise (Except.TypeError [
+          Text "Unsupported offering trigger in build_choice_from_offerings | Should not happen";
+        ])
+  in
+
+  let offerings_list_filtered = List.filter (fun off ->
+    match off.trigger with
+    | Lang.AtomicAct (Lang.AtomBMsg _) -> true
+    | Lang.AtomicAct (Lang.AtomNBMsg _) -> true
+    | _ -> false
+  ) offerings in 
+  let wildcard = List.filter (fun off ->
+    match off.trigger with
+    | Lang.AtomDelay _ -> true
+    | _ -> false
+  ) offerings in
+
+  let wildcard_cont = if List.length wildcard > 0 then Some (if Option.is_some ((List.hd wildcard).continuation) then Option.get ((List.hd wildcard).continuation) else StyTrue) else None in
+
+  match wildcard_cont with
+  | Some sty ->
+      StyChoice(sty, aux offerings_list_filtered)
+  | None -> aux offerings_list_filtered
+
 
 
 let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) : head_continuation_pair list =
@@ -506,9 +547,25 @@ let check_generalized_session
                   let found = List.exists (fun hc ->
                     match hc.head with
                     | Terminal ->
-                        child_ev.session_type <- Some {protocol_node with d = hc.cont};
-                        hc.visited <- true;
-                        true
+                        if  not hc.visited then begin
+                          (* Printf.eprintf "Assigning Terminal continuation = %s to empty branch event %d\n" *)
+                            (* (Lang.string_of_protocol hc.cont) child_ev.id; *)
+                          child_ev.session_type <- Some {protocol_node with d = hc.cont};                              
+                          hc.visited <- true;
+                          let other_side_remaining_type = remove_type_choice current_sty hc.cont in
+                          let other_child_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
+                          List.iter (fun ob ->
+                              (* Printf.eprintf "Assigning remaining choice continuation = %s to other branch event %d\n" *)
+                              (* (Lang.string_of_protocol other_side_remaining_type) ob.id; *)
+                            ob.session_type <- Some {protocol_node with d = other_side_remaining_type};
+                            (* Printf.eprintf "Adding other branch event %d to queue | for empty branch %d\n" ob.id child_ev.id; *)
+                            Queue.add ob next_queue
+                          ) other_child_branch;           
+                          true
+                        end
+                        else begin
+                          false
+                        end
                     | _ -> false
                   ) head_conts in
                   if not found then
@@ -612,7 +669,7 @@ let check_generalized_session
           List.iter (fun hc ->
             if not hc.visited && not hc.is_choice && not !is_propogated && not (hc.head = Terminal) then
               error_handler g (Printf.sprintf "No matching head-continuation found for event %d's children during generalized session type check | Head: %s | Cont: %s"
-                ev.id (match hc.head with | Offers off -> string_of_protocol (StyOffer off) | Atom act -> string_of_atomic_action_with_gap act | Terminal  -> string_of_protocol StyTrue) (string_of_protocol hc.cont) ) g.thread_codespan module_name 
+                ev.id (match hc.head with | XOffers off | Offers off -> string_of_protocol (StyOffer off) | Atom act -> string_of_atomic_action_with_gap act | Terminal  -> string_of_protocol StyTrue) (string_of_protocol hc.cont) ) g.thread_codespan module_name 
           ) head_conts;
 
           generalized_session_judgement next_queue visited

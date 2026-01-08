@@ -1213,7 +1213,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let td_false = {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype} in
     if is_wildcard_present then (
       let (outer_branch_info, br_side_true, br_side_false, td_wildcard,ctx_wildcard) = Option.get wildcard_info in
-      outer_branch_info.branches_to <- outer_branch_info.branches_to @ [merged_event];
+      (* outer_branch_info.branches_to <- outer_branch_info.branches_to @ [merged_event]; *)
       outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_false.lt.live];
       BuildContext.branch_merge ctx [ctx'; ctx_wildcard];
       let ctx_br = BuildContext.branch graph ctx' outer_branch_info in
