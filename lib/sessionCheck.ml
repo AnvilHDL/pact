@@ -376,7 +376,26 @@ let check_generalized_session
                       hc.visited <- true
                     end;
                     n <= m
-                | _ -> false
+                | Terminal ->  (
+                  let cont_cont = get_head_continuation_pair hc.cont g.thread_codespan in
+                  let has_delay = List.exists (fun hcc ->
+                    match hcc.head with
+                    | Atom (AtomDelay m) ->
+                        if n <= m then begin
+                          let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
+                          let new_cont = match remaining_delay with
+                            | StyTrue -> hcc.cont
+                            | _ -> StySeq (remaining_delay, hcc.cont)
+                          in
+                          child_ev.session_type <- Some {protocol_node with d = new_cont};
+                          hc.visited <- true
+                        end;
+                        n <= m
+                    | _ -> false 
+                  ) cont_cont in
+                  has_delay
+                )
+              | _ -> false
               ) head_conts in
               if not found then
                 error_handler g (Printf.sprintf "Expected Delay at event %d | However found %s"
@@ -604,8 +623,6 @@ let check_generalized_session
                     (
                       
                       let match_cont_later sty1 sty2 = 
-                        Printf.eprintf "Later event %d: matched session types %s vs %s\n"
-                            child_ev.id (Lang.string_of_protocol sty1) (Lang.string_of_protocol sty2);
                         if sty1 = sty2 then begin
 
                           sty1
