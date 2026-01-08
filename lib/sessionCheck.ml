@@ -172,7 +172,7 @@ let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) : 
   | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = StyTrue}]
   | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = StyTrue}]
   | StySeq (s1, s2) -> (
-      let head_conts = get_head_continuation_pair s1 sp in
+    let head_conts = get_head_continuation_pair s1 sp in
       List.map (fun hc ->
         {hc with cont = 
           match hc.cont with
