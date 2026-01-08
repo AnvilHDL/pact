@@ -1,0 +1,92 @@
+chan ch {
+    left req : (logic@#1),
+    left ack : (logic@#1),
+    left dash : (logic@#1),
+    left req1: (logic@#1),
+    left ack1 : (logic@#1),
+    left dash1 : (logic@#1),
+    left req2 : (logic@#1),
+    left ack2 : (logic@#1),
+    left dash2 : (logic@#1)
+}
+
+interface tryand_interfcace (ep : left ch) = &(ep.req : (&(ep.req1, ep.ack1, ep.dash1, * ) >> #5) , ep.ack : (&(ep.req2, ep.ack2, ep.dash2, * ) >> #3), ep.dash, * ) >> #1 ;
+proc tryand(tryand_interfcace){
+    reg cyc : logic[8];
+    loop{
+       offer{
+            x= recv ep.req => (
+                dprint "[Cycle %d] try received req: %d" (*cyc, x) >>
+                offer{
+                    y = recv ep.req1 => (
+                        dprint "[Cycle %d] try received req1: %d" (*cyc, y)
+                    ),
+                    y = recv ep.ack1 => (
+                        dprint "[Cycle %d] try received ack1: %d" (*cyc, y)
+                    ),
+                    z = recv ep.dash1 => (
+                        dprint "[Cycle %d] try received dash1: %d" (*cyc, z)
+                    ),
+                    # => (
+                        dprint "[Cycle %d] try received nothing on req1/ack1/dash1" (*cyc)
+                    )
+                } >>
+                cycle 5
+            ),
+            x = recv ep.ack => (
+
+                dprint "[Cycle %d] try received ack: %d" (*cyc, x) >>
+                offer{
+
+                    y = recv ep.req2 => (
+                        dprint "[Cycle %d] try received req2: %d" (*cyc, y)
+                    ),
+                    y = recv ep.ack2 => (
+                        dprint "[Cycle %d] try received ack2: %d" (*cyc, y)
+                    ),
+                    z = recv ep.dash2 => (
+                        dprint "[Cycle %d] try received dash2: %d" (*cyc, z)
+                    ),
+                    # => (
+                        dprint "[Cycle %d] try received nothing on req2/ack2/dash2" (*cyc)
+                    )
+                }
+
+                >>
+                cycle 3
+            ),
+            x = recv ep.dash => (
+                dprint "[Cycle %d] try received dash: %d" (*cyc, x)
+            ),
+            # => (
+                dprint "[Cycle %d] try received nothing" (*cyc)
+            )
+        } >> 
+        dprint "[Cycle %d] completed xoffer" (*cyc) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc test_nested_and(){
+    chan ep_le -- ep_ri : ch;
+    spawn tryand(ep_le);
+    reg cyc : logic[8];
+    
+    loop{
+        send ep_ri.req(1'd1) >>
+        dprint "[Cycle %d] Top sent req" (*cyc) >>
+        send ep_ri.ack(1'd1) >>
+        dprint "[Cycle %d] Top sent ack" (*cyc) >>
+        cycle 1
+    }
+    loop{
+        cycle 100 >> 
+        dfinish
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}

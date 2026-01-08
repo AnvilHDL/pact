@@ -425,8 +425,8 @@ let check_generalized_session
                             child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
                         else
                           let hc = Option.get found_hc_opt in
-                          Printf.eprintf "Found matching head-continuation for ImmediateRecv at event %d: %s\n"
-                            child_ev.id (print_string_of_head_cont_pair hc);
+                          (* Printf.eprintf "Found matching head-continuation for ImmediateRecv at event %d: %s\n"
+                            child_ev.id (print_string_of_head_cont_pair hc); *)
                           List.iter (fun h ->
                             if h = hc then h.visited <- true
                           ) head_conts;
@@ -465,8 +465,8 @@ let check_generalized_session
                             let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
                             if List.length child_other_branch = 1 then
                               let other_ev = List.hd child_other_branch in
-                              Printf.eprintf "Assigning session type %s to other branch event %d\n"
-                                (Lang.string_of_protocol other_contin) other_ev.id;
+                              (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
+                                (Lang.string_of_protocol other_contin) other_ev.id; *)
                               other_ev.session_type <- Some {protocol_node with d = other_contin};
                               Queue.add child_ev next_queue;
                               Queue.add other_ev next_queue
@@ -491,8 +491,8 @@ let check_generalized_session
                             child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
                         else
                           let hc = Option.get found_hc_opt in
-                          Printf.eprintf "Found matching head-continuation for ImmediateSend at event %d: %s\n"
-                            child_ev.id (print_string_of_head_cont_pair hc);
+                          (* Printf.eprintf "Found matching head-continuation for ImmediateSend at event %d: %s\n"
+                            child_ev.id (print_string_of_head_cont_pair hc); *)
                           List.iter (fun h ->
                             if h = hc then h.visited <- true
                           ) head_conts;
@@ -527,8 +527,8 @@ let check_generalized_session
 
                             if List.length child_other_branch = 1 then
                               let other_ev = List.hd child_other_branch in
-                              Printf.eprintf "Assigning session type %s to other branch event %d\n"
-                                (Lang.string_of_protocol other_contin) other_ev.id;
+                              (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
+                                (Lang.string_of_protocol other_contin) other_ev.id; *)
                               other_ev.session_type <- Some {protocol_node with d = other_contin};
                               Queue.add child_ev next_queue;
                               Queue.add other_ev next_queue
@@ -602,16 +602,34 @@ let check_generalized_session
                         | _ -> false
                     ) hd_cont_b in
                     (
+                      
+                      let match_cont_later sty1 sty2 = 
+                        Printf.eprintf "Later event %d: matched session types %s vs %s\n"
+                            child_ev.id (Lang.string_of_protocol sty1) (Lang.string_of_protocol sty2);
+                        if sty1 = sty2 then begin
+
+                          sty1
+                        end
+                        else begin
+                          match sty1, sty2 with
+                          | StySeq(StyParallel(StyTrue,StyTrue), s1), sty2 when s1 = sty2 -> StySeq(StyTrue, sty2)
+                          | sty1, StySeq(StyParallel(StyTrue, StyTrue), s2) when sty1 = s2 -> StySeq(StyTrue, sty1)
+                          | _ -> 
+                            error_handler g (Printf.sprintf "Mismatched session types at later event %d | Types: %s vs %s"
+                              child_ev.id (Lang.string_of_protocol sty1) (Lang.string_of_protocol sty2)) g.thread_codespan module_name;
+                        end in
+
                       match cont_a, cont_b with
                       | Some hc_a, Some hc_b ->
-                          if hc_a.cont <> hc_b.cont then
-                            error_handler g (Printf.sprintf "Mismatched session types at later event %d"
-                              child_ev.id) g.thread_codespan module_name;
-                            child_ev.session_type <- Some {protocol_node with d = hc_a.cont};
+                        let new_cont = match_cont_later hc_a.cont hc_b.cont in
+                          (* if hc_a.cont <> hc_b.cont then
+                            error_handler g (Printf.sprintf "Mismatched session types at later event %d | Types: %s vs %s"
+                              child_ev.id (Lang.string_of_protocol hc_a.cont) (Lang.string_of_protocol hc_b.cont)) g.thread_codespan module_name; *)
+                            child_ev.session_type <- Some {protocol_node with d = new_cont};
                       | _ ->
                         raise (Except.TypeError [
-                          Text (Printf.sprintf "No terminal head-continuation found at later event %d"
-                            child_ev.id);
+                          Text (Printf.sprintf "No terminal head-continuation found at later event %d | hc = \n%s"
+                            child_ev.id (String.concat "\n" (List.map print_string_of_head_cont_pair head_conts)));
                           Except.codespan_local g.thread_codespan
                         ])
                     )
@@ -647,10 +665,14 @@ let check_generalized_session
                       error_handler g (Printf.sprintf "No session types found in branches at event %d"
                         child_ev.id) g.thread_codespan module_name
                 in
+                let true_node = match true_cont_node.d with
+                | StySeq(StyTrue, cont) -> cont
+                | _ -> true_cont_node.d
+                in
                 List.iter (fun b ->
                   match b.session_type with
                   | Some sty ->
-                      if sty.d <> true_cont_node.d then
+                      if sty.d <> true_node && (sty.d <> StySeq(StyTrue, true_node)) then
                         error_handler g (Printf.sprintf "Mismatched session types in branch event %d"
                           child_ev.id) g.thread_codespan module_name
                   | None ->

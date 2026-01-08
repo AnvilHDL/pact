@@ -1260,15 +1260,16 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     
     (*==================== At this point one of the messages must have been received ==========================================================*)
     (* Now we match 1'd1 with respective valid ready port of branch conditions *)
-    let length_offering = List.length offer_arm_filtered in
+    let length_offering = List.length offer_arms in
     let bit_len = (Utils.int_log2 length_offering) in
 
     let find_wire_ctx ct id =
       let binding = Typing.context_lookup ct id in
       let td = unwrap_or_err (Printf.sprintf "Could not find a binding for %s" id)  e.span binding in
       let w = unwrap_or_err (Printf.sprintf "No wire associated with this binding %s" id)  e.span td.binding_val.w in
-      if w.size <> bit_len then
-        raise (Except.TypeError [Except.Text (Printf.sprintf "State selector wire size mismatch: expected %d but got %d" bit_len w.size); Except.codespan_local e.span])
+      let bit_leni = (Utils.int_log2 (List.length offer_arm_filtered)) in
+      if w.size <> bit_leni then
+        raise (Except.TypeError [Except.Text (Printf.sprintf "State selector wire size mismatch: expected %d but got %d" bit_leni w.size); Except.codespan_local e.span])
       else
       (graph.wires, w)
     in
