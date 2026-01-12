@@ -1,0 +1,6 @@
+interface t1 (ep : left ch) = ep.req;
+
+interface t2 (ep : left ch) = rec X . (#ep.req >> X) ;
+
+
+interface t3 (ep : left ch) = #ep.req ;

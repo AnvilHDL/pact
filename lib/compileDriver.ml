@@ -179,8 +179,20 @@ let generalized_type_debug _out config =
     Printf.eprintf "\nGeneralized Types:\n\n";
     List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
       Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol sdef.d.body.d);
-    ) session_type_defs
-  
+    ) session_type_defs;
+    
+
+  let open SessionCompatiblityv3 in
+
+  Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
+  List.iter(
+    fun (sdef :Lang.session_def Lang.ast_node) ->
+      let gen_type = build_automaton sdef.d.body.d sdef.d.body.span in 
+      let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
+      let out = open_out out_channel in
+      print_automaton_dot gen_type out;
+      close_out out;
+  )session_type_defs
 
 let debug_types out config =
   let open Config in
