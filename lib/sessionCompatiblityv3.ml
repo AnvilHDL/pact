@@ -51,6 +51,7 @@ let string_of_label_set (ls: LabelSet.t) : string =
   ) elements in
   "{" ^ (String.concat ", " str_list) ^ "}"
 
+
 type transition = {
   from_state : int;
   to_state : int;
@@ -59,6 +60,18 @@ type transition = {
   is_theta : bool;
   is_conditional : bool;
 }
+
+let print_string_of_transitions (transitions: transition list) : unit =
+  List.iter (fun t ->
+    let label_str = 
+      if t.is_epsilon then "ε"
+      else if t.is_theta then "θ"
+      else
+        string_of_label_set t.label
+    in
+    Printf.eprintf "  %d -> %d [label=\"%s\"];\n" t.from_state t.to_state label_str
+  ) transitions
+
 
 type typeAutomaton = {
   states : (int, state) Hashtbl.t;
@@ -510,9 +523,13 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
     in
     
     let end1 = find_accepting_state auto1 in
+    TypeAutomaton.add_transition auto1 end1 end1 LabelSet.empty false false false;
+
     let end2 = find_accepting_state auto2 in
-    let final_prod_state = get_product_state (end1, end2) in
-    (Hashtbl.find auto.states final_prod_state).accepting <- true;
+    TypeAutomaton.add_transition auto2 end2 end2 LabelSet.empty false false false;
+
+
+    let final_prod_state = get_product_state (end1, end2) in  
 
     let module IntPairSet = Set.Make(struct
       type t = int * int
@@ -531,6 +548,32 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         
         let trans1 = List.filter (fun t -> t.from_state = s1) auto1.transitions in
         let trans2 = List.filter (fun t -> t.from_state = s2) auto2.transitions in
+
+        let s1_accepting = s1 = end1 in
+        let s2_accepting = s2 = end2 in
+
+        if s1_accepting && s2_accepting then begin
+          (Hashtbl.find auto.states ps).accepting <- true;
+        end
+
+        else if s1_accepting then begin
+          (* take t2 transitions with s1 *)
+          List.iter (fun t2 ->
+            let next_ps = get_product_state (s1, t2.to_state) in
+            TypeAutomaton.add_transition auto ps next_ps t2.label false false false;
+            if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
+              worklist := (s1, t2.to_state) :: !worklist
+          ) trans2;
+        end else if s2_accepting then begin
+          (* take t1 transitions with s2 *)
+          List.iter (fun t1 ->
+            let next_ps = get_product_state (t1.to_state, s2) in
+            TypeAutomaton.add_transition auto ps next_ps t1.label false false false;
+            if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
+              worklist := (t1.to_state, s2) :: !worklist
+          ) trans1;
+      
+    end else begin
         
         (* Handle epsilon transitions - independent steps *)
         List.iter (fun t1 ->
@@ -587,11 +630,94 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
               worklist := (t1.to_state, t2.to_state) :: !worklist
           ) trans2
         ) trans1;
+      end
       )
     done;
     final_prod_state
   in
-
   let final_state = build st auto.start_state in
   (Hashtbl.find auto.states final_state).accepting <- true;
+  flush stderr;
   auto
+
+let check_compatibility (_session_ids: (((session_type ast_node)*identifier) list)) (_ep_intfc_map : identifier list Utils.string_map) (_verbose : bool) (_span : code_span) =
+  let _automata_ids = List.map (fun (st_node, intf_id) ->
+    let auto = build_automaton st_node.d st_node.span in
+    (auto, intf_id)
+  ) _session_ids in
+  (true , "Multiparty compatibility check not yet implemented")
+
+  (* Construct the sync product (special kind) *)
+
+
+let rec highest_level_endpoint (session_type : session_type) : identifier list =
+    
+    match session_type with
+    | StyAtom (AtomicAct (AtomNBMsg m)) -> [m.endpoint]
+    | StyAtom (AtomicAct (AtomBMsg m)) -> [m.endpoint]
+    | StyAtom (AtomDelay _) -> []
+    | StySeq (s1, s2) | StyParallel (s1, s2) | StyChoice (s1, s2) -> (match highest_level_endpoint s1 with
+        | [] -> highest_level_endpoint s2
+        | eps1 -> eps1 @ highest_level_endpoint s2
+    )
+    | StyOffer ps | StyXOffer ps ->
+        (
+        let endpoints = List.flatten (List.map (fun oty ->
+            match oty.trigger with
+            | AtomicAct (AtomNBMsg m) -> [m.endpoint]
+            | AtomicAct (AtomBMsg m) -> [m.endpoint]
+            | AtomDelay _ -> []
+            | _ -> raise (Except.TypeError [Text ("Unsupported atomic action in highest level endpoint extraction"^(string_of_atomic_action_with_gap oty.trigger))])
+        ) ps) in
+        let endpoints_continuation = List.flatten (List.map (fun oty ->
+            match oty.continuation with
+            | Some cont -> highest_level_endpoint cont
+            | None -> []
+        ) ps) in
+        endpoints @ endpoints_continuation
+        )
+
+    | StyFuture s -> highest_level_endpoint s
+    | StyTrue -> []
+    | _ -> raise (Except.TypeError [Text ("Unsupported session type for highest level endpoint extraction"^(Lang.string_of_protocol session_type))])
+let create_ep_id_intfc_id_map_with_debug (pool_def : interface_pool_def ast_node) : identifier list Utils.string_map =
+    (* match with highest level endpoint,without duplicates *)
+    List.fold_left(
+    fun acc_map interface_member ->
+        match interface_member.d.interface_def with
+        | Some intf_in ->
+            let eps = highest_level_endpoint intf_in in
+            List.fold_left (fun map ep ->
+                let existing_ids = match Utils.StringMap.find_opt ep map with
+                    | Some ids -> ids
+                    | None -> []
+                in
+                let unique_ids = List.fold_left (fun acc id ->
+                    if List.mem id acc then acc else id :: acc
+                ) existing_ids [interface_member.d.inf_mem_id] in
+                Utils.StringMap.add ep unique_ids map
+            ) acc_map eps
+        | None -> raise (Failure "Interface member missing definition")
+
+    ) Utils.StringMap.empty pool_def.d.interface_members 
+(* for each pool member map based on endpoint of the message used at highest level *)
+
+let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (verbose : bool) : (bool * string) =
+    let ep_intfc_map = create_ep_id_intfc_id_map_with_debug pool_def in
+    if verbose then
+        (
+        Printf.eprintf "[Debug] Endpoint to Interface ID map: %d\n" (Utils.StringMap.cardinal ep_intfc_map);
+        Printf.eprintf "[Debug] Endpoint mappings:\n";
+        Utils.StringMap.iter (fun ep intf_ids ->
+            Printf.eprintf "  Endpoint %s: Interface IDs [%s]\n" ep (String.concat "; " intf_ids)
+        ) ep_intfc_map;
+        );
+    
+    let session_ids = List.filter_map (fun intf_member ->
+        match intf_member.d.interface_def with
+        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
+        | None -> raise (Failure "Interface member missing definition")
+    ) pool_def.d.interface_members in
+
+    let _ = check_compatibility session_ids ep_intfc_map verbose pool_def.span in
+    (true, "Multiparty compatibility check not yet implemented")
