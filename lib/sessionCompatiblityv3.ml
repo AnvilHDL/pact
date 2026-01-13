@@ -7,12 +7,6 @@ type action_kind =
   | ImmediateAction of Lang.message_specifier
   | BlockAction of Lang.message_specifier
 
-type delay_kind = 
-  | CycleDelay of int
-  | MessageDelay of Lang.message_specifier
-  | OptionDelay of Lang.message_specifier list
-
-
 
 type state = {
   id : int;
@@ -21,7 +15,7 @@ type state = {
 
 type label_kind =
   | Action of message_specifier
-  | Delay of delay_kind
+  | Delay
   | Negation of message_specifier list
   | Terminal of int
 
@@ -44,11 +38,7 @@ let string_of_label_set (ls: LabelSet.t) : string =
   let elements = LabelSet.elements ls in
   let str_list = List.map (function
     | Action m -> Printf.sprintf "Action(%s)" (Lang.string_of_msg_spec m)
-    | Delay (CycleDelay n) -> Printf.sprintf "Delay(Cycle %d)" n
-    | Delay (MessageDelay m) -> Printf.sprintf "Delay(Message %s)" (Lang.string_of_msg_spec m)
-    | Delay (OptionDelay ms) -> 
-      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-      Printf.sprintf "Delay(Option [%s])" ms_str
+    | Delay -> "#"
     | Negation ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
       Printf.sprintf "Negation([%s])" ms_str
@@ -187,12 +177,8 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
       else
         String.concat "," (LabelSet.elements t.label |> List.map (function
           | Action m -> Printf.sprintf "%s" (Lang.string_of_msg_spec m)
-          | Delay(CycleDelay n) -> Printf.sprintf "#%d" n
-          | Delay(MessageDelay m) -> Printf.sprintf "#m:%s" (Lang.string_of_msg_spec m)
+          | Delay -> "#"
           | Terminal st -> Printf.sprintf "$<%d>" st
-          | Delay(OptionDelay ms) -> 
-            let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-            Printf.sprintf "#offer:[%s]" ms_str
           | Negation ms ->
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
             Printf.sprintf "¬[%s]" ms_str
@@ -276,7 +262,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             (Hashtbl.find auto.states current).accepting <- false;
             let pseudo_next = TypeAutomaton.new_state auto false in
             TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Negation [m])) false false true;
-            TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay(CycleDelay 1))) false false false;
+            TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay)) false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false;
             next_s
@@ -285,15 +271,21 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Negation [m])) false false true;
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false;
             next_s
           )
         | Lang.AtomDelay n ->
           (
             (Hashtbl.find auto.states current).accepting <- false;
-            let next_s = TypeAutomaton.new_state auto true in
-            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Delay (CycleDelay n))) false false false;
-            next_s
+            let last = ref current in
+            List.iter(fun _ ->
+              let next = TypeAutomaton.new_state auto false in
+              TypeAutomaton.add_transition auto current next (LabelSet.singleton (Delay)) false false false;
+              last := next;
+            ) (List.init n (fun x -> x));
+            !last
+
           )
         | _ ->
           raise (TypeError [Text ("Unsupported atomic action for automaton construction "^(string_of_protocol s_type)); Except.codespan_local default_span])
@@ -362,16 +354,20 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
             let branch_end = build cont new_wildcard_state in
-            Printf.eprintf "Wildcard branch end state: %d | current state: %d\n" branch_end current;
 
             if (branch_end<>current) then TypeAutomaton.reroute_transitions auto branch_end end_state
-            else Printf.eprintf "Warning: Empty branch in XOffer at state %d\n" current;
+
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state
         end;
 
         List.iter (fun o_ms ->
+          let m = match o_ms.Lang.trigger with
+            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
+            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
+            | _ -> failwith "Should not reach here"
+          in
           let st = match o_ms.Lang.continuation with
-            | Some cont -> StySeq (StyAtom o_ms.trigger, cont)
+            | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg m)), cont)
             | None -> StyAtom (o_ms.trigger)
           in
           let branch_end = build st current in
@@ -381,13 +377,16 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
               | _ -> None
             ) all_msg_branches in
-            TypeAutomaton.remove_all_transitions auto current current;
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false false
+
+            let new_state = TypeAutomaton.new_state auto false in
+
+            TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false true;
+            TypeAutomaton.add_transition auto new_state current (LabelSet.singleton (Delay)) false false false
           );
 
         
           if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state
-          else Printf.eprintf "Warning: Empty branch in XOffer at state %d\n" current;
+
         ) all_msg_branches;
           
         end_state
@@ -475,9 +474,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
               | _ -> None
             ) all_msg_branches in
-
-            TypeAutomaton.remove_all_transitions auto current current;
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false false
+            let new_state = TypeAutomaton.new_state auto false in
+            TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false true;
+            TypeAutomaton.add_transition auto new_state current (LabelSet.singleton (Delay)) false false false
           );
         end_state
       )
@@ -616,12 +615,12 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
               worklist := (t1.to_state, s2) :: !worklist
           );
-          if t1.is_conditional then (
+          (* if t1.is_conditional then (
             let next_ps = get_product_state (t1.to_state, s2) in
             TypeAutomaton.add_transition auto ps next_ps t1.label false false true;
             if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
               worklist := (t1.to_state, s2) :: !worklist
-          )
+          ) *)
         ) trans1;
         
         List.iter (fun t2 ->
@@ -637,17 +636,17 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
               worklist := (s1, t2.to_state) :: !worklist
           );
-          if t2.is_conditional then (
+          (* if t2.is_conditional then (
             let next_ps = get_product_state (s1, t2.to_state) in
             TypeAutomaton.add_transition auto ps next_ps t2.label false false true;
             if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
               worklist := (s1, t2.to_state) :: !worklist
-          )
+          ) *)
         ) trans2;
 
         (* Handle synchronized transitions *)
-        let trans1 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not t.is_conditional) trans1 in
-        let trans2 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not t.is_conditional) trans2 in
+        let trans1 = List.filter (fun t -> not t.is_epsilon && not t.is_theta) trans1 in
+        let trans2 = List.filter (fun t -> not t.is_epsilon && not t.is_theta) trans2 in
 
         List.iter (fun t1 ->
           List.iter (fun t2 ->
@@ -816,59 +815,17 @@ let check_compatibility (session_ids: (((session_type ast_node)*identifier) list
                       | Action m -> List.exists (fun neg_m -> 
                           m.endpoint = neg_m.endpoint && m.msg = neg_m.msg
                         ) msg_list
-                      | Delay _ -> true
+                      | Delay -> true
                       | _ -> false
                     ) other_labels in
                     if has_conflict then Array.set !is_compatible_array i false
                     
-                | Delay delay_kind ->
-                    (match delay_kind with
-                    | CycleDelay _ ->
+                | Delay ->
                         (* Every other transition must also have a Delay *)
-                        let all_have_delay = List.for_all (fun t ->
-                          LabelSet.exists (function Delay _ -> true | _ -> false) t.label
-                        ) transition_set in
-                        if not all_have_delay then Array.set !is_compatible_array i false
-                        
-                    | MessageDelay m ->
-                        (* Check other transitions for conflicting message delays *)
-                        List.iteri (fun j other_trans ->
-                          if j <> i then
-                            let found_delay = ref false in
-                            LabelSet.iter (function
-                              | Delay (MessageDelay other_m) ->
-                                  if m.endpoint = other_m.endpoint && 
-                                    m.msg = other_m.msg then
-                                    Array.set !is_compatible_array i false
-                                  else found_delay := true
-                              | Delay (CycleDelay _) -> found_delay := true (* Compatible *)
-                              | Action act_m ->
-                                  if m.endpoint = act_m.endpoint && 
-                                    m.msg = act_m.msg then
-                                    Array.set !is_compatible_array i false
-                              | _ -> ()
-                            ) other_trans.label;
-                            if not !found_delay then
-                              Array.set !is_compatible_array i false
-                        ) transition_set
-                        
-                    | OptionDelay msg_list ->
-                        (* All transitions must have delay, and if not cycle delay, 
-                          messages must not intersect with msg_list *)
-                        let all_compatible = List.for_all (fun t ->
-                          LabelSet.exists (function
-                            | Delay (CycleDelay _) -> true
-                            | Delay (MessageDelay m) ->
-                                not (List.exists (fun opt_m ->
-                                  m.endpoint = opt_m.endpoint && 
-                                  m.msg = opt_m.msg
-                                ) msg_list)
-                            | Delay (OptionDelay _) -> true
-                            | _ -> false
-                          ) t.label
-                        ) transition_set in
-                        if not all_compatible then Array.set !is_compatible_array i false
-                    )
+                    let all_have_delay = List.for_all (fun t ->
+                      LabelSet.exists (function Delay -> true | _ -> false) t.label
+                    ) transition_set in
+                    if not all_have_delay then Array.set !is_compatible_array i false                        
                     
                 | Action m ->
                     (* Check that at least one other transition can handle this action *)
@@ -878,12 +835,6 @@ let check_compatibility (session_ids: (((session_type ast_node)*identifier) list
                         | Action other_m -> 
                             m.endpoint = other_m.endpoint && 
                             m.msg = other_m.msg
-                        | Delay _ -> true (* Delays are compatible with actions *)
-                        | Negation neg_list ->
-                            not (List.exists (fun neg_m ->
-                              m.endpoint = neg_m.endpoint && 
-                              m.msg = neg_m.msg
-                            ) neg_list)
                         | _ -> false
                       ) other_t.label
                     ) other_trans in

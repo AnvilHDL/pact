@@ -1,4 +1,4 @@
-// // Basic types for session interfaces
+// Basic types for session interfaces
 
 interface t1 (ep : left ch) = ep.req;
 
@@ -7,38 +7,41 @@ interface t2 (ep : left ch) = #ep.req || #ep.ack ;
 interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
 
 
-
-// interface t3 (ep : left ch) = #ep.req ;
-
-// interface t4 (ep : left ch) = ep.req + ep.ack ;
-
-// interface t5 (ep : left ch) = ^(ep.req, ep.ack) ;
-
-// interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) ;
+interface t1 (ep : left ch) = #ep.req || #ep.ack  ;
 
 
-// interface t7 (ep : left ch) = &(ep.req, ep.ack) ;
 
-// interface t8 (ep : left ch) = &( ep.req, ep.ack, *) ;
+interface t3 (ep : left ch) = #ep.req ;
 
+interface t4 (ep : left ch) = ep.req + ep.ack ;
 
-// interface t9 (ep : left ch) = rec X .  ^( #ep.req, * : X) ;
+interface t5 (ep : left ch) = ^(ep.req, ep.ack) ;
 
-// interface t10 (ep : left ch) = (ep.req >> ep.ack) || ( ep.nack >> ep.rreq ) ;
-
-// interface t11 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) ;
-
-// interface t12 (ep : left ch) = ep.m1 || ep.m2;
+interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) ;
 
 
-// pool p1 { // true
-//     ep_le -- ep_ri : ch;
-//     i1 : (ep.req >> ep.ack) ;
-//     i2 : (ep.req >> ep.ack)
-// }
+interface t7 (ep : left ch) = &(ep.req, ep.ack) ;
 
-// pool p2 { // true
-//     ep_le -- ep_ri : ch;
-//     i1 : (ep.req >> ep.ack) ;
-//     i2 : (ep.req || ep.ack)
-// }
+interface t8 (ep : left ch) = &( ep.req, ep.ack, *) ;
+
+
+interface t9 (ep : left ch) = rec X .  ^( #ep.req, * : X) ;
+
+interface t10 (ep : left ch) = (ep.req >> ep.ack) || ( ep.nack >> ep.rreq ) ;
+
+interface t11 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) ;
+
+interface t12 (ep : left ch) = ep.m1 || ep.m2;
+
+
+pool p1 { // true
+    ep_le -- ep_ri : ch;
+    i1 : (ep.req >> ep.ack) ;
+    i2 : (ep.req >> ep.ack)
+}
+
+pool p2 { // true
+    ep_le -- ep_ri : ch;
+    i1 : (#ep.req >> #ep.ack) ;
+    i2 : (#ep.req || #ep.ack)
+}
