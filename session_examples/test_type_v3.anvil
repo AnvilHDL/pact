@@ -1,8 +1,11 @@
 // // Basic types for session interfaces
 
-// interface t1 (ep : left ch) = ep.req;
+interface t1 (ep : left ch) = ep.req;
 
-// interface t2 (ep : left ch) = rec X . (#ep.req >> X) ;
+interface t2 (ep : left ch) = #ep.req || #ep.ack ;
+
+interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
+
 
 
 // interface t3 (ep : left ch) = #ep.req ;
@@ -34,8 +37,8 @@
 //     i2 : (ep.req >> ep.ack)
 // }
 
-pool p2 { // true
-    ep_le -- ep_ri : ch;
-    i1 : (ep.req >> ep.ack) ;
-    i2 : (ep.req || ep.ack)
-}
+// pool p2 { // true
+//     ep_le -- ep_ri : ch;
+//     i1 : (ep.req >> ep.ack) ;
+//     i2 : (ep.req || ep.ack)
+// }

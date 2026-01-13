@@ -276,10 +276,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             (Hashtbl.find auto.states current).accepting <- false;
             let pseudo_next = TypeAutomaton.new_state auto false in
             TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Negation [m])) false false true;
-            TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay(MessageDelay m))) false false false;
+            TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay(CycleDelay 1))) false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false;
-            TypeAutomaton.add_transition auto pseudo_next next_s (LabelSet.singleton (Action m)) false false false;
             next_s
           )
         | Lang.AtomicAct (Lang.AtomNBMsg m) ->
@@ -363,7 +362,10 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
             let branch_end = build cont new_wildcard_state in
-            TypeAutomaton.reroute_transitions auto branch_end end_state
+            Printf.eprintf "Wildcard branch end state: %d | current state: %d\n" branch_end current;
+
+            if (branch_end<>current) then TypeAutomaton.reroute_transitions auto branch_end end_state
+            else Printf.eprintf "Warning: Empty branch in XOffer at state %d\n" current;
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state
         end;
 
@@ -382,7 +384,10 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             TypeAutomaton.remove_all_transitions auto current current;
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false false
           );
-          TypeAutomaton.reroute_transitions auto branch_end end_state;
+
+        
+          if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state
+          else Printf.eprintf "Warning: Empty branch in XOffer at state %d\n" current;
         ) all_msg_branches;
           
         end_state
@@ -492,9 +497,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         let rec_start = Hashtbl.find_opt auto.rec_var_state_map var in
         match rec_start with
         | Some s_id ->
-          TypeAutomaton.add_transition auto current s_id LabelSet.empty true false false
+          TypeAutomaton.reroute_transitions auto current s_id
           ;
-          current
+          s_id
         | None ->
           raise (TypeError [Text ("Unbound recursion variable "^var ^ " in automaton construction"); Except.codespan_local default_span]);
       )
