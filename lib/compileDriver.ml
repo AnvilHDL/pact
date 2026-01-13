@@ -192,7 +192,30 @@ let generalized_type_debug _out config =
         let out = open_out out_channel in
         print_automaton_dot gen_type out;
         close_out out
-  )session_type_defs
+  )session_type_defs;
+
+  (* check compatibility *)
+  let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
+  Printf.eprintf "\nPool Compatiblity Checks:\n\n";
+  List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
+    let _ = List.filter_map (fun intf_member ->
+        match intf_member.d.interface_def with
+        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
+        | None -> raise (Failure "Interface member missing definition")
+    ) pool.d.interface_members in
+    Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
+    let open SessionCompatiblityv3 in
+    let compat, err = try check_compatibility_multiparty pool config.verbose
+      with
+      | Except.TypeError msg ->
+        (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
+      | Failure msg -> (false, msg)
+      | _ -> (false, "Unknown error")
+    in
+    Printf.eprintf "Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
+  ) pool_defs;
+  Printf.eprintf "\n"
+
 
 let debug_types out config =
   let open Config in

@@ -32,6 +32,11 @@ end
 
 module LabelSet = Set.Make(LabelKindOrd)
 
+module IntListSet = Set.Make(struct
+    type t = int list
+    let compare = Stdlib.compare
+end)
+
 module IntSet = Set.Make(Int)
 type int_set = IntSet.t
 
@@ -72,11 +77,23 @@ let print_string_of_transitions (transitions: transition list) : unit =
     Printf.eprintf "  %d -> %d [label=\"%s\"];\n" t.from_state t.to_state label_str
   ) transitions
 
+let string_of_transitions (transitions: transition list) : string =
+  let lines = List.map (fun t ->
+    let label_str = 
+      if t.is_epsilon then "ε"
+      else if t.is_theta then "θ"
+      else
+        string_of_label_set t.label
+    in
+    Printf.sprintf "  %d -> %d [label=\"%s\"];" t.from_state t.to_state label_str
+  ) transitions in
+  String.concat "\n" lines
+
 
 type typeAutomaton = {
   states : (int, state) Hashtbl.t;
   mutable transitions : transition list;
-  start_state : int;
+  mutable start_state : int;
   mutable next_state_id : int;
   mutable rec_var_state_map : (identifier, int) Hashtbl.t;
 }
@@ -151,6 +168,8 @@ module TypeAutomaton = struct
       { t with label = new_label; from_state = from_s; to_state = to_s }
     ) auto.transitions in
     auto.transitions <- new_transitions;
+    if auto.start_state = old_state then
+      auto.start_state <- new_state;
     Hashtbl.remove auto.states old_state
 end
 
@@ -255,9 +274,12 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         | Lang.AtomicAct (Lang.AtomBMsg m) -> 
           (
             (Hashtbl.find auto.states current).accepting <- false;
+            let pseudo_next = TypeAutomaton.new_state auto false in
+            TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Negation [m])) false false true;
+            TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay(MessageDelay m))) false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false;
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(MessageDelay m))) false false false;
+            TypeAutomaton.add_transition auto pseudo_next next_s (LabelSet.singleton (Action m)) false false false;
             next_s
           )
         | Lang.AtomicAct (Lang.AtomNBMsg m) ->
@@ -640,14 +662,250 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
   flush stderr;
   auto
 
-let check_compatibility (_session_ids: (((session_type ast_node)*identifier) list)) (_ep_intfc_map : identifier list Utils.string_map) (_verbose : bool) (_span : code_span) =
-  let _automata_ids = List.map (fun (st_node, intf_id) ->
+
+let check_compatibility (session_ids: (((session_type ast_node)*identifier) list)) (_ep_intfc_map : identifier list Utils.string_map) (_verbose : bool) (_span : code_span) =
+  let automata_ids = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton st_node.d st_node.span in
     (auto, intf_id)
-  ) _session_ids in
-  (true , "Multiparty compatibility check not yet implemented")
+  ) session_ids in
 
-  (* Construct the sync product (special kind) *)
+  if _verbose then (
+    List.iter (fun (auto, intf_id) ->
+      let out_chan = open_out (intf_id ^ "_automaton.dot") in
+      print_automaton_dot auto out_chan;
+      close_out out_chan;
+      flush stderr;
+    ) automata_ids
+  );
+    
+
+  let state_space_size = List.fold_left (fun acc (auto, _) -> acc * (Hashtbl.length auto.states)) 1 automata_ids in
+  
+  let state_map : (int list, int) Hashtbl.t = Hashtbl.create 10 in
+
+  let prod_auto = TypeAutomaton.create () in
+
+
+  let get_product_state (states: int list) : int =
+    try Hashtbl.find state_map states
+    with Not_found -> (
+      let new_id = TypeAutomaton.new_state prod_auto false in
+      Hashtbl.add state_map states new_id;
+      new_id
+    )
+    in
+
+  let accepting_states : int list list = List.map (fun (auto, _) ->
+      Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states []
+  ) automata_ids in
+
+  let accepting_states = List.flatten accepting_states in
+
+  assert (List.length accepting_states  == List.length session_ids);
+
+
+  Printf.eprintf "[Debug] Total combined state space size: %d\n" state_space_size;
+
+  let worklist = ref [List.map(fun (auto, _) -> auto.start_state) automata_ids] in
+
+  let visited = ref IntListSet.empty  in
+
+  while !worklist <> [] do
+    let current_states = List.hd !worklist in
+    worklist := List.tl !worklist;
+
+    if not (IntListSet.mem current_states !visited) then (
+      
+      visited := IntListSet.add current_states !visited;
+      let prod_state_id = get_product_state current_states in
+
+      let is_all_start_state = List.for_all2 (fun st_id (auto, _) ->
+        st_id = auto.start_state
+      ) current_states automata_ids in
+      if is_all_start_state then TypeAutomaton.reroute_transitions prod_auto 0 prod_state_id;
+      let is_accepting_array = List.map2 (fun st_id (auto, _) ->
+        let state = Hashtbl.find auto.states st_id in
+        state.accepting
+      ) current_states automata_ids in
+
+      let all_accepting = List.for_all (fun x -> x) is_accepting_array in
+
+      if all_accepting then (
+        (Hashtbl.find prod_auto.states prod_state_id).accepting <- true
+      )
+      else(
+        let transitions_list = List.mapi (fun idx (auto, _) ->
+          let state_id = List.nth current_states idx in
+          List.filter (fun t -> t.from_state = state_id) auto.transitions
+        ) automata_ids in
+        
+        (* filter out the epsilon transitions *)
+
+        let epsilon_transitions = List.map ( fun  transition_set ->
+          List.filter_map (fun t ->
+            if t.is_epsilon || t.is_theta then Some t else None
+          ) transition_set
+        ) transitions_list in
+
+        let non_epsilon_transitions = List.map ( fun  transition_set ->
+          List.filter_map (fun t ->
+            if not t.is_epsilon && not t.is_theta then Some t else None
+          ) transition_set
+        ) transitions_list in
+
+
+      
+        (* Handle epsilon transitions first *)
+        (* Then for non epsilon transitions we first pick all valid sets of transitions and make it. at the end if we have an empty worklist and not reached accepting state we can just fail *)
+        List.iteri ( fun i ep_set -> 
+          (
+          List.iter ( fun t ->
+            let next_states = List.mapi ( fun idx s->
+              if idx = i then t.to_state
+              else s
+            ) current_states in
+
+            let next_prod_state = get_product_state next_states in
+            TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_conditional;
+            if not (IntListSet.mem next_states !visited) then 
+              worklist := next_states :: !worklist
+          )ep_set
+          )
+         )epsilon_transitions;
+
+          (* Generate all possible combinations of transitions (one from each automaton) *)
+          let rec cartesian_product lists =
+            match lists with
+            | [] -> [[]]
+            | h :: t ->
+                let rest = cartesian_product t in
+                List.flatten (List.map (fun x ->
+                  List.map (fun r -> x :: r) rest
+                ) h)
+          in
+          
+          let all_transition_combinations = cartesian_product non_epsilon_transitions in
+          assert (List.for_all (fun t -> List.length t = List.length automata_ids)all_transition_combinations);
+          
+          (* Check each combination for compatibility *)
+          List.iter (fun transition_set ->
+            (* Check if this combination of transitions is compatible *)
+
+            let is_compatible_array = ref (Array.make (List.length transition_set) true) in
+            let combined_labels = ref LabelSet.empty in
+            
+            (* First pass: collect all labels and check basic compatibility *)
+            List.iter (fun t ->
+              combined_labels := LabelSet.union !combined_labels t.label
+            ) transition_set;
+            
+            (* Check each transition's labels against the others *)
+            List.iteri (fun i trans ->
+              LabelSet.iter (fun label ->
+                match label with
+                | Negation msg_list ->
+                    (* Check that no other transition has an Action with a message in msg_list *)
+                    let other_labels = List.filteri (fun j _ -> j <> i) transition_set
+                      |> List.fold_left (fun acc t -> LabelSet.union acc t.label) LabelSet.empty in
+                    let has_conflict = LabelSet.exists (function
+                      | Action m -> List.exists (fun neg_m -> 
+                          m.endpoint = neg_m.endpoint && m.msg = neg_m.msg
+                        ) msg_list
+                      | Delay _ -> true
+                      | _ -> false
+                    ) other_labels in
+                    if has_conflict then Array.set !is_compatible_array i false
+                    
+                | Delay delay_kind ->
+                    (match delay_kind with
+                    | CycleDelay _ ->
+                        (* Every other transition must also have a Delay *)
+                        let all_have_delay = List.for_all (fun t ->
+                          LabelSet.exists (function Delay _ -> true | _ -> false) t.label
+                        ) transition_set in
+                        if not all_have_delay then Array.set !is_compatible_array i false
+                        
+                    | MessageDelay m ->
+                        (* Check other transitions for conflicting message delays *)
+                        List.iteri (fun j other_trans ->
+                          if j <> i then
+                            let found_delay = ref false in
+                            LabelSet.iter (function
+                              | Delay (MessageDelay other_m) ->
+                                  if m.endpoint = other_m.endpoint && 
+                                    m.msg = other_m.msg then
+                                    Array.set !is_compatible_array i false
+                                  else found_delay := true
+                              | Delay (CycleDelay _) -> found_delay := true (* Compatible *)
+                              | Action act_m ->
+                                  if m.endpoint = act_m.endpoint && 
+                                    m.msg = act_m.msg then
+                                    Array.set !is_compatible_array i false
+                              | _ -> ()
+                            ) other_trans.label;
+                            if not !found_delay then
+                              Array.set !is_compatible_array i false
+                        ) transition_set
+                        
+                    | OptionDelay msg_list ->
+                        (* All transitions must have delay, and if not cycle delay, 
+                          messages must not intersect with msg_list *)
+                        let all_compatible = List.for_all (fun t ->
+                          LabelSet.exists (function
+                            | Delay (CycleDelay _) -> true
+                            | Delay (MessageDelay m) ->
+                                not (List.exists (fun opt_m ->
+                                  m.endpoint = opt_m.endpoint && 
+                                  m.msg = opt_m.msg
+                                ) msg_list)
+                            | Delay (OptionDelay _) -> true
+                            | _ -> false
+                          ) t.label
+                        ) transition_set in
+                        if not all_compatible then Array.set !is_compatible_array i false
+                    )
+                    
+                | Action m ->
+                    (* Check that at least one other transition can handle this action *)
+                    let other_trans = List.filteri (fun j _ -> j <> i) transition_set in
+                    let is_handled = List.exists (fun other_t ->
+                      LabelSet.exists (function
+                        | Action other_m -> 
+                            m.endpoint = other_m.endpoint && 
+                            m.msg = other_m.msg
+                        | Delay _ -> true (* Delays are compatible with actions *)
+                        | Negation neg_list ->
+                            not (List.exists (fun neg_m ->
+                              m.endpoint = neg_m.endpoint && 
+                              m.msg = neg_m.msg
+                            ) neg_list)
+                        | _ -> false
+                      ) other_t.label
+                    ) other_trans in
+                    if not is_handled then Array.set !is_compatible_array i false
+                    
+                | Terminal _ -> ()
+              ) trans.label
+            ) transition_set;
+            
+            (* If compatible, add transition to product automaton *)
+            if Array.for_all (fun x -> x) !is_compatible_array then (
+              Printf.eprintf "[Debug] Adding combined transition from state %d with labels: [%s]\n " prod_state_id (string_of_transitions transition_set);
+              let next_states = List.map (fun t -> t.to_state) transition_set in
+              let next_prod_state = get_product_state next_states in
+              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state 
+                !combined_labels false false false;
+              if not (IntListSet.mem next_states !visited) then 
+                worklist := next_states :: !worklist
+            )
+          ) all_transition_combinations
+    )
+
+    )
+  done;
+
+  prod_auto
+
 
 
 let rec highest_level_endpoint (session_type : session_type) : identifier list =
@@ -680,6 +938,7 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
     | StyFuture s -> highest_level_endpoint s
     | StyTrue -> []
     | _ -> raise (Except.TypeError [Text ("Unsupported session type for highest level endpoint extraction"^(Lang.string_of_protocol session_type))])
+
 let create_ep_id_intfc_id_map_with_debug (pool_def : interface_pool_def ast_node) : identifier list Utils.string_map =
     (* match with highest level endpoint,without duplicates *)
     List.fold_left(
@@ -719,5 +978,10 @@ let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (ver
         | None -> raise (Failure "Interface member missing definition")
     ) pool_def.d.interface_members in
 
-    let _ = check_compatibility session_ids ep_intfc_map verbose pool_def.span in
+    let prod_auto = check_compatibility session_ids ep_intfc_map verbose pool_def.span in
+    let out = Stdlib.open_out ("prod_auto"^pool_def.d.pool_id^".dot") in
+    print_automaton_dot prod_auto out;
+    Stdlib.close_out out;
+    flush stderr;
+    
     (true, "Multiparty compatibility check not yet implemented")
