@@ -35,12 +35,29 @@ module LabelSet = Set.Make(LabelKindOrd)
 module IntSet = Set.Make(Int)
 type int_set = IntSet.t
 
+let string_of_label_set (ls: LabelSet.t) : string = 
+  let elements = LabelSet.elements ls in
+  let str_list = List.map (function
+    | Action m -> Printf.sprintf "Action(%s)" (Lang.string_of_msg_spec m)
+    | Delay (CycleDelay n) -> Printf.sprintf "Delay(Cycle %d)" n
+    | Delay (MessageDelay m) -> Printf.sprintf "Delay(Message %s)" (Lang.string_of_msg_spec m)
+    | Delay (OptionDelay ms) -> 
+      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+      Printf.sprintf "Delay(Option [%s])" ms_str
+    | Negation ms ->
+      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+      Printf.sprintf "Negation([%s])" ms_str
+    | Terminal st -> Printf.sprintf "Terminal(%d)" st
+  ) elements in
+  "{" ^ (String.concat ", " str_list) ^ "}"
+
 type transition = {
   from_state : int;
   to_state : int;
   label : LabelSet.t;
   is_epsilon : bool;
   is_theta : bool;
+  is_conditional : bool;
 }
 
 type typeAutomaton = {
@@ -82,7 +99,7 @@ module TypeAutomaton = struct
     auto.transitions <- List.filter (fun t -> t.from_state <> state_id && t.to_state <> state_id) auto.transitions
 
  
-  let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) (is_theta: bool) : unit =
+  let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) (is_theta: bool) (is_conditional: bool) : unit =
     let found = ref false in
     let new_transitions = List.map (fun t ->
       if t.from_state = from_s && t.to_state = to_s && t.is_epsilon = is_epsilon && t.is_theta = is_theta then
@@ -93,14 +110,18 @@ module TypeAutomaton = struct
     if !found then
       auto.transitions <- new_transitions
     else
-      let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon; is_theta } in
+      let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon; is_theta;is_conditional } in
       auto.transitions <- trans :: auto.transitions
-      
+
   let remove_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) : unit =
     auto.transitions <- List.filter (fun t ->
       not (t.from_state = from_s && t.to_state = to_s && LabelSet.equal t.label label_set)
     ) auto.transitions
-    
+
+  let remove_all_transitions (auto: t) (from_s: int) (to_s: int) : unit =
+    auto.transitions <- List.filter (fun t ->
+      not (t.from_state = from_s && t.to_state = to_s)
+    ) auto.transitions
   let add_rec_var_mapping (auto: t) (var: identifier) (state_id: int) : unit =
     Hashtbl.add auto.rec_var_state_map var state_id
 
@@ -222,22 +243,22 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
-            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false;
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(MessageDelay m))) false false;
+            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false;
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(MessageDelay m))) false false false;
             next_s
           )
         | Lang.AtomicAct (Lang.AtomNBMsg m) ->
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
-            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false;
+            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false;
             next_s
           )
         | Lang.AtomDelay n ->
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
-            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Delay (CycleDelay n))) false false;
+            TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Delay (CycleDelay n))) false false false;
             next_s
           )
         | _ ->
@@ -251,9 +272,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
     | Lang.StyChoice (st1, st2) -> (* Internal choice m1 + m2 *)
       (Hashtbl.find auto.states current).accepting <- false;
       let left_root = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current left_root LabelSet.empty false true;
+      TypeAutomaton.add_transition auto current left_root LabelSet.empty false true false;
       let right_root = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current right_root LabelSet.empty false true;
+      TypeAutomaton.add_transition auto current right_root LabelSet.empty false true false;
       let left_end = build st1 left_root in
       let right_end = build st2 right_root in
       (Hashtbl.find auto.states left_end).accepting <- false;
@@ -285,15 +306,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           | Lang.AtomicAct (Lang.AtomBMsg _) -> true
           | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
           | _ -> false
-        ) offerings in 
-        let all_non_blocking = List.for_all (fun (o : offering_session_type) ->
-          match o.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg _) -> false
-          | Lang.AtomicAct (Lang.AtomNBMsg _) -> true
-          | _ -> false
         ) offerings in
-        if not all_blocking && not all_non_blocking then 
-          raise(TypeError [Text ("Mixed blocking and non-blocking offerings in external choice"); Except.codespan_local default_span]);  
 
         let end_state = TypeAutomaton.new_state auto true in
 
@@ -310,22 +323,13 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             | _ -> None
           ) all_msg_branches in
           let new_wildcard_state = TypeAutomaton.new_state auto true in
-          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_specs)) false false;
+          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_specs)) false false true ;
 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
             let branch_end = build cont new_wildcard_state in
             TypeAutomaton.reroute_transitions auto branch_end end_state
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state
-        end else begin
-          if all_blocking then (
-            let all_msg_specs = List.filter_map (fun b -> 
-              match b.Lang.trigger with 
-              | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
-              | _ -> None
-            ) all_msg_branches in
-            TypeAutomaton.add_transition auto current end_state (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false
-          )
         end;
 
         List.iter (fun o_ms ->
@@ -334,6 +338,15 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             | None -> StyAtom (o_ms.trigger)
           in
           let branch_end = build st current in
+        if all_blocking then (
+            let all_msg_specs = List.filter_map (fun b -> 
+              match b.Lang.trigger with 
+              | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
+              | _ -> None
+            ) all_msg_branches in
+            TypeAutomaton.remove_all_transitions auto current current;
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false false
+          );
           TypeAutomaton.reroute_transitions auto branch_end end_state;
         ) all_msg_branches;
           
@@ -360,14 +373,6 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
           | _ -> false
         ) offerings in 
-        let all_non_blocking = List.for_all (fun (o : offering_session_type) ->
-          match o.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg _) -> false
-          | Lang.AtomicAct (Lang.AtomNBMsg _) -> true
-          | _ -> false
-        ) offerings in
-        if not all_blocking && not all_non_blocking then 
-          raise(TypeError [Text ("Mixed blocking and non-blocking offerings in external choice"); Except.codespan_local default_span]);  
         
         let end_state = TypeAutomaton.new_state auto true in
 
@@ -384,7 +389,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             | _ -> None
           ) all_msg_branches in
           let new_wildcard_state = TypeAutomaton.new_state auto true in
-          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_specs)) false false;
+          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_specs)) false false true; 
 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
@@ -392,35 +397,48 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             TypeAutomaton.reroute_transitions auto branch_end end_state
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state
         end else begin
+        end;
+
+        let branch_types = List.map (fun o_ms ->
+          let trigger_msg = match o_ms.Lang.trigger with
+            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
+            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
+            | _ -> failwith "Should not reach here"
+          in
+          match o_ms.Lang.continuation with
+          | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg trigger_msg)), cont)
+          | None -> StyAtom (AtomicAct (AtomNBMsg trigger_msg))
+        ) all_msg_branches in
+
+
+        let rec generate_permutations btype acc  = function
+          | [] -> acc
+          | h::t ->
+            let new_acc = acc @ (List.map (fun existing ->
+              Lang.StyParallel (h, existing)
+            ) acc) @ [h] in
+            generate_permutations btype new_acc t
+        in
+          
+
+        let all_permut_branch_type =  generate_permutations st [] branch_types in
+
+
+        List.iter (fun btype ->
+          let branch_end = build btype current in
+          TypeAutomaton.reroute_transitions auto branch_end end_state;
+        ) all_permut_branch_type;
+
           if all_blocking then (
             let all_msg_specs = List.filter_map (fun b -> 
               match b.Lang.trigger with 
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
               | _ -> None
             ) all_msg_branches in
-            TypeAutomaton.add_transition auto current end_state (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false
-          )
-        end;
 
-        let branch_types = List.map (fun o_ms ->
-          match o_ms.Lang.continuation with
-          | Some cont -> StySeq (StyAtom o_ms.trigger, cont)
-          | None -> StyAtom (o_ms.trigger)
-        ) all_msg_branches in
-
-        let rec build_ultimate_choice (branch_types: Lang.session_type list) (acc : session_type) : session_type =
-          match branch_types with
-          | [] -> acc
-          | [last] -> last
-          | hd::tl -> 
-            match acc with
-            | StyTrue -> build_ultimate_choice tl hd
-            | _ -> build_ultimate_choice tl (StyParallel (hd, acc))
-        in
-        let ultimate_choice = build_ultimate_choice branch_types StyTrue in
-
-        let final_state = build ultimate_choice current in
-        TypeAutomaton.reroute_transitions auto final_state end_state;
+            TypeAutomaton.remove_all_transitions auto current current;
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Delay(OptionDelay all_msg_specs))) false false false
+          );
         end_state
       )
     | Lang.StyParallel (st1, st2) ->
@@ -429,9 +447,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       final_state
     | Lang.StyFuture st ->
       (Hashtbl.find auto.states current).accepting <- false;
-      TypeAutomaton.add_transition auto current current LabelSet.empty false true;
+      TypeAutomaton.add_transition auto current current LabelSet.empty false true false;
       let cont_state = TypeAutomaton.new_state auto true in
-      TypeAutomaton.add_transition auto current cont_state LabelSet.empty false true;
+      TypeAutomaton.add_transition auto current cont_state LabelSet.empty false true false;
       let end_state = build st cont_state in
       end_state
     | Lang.StyVar var ->
@@ -439,7 +457,8 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         let rec_start = Hashtbl.find_opt auto.rec_var_state_map var in
         match rec_start with
         | Some s_id ->
-          TypeAutomaton.add_transition auto current s_id LabelSet.empty true false;
+          TypeAutomaton.add_transition auto current s_id LabelSet.empty true false false
+          ;
           current
         | None ->
           raise (TypeError [Text ("Unbound recursion variable "^var ^ " in automaton construction"); Except.codespan_local default_span]);
@@ -517,7 +536,19 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         List.iter (fun t1 ->
           if t1.is_epsilon then (
             let next_ps = get_product_state (t1.to_state, s2) in
-            TypeAutomaton.add_transition auto ps next_ps LabelSet.empty true false;
+            TypeAutomaton.add_transition auto ps next_ps t1.label true false false;
+            if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
+              worklist := (t1.to_state, s2) :: !worklist
+          );
+          if t1.is_theta then (
+            let next_ps = get_product_state (t1.to_state, s2) in
+            TypeAutomaton.add_transition auto ps next_ps t1.label false true false;
+            if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
+              worklist := (t1.to_state, s2) :: !worklist
+          );
+          if t1.is_conditional then (
+            let next_ps = get_product_state (t1.to_state, s2) in
+            TypeAutomaton.add_transition auto ps next_ps t1.label false false true;
             if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
               worklist := (t1.to_state, s2) :: !worklist
           )
@@ -526,44 +557,35 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
         List.iter (fun t2 ->
           if t2.is_epsilon then (
             let next_ps = get_product_state (s1, t2.to_state) in
-            TypeAutomaton.add_transition auto ps next_ps LabelSet.empty true false;
+            TypeAutomaton.add_transition auto ps next_ps t2.label true false false;
+            if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
+              worklist := (s1, t2.to_state) :: !worklist
+          );
+          if t2.is_theta then (
+            let next_ps = get_product_state (s1, t2.to_state) in
+            TypeAutomaton.add_transition auto ps next_ps t2.label false true false;
+            if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
+              worklist := (s1, t2.to_state) :: !worklist
+          );
+          if t2.is_conditional then (
+            let next_ps = get_product_state (s1, t2.to_state) in
+            TypeAutomaton.add_transition auto ps next_ps t2.label false false true;
             if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
               worklist := (s1, t2.to_state) :: !worklist
           )
         ) trans2;
-        
-        (* Handle theta and regular transitions *)
+
+        (* Handle synchronized transitions *)
+        let trans1 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not t.is_conditional) trans1 in
+        let trans2 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not t.is_conditional) trans2 in
+
         List.iter (fun t1 ->
-          if not t1.is_epsilon then (
-            List.iter (fun t2 ->
-              if not t2.is_epsilon then (
-                (* Both are non-epsilon transitions *)
-                if t1.is_theta && not t2.is_theta then (
-                  (* t1 is theta: auto1 advances independently, auto2 stays *)
-                  let next_ps = get_product_state (t1.to_state, s2) in
-                  TypeAutomaton.add_transition auto ps next_ps t2.label false false;
-                  if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
-                    worklist := (t1.to_state, s2) :: !worklist
-                )
-                else if t2.is_theta && not t1.is_theta then (
-                  (* t2 is theta: auto2 advances independently, auto1 stays *)
-                  let next_ps = get_product_state (s1, t2.to_state) in
-                  TypeAutomaton.add_transition auto ps next_ps t1.label false false;
-                  if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
-                    worklist := (s1, t2.to_state) :: !worklist
-                )
-                else if not t1.is_theta && not t2.is_theta then (
-                  (* Both are regular transitions: synchronous step with merged labels *)
-                  let merged_labels = LabelSet.union t1.label t2.label in
-                  let next_ps = get_product_state (t1.to_state, t2.to_state) in
-                  TypeAutomaton.add_transition auto ps next_ps merged_labels false false;
-                  if not (IntPairSet.mem (t1.to_state, t2.to_state) !visited) then 
-                    worklist := (t1.to_state, t2.to_state) :: !worklist
-                )
-                (* If both are theta, they can't synchronize - skip this case *)
-              )
-            ) trans2
-          )
+          List.iter (fun t2 ->
+            let label_set = LabelSet.union t1.label t2.label in
+            TypeAutomaton.add_transition auto ps (get_product_state (t1.to_state, t2.to_state)) label_set false false false;
+            if not (IntPairSet.mem (t1.to_state, t2.to_state) !visited) then 
+              worklist := (t1.to_state, t2.to_state) :: !worklist
+          ) trans2
         ) trans1;
       )
     done;

@@ -187,11 +187,19 @@ let generalized_type_debug _out config =
   Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
-      let gen_type = build_automaton sdef.d.body.d sdef.d.body.span in 
-      let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
-      let out = open_out out_channel in
-      print_automaton_dot gen_type out;
-      close_out out;
+      try 
+        let gen_type = build_automaton sdef.d.body.d sdef.d.body.span in 
+        let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
+        let out = open_out out_channel in
+        print_automaton_dot gen_type out;
+        close_out out
+      with
+        | Except.TypeError msg ->
+          (Except.Text "Type error:")::msg
+            |> raise_compile_error None
+        | _ ->
+          raise_compile_error None [Except.Text "An unknown error occurred"]
+
   )session_type_defs
 
 let debug_types out config =
