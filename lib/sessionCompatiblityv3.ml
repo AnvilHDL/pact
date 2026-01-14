@@ -11,6 +11,7 @@ type action_kind =
 type state = {
   id : int;
   mutable accepting : bool;
+  mutable adversary : bool;
 }
 
 type label_kind =
@@ -97,7 +98,7 @@ module TypeAutomaton = struct
   let create () : t =
     let start_state = 0 in
     let states = Hashtbl.create 10 in
-    Hashtbl.add states start_state { id = start_state; accepting = false };
+    Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false };
     let rec_var_state_map = Hashtbl.create 10 in
     {
       states = states;
@@ -110,7 +111,7 @@ module TypeAutomaton = struct
   let new_state (auto: t) (accepting: bool) : int =
     let id = auto.next_state_id in
     auto.next_state_id <- id + 1;
-    let state = { id; accepting } in
+    let state = { id; accepting; adversary = false } in
     Hashtbl.add auto.states id state;
     id
   
@@ -166,7 +167,7 @@ end
 let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
   Printf.fprintf out "digraph TypeAutomaton {\n";
   Hashtbl.iter (fun id state ->
-    let shape = if state.accepting then "doublecircle" else "circle" in
+    let shape = if state.accepting then "doublecircle" else if state.adversary then "square" else "circle" in
     Printf.fprintf out "  %d [shape=%s];\n" id shape
   ) auto.states;
   
@@ -667,13 +668,13 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
   auto
 
 
-let check_compatibility (session_ids: (((session_type ast_node)*identifier) list)) (_ep_intfc_map : identifier list Utils.string_map) (_verbose : bool) (_span : code_span) =
+let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool)  =
   let automata_ids = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton st_node.d st_node.span in
     (auto, intf_id)
   ) session_ids in
 
-  if _verbose then (
+  if verbose then (
     List.iter (fun (auto, intf_id) ->
       let out_chan = open_out (intf_id ^ "_automaton.dot") in
       print_automaton_dot auto out_chan;
@@ -816,6 +817,12 @@ let check_compatibility (session_ids: (((session_type ast_node)*identifier) list
                           m.endpoint = neg_m.endpoint && m.msg = neg_m.msg
                         ) msg_list
                       | Delay -> true
+                      | Negation m_list -> 
+                        (
+                            let m1_set = List.fold_left (fun s m -> Utils.StringSet.add (m.endpoint ^ "|" ^ m.msg) s) Utils.StringSet.empty msg_list in
+                            let m2_set = List.fold_left (fun s m -> Utils.StringSet.add (m.endpoint ^ "|" ^ m.msg) s) Utils.StringSet.empty m_list in
+                            not (Utils.StringSet.is_empty (Utils.StringSet.inter m1_set m2_set) )
+                        )
                       | _ -> false
                     ) other_labels in
                     if has_conflict then Array.set !is_compatible_array i false
@@ -846,7 +853,7 @@ let check_compatibility (session_ids: (((session_type ast_node)*identifier) list
             
             (* If compatible, add transition to product automaton *)
             if Array.for_all (fun x -> x) !is_compatible_array then (
-              Printf.eprintf "[Debug] Adding combined transition from state %d with labels: [%s]\n " prod_state_id (string_of_transitions transition_set);
+              (* Printf.eprintf "[Debug] Adding combined transition from state %d with labels: [%s]\n " prod_state_id (string_of_transitions transition_set); *)
               let next_states = List.map (fun t -> t.to_state) transition_set in
               let next_prod_state = get_product_state next_states in
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state 
@@ -861,6 +868,87 @@ let check_compatibility (session_ids: (((session_type ast_node)*identifier) list
   done;
 
   prod_auto
+
+let label_adversary_state (auto : TypeAutomaton.t) (state_id : int) =
+  let state = Hashtbl.find auto.states state_id in
+  let check_if_adversary_state =
+    List.exists (fun t ->
+      t.is_theta
+    ) (List.filter (fun t -> t.from_state = state_id) auto.transitions)
+  in
+  if check_if_adversary_state then
+    state.adversary <- true
+    
+let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
+  
+  let can_reach_accepting : (int, bool) Hashtbl.t = Hashtbl.create 10 in
+  
+  (* Initialize: accepting states can trivially reach accepting states *)
+  Hashtbl.iter (fun state_id state ->
+    if state.accepting then
+      Hashtbl.add can_reach_accepting state_id true
+  ) prod_auto.states;
+  
+  (* Fixed-point iteration to propagate reachability backwards *)
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    Hashtbl.iter (fun state_id _ ->
+      if not (Hashtbl.mem can_reach_accepting state_id) then (
+        (* Check if any outgoing transition leads to a state that can reach accepting *)
+        let outgoing = List.filter (fun t -> t.from_state = state_id) prod_auto.transitions in
+        let can_reach = List.exists (fun t ->
+          Hashtbl.mem can_reach_accepting t.to_state &&
+          Hashtbl.find can_reach_accepting t.to_state
+        ) outgoing in
+        if can_reach then (
+          Hashtbl.add can_reach_accepting state_id true;
+          changed := true
+        )
+      )
+    ) prod_auto.states
+  done;
+  
+  (* Check start state can reach accepting *)
+  let start_can_reach = 
+    Hashtbl.mem can_reach_accepting prod_auto.start_state &&
+    Hashtbl.find can_reach_accepting prod_auto.start_state in
+  
+  if not start_can_reach then
+    (false, "Start state cannot reach any accepting state")
+  else (
+    (* Now check adversary states: all outgoing transitions must lead to states 
+       that can reach accepting states *)
+    let game_won = ref true in
+    let failing_state = ref None in
+    
+    Hashtbl.iter (fun state_id state ->
+      if state.adversary then (
+        let outgoing = List.filter (fun t -> t.from_state = state_id) prod_auto.transitions in
+        
+        (* All non-epsilon outgoing transitions must lead to states that can reach accepting *)
+        let all_paths_safe = List.for_all (fun t ->
+          Hashtbl.mem can_reach_accepting t.to_state &&
+          Hashtbl.find can_reach_accepting t.to_state
+        ) outgoing in
+        
+        if not all_paths_safe then (
+          game_won := false;
+          failing_state := Some state_id
+        )
+      )
+    ) prod_auto.states;
+    
+    if !game_won then
+      (true, "Compatibility verified: all adversary choices lead to accepting states")
+    else
+      match !failing_state with
+      | Some st -> 
+          (false, Printf.sprintf "Compatibility failed: adversary state %d has a path that cannot reach an accepting state" st)
+      | None -> 
+          (false, "Compatibility failed: unknown reason")
+  )
+
 
 
 
@@ -934,10 +1022,18 @@ let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (ver
         | None -> raise (Failure "Interface member missing definition")
     ) pool_def.d.interface_members in
 
-    let prod_auto = check_compatibility session_ids ep_intfc_map verbose pool_def.span in
+    let prod_auto = create_product session_ids verbose in
+
+    Hashtbl.iter (fun state_id _ ->
+        label_adversary_state prod_auto state_id
+    ) prod_auto.states;
+    
+    let result, err = play_game prod_auto in
+
+    let total_reachable_states = Hashtbl.length prod_auto.states in
+    Printf.eprintf "[Debug] Total reachable states in product automaton: %d\n" total_reachable_states;
     let out = Stdlib.open_out ("prod_auto"^pool_def.d.pool_id^".dot") in
     print_automaton_dot prod_auto out;
     Stdlib.close_out out;
     flush stderr;
-    
-    (true, "Multiparty compatibility check not yet implemented")
+    (result, err)
