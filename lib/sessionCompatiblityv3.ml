@@ -487,7 +487,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       final_state
     | Lang.StyFuture st ->
       (Hashtbl.find auto.states current).accepting <- false;
-      TypeAutomaton.add_transition auto current current LabelSet.empty false true false;
+      let new_pseudo = TypeAutomaton.new_state auto false in
+      TypeAutomaton.add_transition auto current new_pseudo LabelSet.empty false true false;
+      TypeAutomaton.add_transition auto new_pseudo current (LabelSet.singleton Delay) false false false;
       let cont_state = TypeAutomaton.new_state auto true in
       TypeAutomaton.add_transition auto current cont_state LabelSet.empty false true false;
       let end_state = build st cont_state in
@@ -709,7 +711,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
   assert (List.length accepting_states  == List.length session_ids);
 
 
-  Printf.eprintf "[Debug] Total combined state space size: %d\n" state_space_size;
+  if verbose then
+    Printf.eprintf "Creating product automaton with state space size: %d\n" state_space_size;
 
   let worklist = ref [List.map(fun (auto, _) -> auto.start_state) automata_ids] in
 
@@ -797,6 +800,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             (* Check if this combination of transitions is compatible *)
 
             let is_compatible_array = ref (Array.make (List.length transition_set) true) in
+
+            let is_epsilon_array = ref (Array.make (List.length transition_set) false) in
             let combined_labels = ref LabelSet.empty in
             
             (* First pass: collect all labels and check basic compatibility *)
@@ -825,7 +830,9 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                         )
                       | _ -> false
                     ) other_labels in
-                    if has_conflict then Array.set !is_compatible_array i false
+                    if has_conflict then Array.set !is_compatible_array i false;
+                    let all_delay = other_labels = LabelSet.singleton Delay in
+                     if all_delay then Array.set !is_epsilon_array i true
                     
                 | Delay ->
                         (* Every other transition must also have a Delay *)
@@ -861,6 +868,22 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               if not (IntListSet.mem next_states !visited) then 
                 worklist := next_states :: !worklist
             )
+          else if Array.exists (fun x -> x) !is_epsilon_array then (
+            Array.iteri( fun i is_epsilon ->
+              if is_epsilon then (
+                let t = List.nth transition_set i in
+                let next_states = List.mapi ( fun idx s->
+                  if idx = i then t.to_state
+                  else s
+                ) current_states in
+
+                let next_prod_state = get_product_state next_states in
+                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_conditional;
+                if not (IntListSet.mem next_states !visited) then 
+                  worklist := next_states :: !worklist
+              )
+            )!is_epsilon_array
+          )
           ) all_transition_combinations
     )
 
@@ -1037,7 +1060,8 @@ let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (ver
     let result, err = play_game prod_auto in
 
     let total_reachable_states = Hashtbl.length prod_auto.states in
-    Printf.eprintf "[Debug] Total reachable states in product automaton: %d\n" total_reachable_states;
+    if verbose then
+        Printf.eprintf "[Debug] Total reachable states in product automaton: %d\n" total_reachable_states;
     let out = Stdlib.open_out ("prod_auto"^pool_def.d.pool_id^".dot") in
     print_automaton_dot prod_auto out;
     Stdlib.close_out out;

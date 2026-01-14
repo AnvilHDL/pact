@@ -1,69 +1,85 @@
-// // Basic types for session interfaces
+// Basic types for session interfaces (check automaton construction)
 
-// interface t1 (ep : left ch) = ep.req;
+interface t1 (ep : left ch) = ep.req;
 
-// interface t2 (ep : left ch) = #ep.req || #ep.ack ;
+interface t2 (ep : left ch) = #ep.req || #ep.ack ;
 
-// interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
-
-
-// interface t1 (ep : left ch) = #ep.req || #ep.ack  ;
+interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
 
 
-
-// interface t3 (ep : left ch) = #ep.req ;
-
-// interface t4 (ep : left ch) = ep.req + ep.ack ;
-
-// interface t5 (ep : left ch) = ^(ep.req, ep.ack) ;
-
-// interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) ;
+interface t1 (ep : left ch) = #ep.req || #ep.ack  ;
 
 
-// interface t7 (ep : left ch) = &(ep.req, ep.ack) ;
 
-// interface t8 (ep : left ch) = &( ep.req, ep.ack, *) ;
+interface t3 (ep : left ch) = #ep.req ;
 
+interface t4 (ep : left ch) = ep.req + ep.ack ;
 
-// interface t9 (ep : left ch) = rec X .  ^( #ep.req, * : X) ;
+interface t5 (ep : left ch) = ^(ep.req, ep.ack) ;
 
-// interface t10 (ep : left ch) = (ep.req >> ep.ack) || ( ep.nack >> ep.rreq ) ;
-
-// interface t11 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) ;
-
-// interface t12 (ep : left ch) = ep.m1 || ep.m2;
+interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) ;
 
 
+interface t7 (ep : left ch) = &(ep.req, ep.ack) ;
+
+interface t8 (ep : left ch) = &( ep.req, ep.ack, *) ;
+
+
+interface t9 (ep : left ch) = rec X .  ^( #ep.req, * : X) ;
+
+interface t10 (ep : left ch) = (ep.req >> ep.ack) || ( ep.nack >> ep.rreq ) ;
+
+interface t11 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) ;
+
+interface t12 (ep : left ch) = ep.m1 || ep.m2;
+
+
+
+// Pools to test type combinations
 pool p1 { // true
     ep_le -- ep_ri : ch;
-    i1 : (ep.req >> ep.ack) ;
-    i2 : (ep.req >> ep.ack)
+    ip11 : (ep.req >> ep.ack) ;
+    ip12 : (ep.req >> ep.ack)
 }
 
 pool p2 { // true
     ep_le -- ep_ri : ch;
-    ip11 : (#ep.req >> #ep.ack) ;
-    ip12 : (#ep.req || #ep.ack)
+    ip21 : (#ep.req >> #ep.ack) ;
+    ip22 : (#ep.req || #ep.ack)
 }
 
-pool p3 { // false
-    ep_le -- ep_ri : ch;
-    ip21 : #ep.req + #ep.ack ;
-    ip22 : #ep.req || #ep.ack 
-}
-pool p4 { // true
+pool p3 { // true
     ep_le -- ep_ri : ch;
     ip31 : #ep.req  + #ep.ack ;
     ip32 : ^( #ep.req , #ep.ack) 
 }
-pool p5 { // true
+pool p4 { // true
     ep_le -- ep_ri : ch;
     ip41 : #ep.req  + #ep.ack ;
     ip42 : &( #ep.req , #ep.ack) 
 }
 
+pool p5 { // true
+    ep_le -- ep_ri : ch;
+    ip51 : ep.m1 ;
+    ip52 : #2>>ep.m1
+}
+
 pool p6 { // true
     ep_le -- ep_ri : ch;
-    ip41 : #ep.req  + #ep.ack ;
-    ip42 : #ep.req  + #ep.ack
-}   
+    ip61 : F ep.m1 ;
+    ip62 : ep.m1
+}
+
+// Negative cases
+pool p7 { // false
+    ep_le -- ep_ri : ch;
+    ip71 : #ep.req + #ep.ack ;
+    ip72 : #ep.req || #ep.ack 
+}
+
+pool p8 { // false
+    ep_le -- ep_ri : ch;
+    ip81 : #ep.req  + #ep.ack ;
+    ip82 : #ep.req  + #ep.ack
+}
