@@ -111,4 +111,10 @@ pool n3 { // false
     in31 : ep.m1 >> ^(#ep.m2, *);
     in3 : #ep.m1 + #ep.m2 
 }
+
+pool n4 { // false
+    ep_le -- ep_ri : ch;
+    in41 : F #ep.m1 ;
+    in42 : #ep.m1 
+}
     

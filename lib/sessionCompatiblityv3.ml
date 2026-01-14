@@ -13,6 +13,7 @@ type state = {
   mutable accepting : bool;
   mutable adversary : bool;
   mutable is_winning : bool;
+  mutable is_fair : bool;
   mutable offers : (Lang.message_specifier list);
 }
 
@@ -102,7 +103,7 @@ module TypeAutomaton = struct
   let create () : t =
     let start_state = 0 in
     let states = Hashtbl.create 10 in
-    Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false; is_winning = false; offers = [] };
+    Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false; is_winning = false; offers = []; is_fair = false };
     let rec_var_state_map = Hashtbl.create 10 in
     {
       states = states;
@@ -115,7 +116,7 @@ module TypeAutomaton = struct
   let new_state (auto: t) (accepting: bool) : int =
     let id = auto.next_state_id in
     auto.next_state_id <- id + 1;
-    let state = { id; accepting; adversary = false; is_winning = false; offers = [] } in
+    let state = { id; accepting; adversary = false; is_winning = false; offers = []; is_fair = false } in
     Hashtbl.add auto.states id state;
     id
   
@@ -152,6 +153,13 @@ module TypeAutomaton = struct
   let append_offers (auto: t) (state_id: int) (offers: Lang.message_specifier list) : unit =
     let state_info = Hashtbl.find auto.states state_id in
     state_info.offers <- state_info.offers @ offers
+  
+  let make_fair auto state_id = 
+    let state_info = Hashtbl.find auto.states state_id in
+    state_info.is_fair <- true
+  let make_adversary auto state_id =
+    let state_info = Hashtbl.find auto.states state_id in
+    state_info.adversary <- true
 
 
   let reroute_transitions (auto: t) (old_state: int) (new_state: int) : unit =
@@ -171,6 +179,8 @@ module TypeAutomaton = struct
     let new_state_info = Hashtbl.find auto.states new_state in
     let old_state_info = Hashtbl.find auto.states old_state in
     new_state_info.offers <- old_state_info.offers;
+    new_state_info.is_fair <- old_state_info.is_fair;
+    new_state_info.adversary <- old_state_info.adversary;
     Hashtbl.remove auto.states old_state
 end
 
@@ -503,6 +513,8 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       final_state
     | Lang.StyFuture st ->
       (Hashtbl.find auto.states current).accepting <- false;
+      TypeAutomaton.make_fair auto current;
+      TypeAutomaton.make_adversary auto current;
       let new_pseudo = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto current new_pseudo LabelSet.empty false true false false;
       TypeAutomaton.add_transition auto new_pseudo current (LabelSet.singleton Delay) false false false false;
@@ -712,6 +724,8 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       let state2 = Hashtbl.find auto2.states s2 in
       let prod_state = Hashtbl.find auto.states prod_s_id in
       prod_state.offers <- state1.offers @ state2.offers;
+      prod_state.is_fair <- state1.is_fair || state2.is_fair;
+      prod_state.adversary <- state1.adversary || state2.adversary;
 
     )state_map;
     final_prod_state
@@ -856,11 +870,14 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 else (
                     let auto, _ = List.nth automata_ids idx in
                     let state = Hashtbl.find auto.states s in
+                    if state.adversary then true
+                    else (
                     List.exists ( fun m ->
                       List.exists ( fun offered_m ->
                         m = offered_m
                       ) state.offers
                     ) msg_list
+                    )
                 )
               ) current_states in
               if not (List.exists (fun x -> x) has_conflict) then (
@@ -982,6 +999,33 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     )
   done;
 
+  (* assign offers and fair *)
+  Hashtbl.iter (fun states prod_state_id ->
+    let offers = List.flatten (List.mapi (fun idx st_id ->
+      let auto, _ = List.nth automata_ids idx in
+      let state = Hashtbl.find auto.states st_id in
+      state.offers
+    ) states) in
+    let is_fair = List.mapi (fun idx st_id ->
+      let auto, _ = List.nth automata_ids idx in
+      let state = Hashtbl.find auto.states st_id in
+      state.is_fair
+    ) states in
+
+    let is_adversary = List.mapi (fun idx st_id ->
+      let auto, _ = List.nth automata_ids idx in
+      let state = Hashtbl.find auto.states st_id in
+      state.adversary
+    ) states in
+    let is_fair = List.exists (fun x -> x) is_fair in
+    let is_adversary = List.exists (fun x -> x) is_adversary in
+    let prod_state = Hashtbl.find prod_auto.states prod_state_id in
+    prod_state.offers <- offers;
+    prod_state.is_fair <- is_fair;
+    prod_state.adversary <- is_adversary
+  ) state_map;
+    
+
   (* print_state_map *)
   if verbose then Hashtbl.iter (fun states prod_state_id ->
     if verbose then
@@ -1026,16 +1070,52 @@ let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
         if outgoing = [] then
           ()
         else
+          (* look for transitions leading to self starting with this transition *)
+          let rec path_to_self state_id t visited =
+            if List.mem t.to_state visited then
+              false
+            else
+              if t.to_state = state_id then
+                true
+              else
+                let visited = t.to_state :: visited in
+                let next_transitions = List.filter (fun tr ->
+                  tr.from_state = t.to_state
+                ) prod_auto.transitions in
+                List.exists (fun nt ->
+                  path_to_self state_id nt visited
+                ) next_transitions
+
+          in
+
           let should_mark_winning = 
             if state.adversary then
-              List.for_all (fun t ->
-                if t.from_state = t.to_state then
-                  true
-                else
-                Hashtbl.mem is_winning t.to_state &&
-                Hashtbl.find is_winning t.to_state
-              ) outgoing
+              (
+                  if not state.is_fair then (
+                        List.for_all (fun t ->
+                          if t.from_state = t.to_state then
+                            true
+                          else
+                          Hashtbl.mem is_winning t.to_state &&
+                          Hashtbl.find is_winning t.to_state
+                        )outgoing
+                  )
+                  else (
+                      List.for_all (fun t ->
+                        if t.from_state = t.to_state then true
+                        else (
+                          let has_path_to_self = path_to_self state_id t [] in
+
+                        (Hashtbl.mem is_winning t.to_state &&
+                        Hashtbl.find is_winning t.to_state) || has_path_to_self
+
+                        )
+                      ) outgoing
+                  )
+              )
+
             else
+              (
               (* Player state: AT LEAST ONE child must be winning *)
               List.exists (fun t ->
                 if t.from_state = t.to_state then
@@ -1044,6 +1124,7 @@ let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
                 Hashtbl.mem is_winning t.to_state &&
                 Hashtbl.find is_winning t.to_state
               ) outgoing
+              )
           in
           
           if should_mark_winning then (
