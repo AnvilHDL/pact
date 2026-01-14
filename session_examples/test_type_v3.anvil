@@ -2,7 +2,13 @@
 
 interface t1 (ep : left ch) = ep.req;
 
+interface t1 (ep : left ch) = #ep.req || #1;
+
+interface t2 (ep : left ch) = #ep.req || #ep.ack || #1 ;
+
 interface t2 (ep : left ch) = #ep.req || #ep.ack ;
+
+interface t3 (ep : left ch) = &(#ep.req, #ep.ack) ;
 
 interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
 
@@ -36,7 +42,7 @@ interface t12 (ep : left ch) = ep.m1 || ep.m2;
 
 
 // Pools to test type combinations
-pool p1 { // true
+pool p1 { // trued
     ep_le -- ep_ri : ch;
     ip11 : (ep.req >> ep.ack) ;
     ip12 : (ep.req >> ep.ack)
@@ -56,7 +62,7 @@ pool p3 { // true
 pool p4 { // true
     ep_le -- ep_ri : ch;
     ip41 : #ep.req  + #ep.ack ;
-    ip42 : &( #ep.req , #ep.ack) 
+    ip42 : &(#ep.req , #ep.ack) 
 }
 
 pool p5 { // true
@@ -89,3 +95,10 @@ pool n2 { // false
     in21 : #ep.req  + #ep.ack ;
     in22 : #ep.req  + #ep.ack
 }
+
+pool n3 { // false
+    ep_le -- ep_ri : ch;
+    in31 : #ep.m1 + #ep.m2 ;
+    in32 : ^( #ep.m1 , * : ep.m2 )
+}
+    
