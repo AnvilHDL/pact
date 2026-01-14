@@ -54,7 +54,7 @@ type transition = {
   label : LabelSet.t;
   is_epsilon : bool;
   is_theta : bool;
-  is_conditional : bool;
+  is_recurse : bool;
 }
 
 let print_string_of_transitions (transitions: transition list) : unit =
@@ -120,7 +120,7 @@ module TypeAutomaton = struct
     auto.transitions <- List.filter (fun t -> t.from_state <> state_id && t.to_state <> state_id) auto.transitions
 
  
-  let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) (is_theta: bool) (is_conditional: bool) : unit =
+  let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) (is_theta : bool) (is_recurse: bool) : unit =
     let found = ref false in
     let new_transitions = List.map (fun t ->
       if t.from_state = from_s && t.to_state = to_s && t.is_epsilon = is_epsilon && t.is_theta = is_theta then
@@ -131,7 +131,7 @@ module TypeAutomaton = struct
     if !found then
       auto.transitions <- new_transitions
     else
-      let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon; is_theta;is_conditional } in
+      let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon; is_theta; is_recurse } in
       auto.transitions <- trans :: auto.transitions
 
   let remove_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) : unit =
@@ -476,7 +476,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
               | _ -> None
             ) all_msg_branches in
             let new_state = TypeAutomaton.new_state auto false in
-            TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false true;
+            TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false;
             TypeAutomaton.add_transition auto new_state current (LabelSet.singleton (Delay)) false false false
           );
         end_state
@@ -618,12 +618,6 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
               worklist := (t1.to_state, s2) :: !worklist
           );
-          (* if t1.is_conditional then (
-            let next_ps = get_product_state (t1.to_state, s2) in
-            TypeAutomaton.add_transition auto ps next_ps t1.label false false true;
-            if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
-              worklist := (t1.to_state, s2) :: !worklist
-          ) *)
         ) trans1;
         
         List.iter (fun t2 ->
@@ -639,12 +633,6 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
               worklist := (s1, t2.to_state) :: !worklist
           );
-          (* if t2.is_conditional then (
-            let next_ps = get_product_state (s1, t2.to_state) in
-            TypeAutomaton.add_transition auto ps next_ps t2.label false false true;
-            if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
-              worklist := (s1, t2.to_state) :: !worklist
-          ) *)
         ) trans2;
 
         (* Handle synchronized transitions *)
@@ -673,6 +661,9 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
 let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool)  =
   let automata_ids = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton st_node.d st_node.span in
+    let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
+    assert (List.length final_state = 1);
+    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false false true;
     (auto, intf_id)
   ) session_ids in
 
@@ -751,13 +742,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
         let epsilon_transitions = List.map ( fun  transition_set ->
           List.filter_map (fun t ->
-            if t.is_epsilon || t.is_theta then Some t else None
+            if t.is_epsilon || t.is_theta || t.is_recurse then Some t else None
           ) transition_set
         ) transitions_list in
 
         let non_epsilon_transitions = List.map ( fun  transition_set ->
           List.filter_map (fun t ->
-            if not t.is_epsilon && not t.is_theta then Some t else None
+            if not t.is_epsilon && not t.is_theta && not t.is_recurse then Some t else None
           ) transition_set
         ) transitions_list in
 
@@ -774,7 +765,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             ) current_states in
 
             let next_prod_state = get_product_state next_states in
-            TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_conditional;
+            TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse;
             if not (IntListSet.mem next_states !visited) then 
               worklist := next_states :: !worklist
           )ep_set
@@ -878,7 +869,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 ) current_states in
 
                 let next_prod_state = get_product_state next_states in
-                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_conditional;
+                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse;
                 if not (IntListSet.mem next_states !visited) then 
                   worklist := next_states :: !worklist
               )
@@ -1062,7 +1053,7 @@ let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (ver
     let total_reachable_states = Hashtbl.length prod_auto.states in
     if verbose then
         Printf.eprintf "[Debug] Total reachable states in product automaton: %d\n" total_reachable_states;
-    let out = Stdlib.open_out ("prod_auto"^pool_def.d.pool_id^".dot") in
+    let out = Stdlib.open_out ("prod_auto_"^pool_def.d.pool_id^".dot") in
     print_automaton_dot prod_auto out;
     Stdlib.close_out out;
     flush stderr;
