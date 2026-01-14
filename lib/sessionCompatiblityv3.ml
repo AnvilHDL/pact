@@ -882,31 +882,41 @@ let label_adversary_state (auto : TypeAutomaton.t) (state_id : int) =
 let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
   
   let can_reach_accepting : (int, bool) Hashtbl.t = Hashtbl.create 10 in
+  let worklist = ref [] in
   
-  (* Initialize: accepting states can trivially reach accepting states *)
+  (* reverse transition map for backward traversal *)
+  let incoming_trans : (int, transition list) Hashtbl.t = Hashtbl.create 10 in
+  List.iter (fun t ->
+    let existing = try Hashtbl.find incoming_trans t.to_state with Not_found -> [] in
+    Hashtbl.replace incoming_trans t.to_state (t :: existing)
+  ) prod_auto.transitions;
+  
+  (* Initialize: accepting states can reach accepting states *)
   Hashtbl.iter (fun state_id state ->
-    if state.accepting then
-      Hashtbl.add can_reach_accepting state_id true
+    if state.accepting then (
+      Hashtbl.add can_reach_accepting state_id true;
+      worklist := state_id :: !worklist
+    )
   ) prod_auto.states;
   
-  (* Fixed-point iteration to propagate reachability backwards *)
-  let changed = ref true in
-  while !changed do
-    changed := false;
-    Hashtbl.iter (fun state_id _ ->
-      if not (Hashtbl.mem can_reach_accepting state_id) then (
-        (* Check if any outgoing transition leads to a state that can reach accepting *)
-        let outgoing = List.filter (fun t -> t.from_state = state_id) prod_auto.transitions in
-        let can_reach = List.exists (fun t ->
-          Hashtbl.mem can_reach_accepting t.to_state &&
-          Hashtbl.find can_reach_accepting t.to_state
-        ) outgoing in
-        if can_reach then (
-          Hashtbl.add can_reach_accepting state_id true;
-          changed := true
+  (* propagate reachability backwards *)
+  let visited = Hashtbl.create 10 in
+  while !worklist <> [] do
+    let current = List.hd !worklist in
+    worklist := List.tl !worklist;
+    
+    if not (Hashtbl.mem visited current) then (
+      Hashtbl.add visited current true;
+      
+      (* For all incoming transitions, mark source states as reachable *)
+      let incoming = try Hashtbl.find incoming_trans current with Not_found -> [] in
+      List.iter (fun t ->
+        if not (Hashtbl.mem can_reach_accepting t.from_state) then (
+          Hashtbl.add can_reach_accepting t.from_state true;
+          worklist := t.from_state :: !worklist
         )
-      )
-    ) prod_auto.states
+      ) incoming
+    )
   done;
   
   (* Check start state can reach accepting *)
@@ -917,16 +927,12 @@ let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
   if not start_can_reach then
     (false, "Start state cannot reach any accepting state")
   else (
-    (* Now check adversary states: all outgoing transitions must lead to states 
-       that can reach accepting states *)
     let game_won = ref true in
     let failing_state = ref None in
     
     Hashtbl.iter (fun state_id state ->
       if state.adversary then (
         let outgoing = List.filter (fun t -> t.from_state = state_id) prod_auto.transitions in
-        
-        (* All non-epsilon outgoing transitions must lead to states that can reach accepting *)
         let all_paths_safe = List.for_all (fun t ->
           Hashtbl.mem can_reach_accepting t.to_state &&
           Hashtbl.find can_reach_accepting t.to_state
