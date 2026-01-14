@@ -13,6 +13,7 @@ type state = {
   mutable accepting : bool;
   mutable adversary : bool;
   mutable is_winning : bool;
+  mutable offers : (Lang.message_specifier list);
 }
 
 type label_kind =
@@ -85,7 +86,7 @@ let string_of_transitions (transitions: transition list) : string =
 
 
 type typeAutomaton = {
-  states : (int, state) Hashtbl.t;
+  mutable states : (int, state) Hashtbl.t;
   mutable transitions : transition list;
   mutable start_state : int;
   mutable next_state_id : int;
@@ -101,7 +102,7 @@ module TypeAutomaton = struct
   let create () : t =
     let start_state = 0 in
     let states = Hashtbl.create 10 in
-    Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false; is_winning = false };
+    Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false; is_winning = false; offers = [] };
     let rec_var_state_map = Hashtbl.create 10 in
     {
       states = states;
@@ -114,7 +115,7 @@ module TypeAutomaton = struct
   let new_state (auto: t) (accepting: bool) : int =
     let id = auto.next_state_id in
     auto.next_state_id <- id + 1;
-    let state = { id; accepting; adversary = false; is_winning = false } in
+    let state = { id; accepting; adversary = false; is_winning = false; offers = [] } in
     Hashtbl.add auto.states id state;
     id
   
@@ -147,6 +148,10 @@ module TypeAutomaton = struct
     ) auto.transitions
   let add_rec_var_mapping (auto: t) (var: identifier) (state_id: int) : unit =
     Hashtbl.add auto.rec_var_state_map var state_id
+  
+  let append_offers (auto: t) (state_id: int) (offers: Lang.message_specifier list) : unit =
+    let state_info = Hashtbl.find auto.states state_id in
+    state_info.offers <- state_info.offers @ offers
 
 
   let reroute_transitions (auto: t) (old_state: int) (new_state: int) : unit =
@@ -163,6 +168,9 @@ module TypeAutomaton = struct
     auto.transitions <- new_transitions;
     if auto.start_state = old_state then
       auto.start_state <- new_state;
+    let new_state_info = Hashtbl.find auto.states new_state in
+    let old_state_info = Hashtbl.find auto.states old_state in
+    new_state_info.offers <- old_state_info.offers;
     Hashtbl.remove auto.states old_state
 end
 
@@ -270,6 +278,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay)) false false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
+            TypeAutomaton.append_offers auto current [m];
             next_s
           )
         | Lang.AtomicAct (Lang.AtomNBMsg m) ->
@@ -278,6 +287,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (Negation [m])) false false false true;
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
+            TypeAutomaton.append_offers auto current [m];
             next_s
           )
         | Lang.AtomDelay n ->
@@ -308,6 +318,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       TypeAutomaton.add_transition auto current right_root LabelSet.empty false true false false;
       let left_end = build st1 left_root in
       let right_end = build st2 right_root in
+      TypeAutomaton.append_offers auto current ( (Hashtbl.find auto.states left_root).offers @ (Hashtbl.find auto.states right_root).offers );
       (Hashtbl.find auto.states left_end).accepting <- false;
       (Hashtbl.find auto.states right_end).accepting <- false;
       let choice_state = TypeAutomaton.new_state auto true in
@@ -359,7 +370,6 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
             let branch_end = build cont new_wildcard_state in
-
             if (branch_end<>current) then TypeAutomaton.reroute_transitions auto branch_end end_state
 
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state
@@ -376,6 +386,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             | None -> StyAtom (o_ms.trigger)
           in
           let branch_end = build st current in
+          TypeAutomaton.remove_all_transitions auto current current;
         if all_blocking then (
             let all_msg_specs = List.filter_map (fun b -> 
               match b.Lang.trigger with 
@@ -470,6 +481,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
 
         List.iter (fun btype ->
           let branch_end = build btype current in
+          TypeAutomaton.remove_all_transitions auto current current;
           TypeAutomaton.reroute_transitions auto branch_end end_state;
         ) all_permut_branch_type;
 
@@ -695,6 +707,13 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       end
       )
     done;
+    Hashtbl.iter(fun (s1, s2) prod_s_id ->
+      let state1 = Hashtbl.find auto1.states s1 in
+      let state2 = Hashtbl.find auto2.states s2 in
+      let prod_state = Hashtbl.find auto.states prod_s_id in
+      prod_state.offers <- state1.offers @ state2.offers;
+
+    )state_map;
     final_prod_state
   in
   let final_state = build st auto.start_state in
@@ -813,6 +832,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         List.iteri ( fun i ep_set -> 
           (
           List.iter ( fun t ->
+            if not t.is_conditional then (
             let next_states = List.mapi ( fun idx s->
               if idx = i then t.to_state
               else s
@@ -822,6 +842,40 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
             if not (IntListSet.mem next_states !visited) then 
               worklist := next_states :: !worklist
+            )
+          else (
+            (* check if the current states have outgoing labels with messages in the neg msg list *)
+              let msg_list = List.filter_map (function l->
+                match l with
+                | Negation ms -> Some ms
+                | _ -> None
+              ) (LabelSet.elements t.label) in
+              let msg_list = List.flatten msg_list in
+              let has_conflict = List.mapi ( fun idx s->
+                if idx == i then false
+                else (
+                    let auto, _ = List.nth automata_ids idx in
+                    let state = Hashtbl.find auto.states s in
+                    List.exists ( fun m ->
+                      List.exists ( fun offered_m ->
+                        m = offered_m
+                      ) state.offers
+                    ) msg_list
+                )
+              ) current_states in
+              if not (List.exists (fun x -> x) has_conflict) then (
+                let next_states = List.mapi ( fun idx s->
+                  if idx = i then t.to_state
+                  else s
+                ) current_states in
+
+                let next_prod_state = get_product_state next_states in
+                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+                if not (IntListSet.mem next_states !visited) then 
+                  worklist := next_states :: !worklist
+              )
+          )
+
           )ep_set
           )
          )epsilon_transitions;
@@ -1053,7 +1107,7 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
 
     | StyFuture s -> highest_level_endpoint s
     | StyTrue -> []
-    | _ -> raise (Except.TypeError [Text ("Unsupported session type for highest level endpoint extraction"^(Lang.string_of_protocol session_type))])
+    | _ -> []
 
 let create_ep_id_intfc_id_map_with_debug (pool_def : interface_pool_def ast_node) : identifier list Utils.string_map =
     (* match with highest level endpoint,without duplicates *)

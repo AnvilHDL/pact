@@ -1,4 +1,4 @@
-// Basic types for session interfaces (check automaton construction)
+// // // Basic types for session interfaces (check automaton construction)
 
 interface t1 (ep : left ch) = ep.req;
 
@@ -82,6 +82,16 @@ pool p7 { // true
     ip71 : ep.m1;
     ip72 : ep.m1>>ep.m1
 }
+pool p8 { // false
+    ep_le -- ep_ri : ch;
+    ip81 : #ep.m1 + #ep.m2 ;
+    ip82 : ^( #ep.m1, * : #ep.m2 ) 
+}
+pool p9 { // true
+    ep_le -- ep_ri : ch;
+    ip91 : ep.m1 ;
+    ip92 : rec X . ^( #ep.m1 , * : X ) 
+}
 
 // Negative cases
 pool n1 { // false
@@ -98,7 +108,7 @@ pool n2 { // false
 
 pool n3 { // false
     ep_le -- ep_ri : ch;
-    in31 : #ep.m1 + #ep.m2 ;
-    in32 : ^( #ep.m1 , * : ep.m2 )
+    in31 : ep.m1 >> ^(#ep.m2, *);
+    in3 : #ep.m1 + #ep.m2 
 }
     
