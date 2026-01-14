@@ -909,6 +909,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           in
           
           let all_transition_combinations = cartesian_product non_epsilon_transitions in
+          (* Printf.eprintf "All transition combinations: \n%s\n" (String.concat "\n|||\n" (List.map string_of_transitions non_epsilon_transitions)); *)
           let all_delay_combinations = cartesian_product delay_transitions in
 
           
@@ -917,36 +918,15 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           assert (List.for_all (fun t -> List.length t = List.length automata_ids)all_delay_combinations);
 
           let label_set_equivalence l1 l2 =  (
-            let list_act1 = List.filter_map (function l->
-              match l with
+            let l1_msgs = List.filter_map ( function
               | Action m -> Some m
               | _ -> None
             ) (LabelSet.elements l1) in
-            let list_act2 = List.filter_map (function l->
-              match l with
+            let l2_msgs = List.filter_map ( function
               | Action m -> Some m
               | _ -> None
             ) (LabelSet.elements l2) in
-            let _list_noact1 = List.flatten (List.filter_map (function l->
-              match l with
-              | Negation ms -> Some ms
-              | _ -> None
-            ) (LabelSet.elements l1)) in
-            let _list_noact2 = List.flatten (List.filter_map (function l->
-              match l with
-              | Negation ms -> Some ms
-              | _ -> None
-            ) (LabelSet.elements l2)) in
-            let sorted_act1 = List.sort compare list_act1 in
-            let sorted_act2 = List.sort compare list_act2 in
-            (* for noact, should not be preset in other act *)
-            let nointer1 = List.for_all ( fun m ->
-              not (List.mem m sorted_act2)
-            ) _list_noact1 in
-            let nointer2 = List.for_all ( fun m ->
-              not (List.mem m sorted_act1)
-            ) _list_noact2 in
-            (sorted_act1 = sorted_act2) && nointer1 && nointer2
+            List.for_all ( fun m -> List.exists ( fun m2 -> m = m2 ) l2_msgs  ) l1_msgs
           )  in
         
         
@@ -955,12 +935,17 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           (* for all the labels should be same *)
           if List.length transition_set < 2 then raise (Failure "Unexpected: less than 2 transitions in combination")
           else(
-            let first_label = (List.hd transition_set).label in
-            let all_labels_equivalent = List.for_all ( fun t ->
-              label_set_equivalence t.label (List.hd transition_set).label
+            let all_labels_satisfied = List.mapi ( fun id _ ->
+              let own_label = (List.nth transition_set id).label in
+              let other_labels = List.filteri ( fun idx _ -> idx <> id) transition_set in
+              let other_label = List.fold_left ( fun acc t2 ->
+                LabelSet.union acc t2.label
+              ) LabelSet.empty other_labels in
+
+              label_set_equivalence own_label other_label
             ) transition_set in
             
-            if all_labels_equivalent then
+            if List.for_all (fun x -> x) all_labels_satisfied then
             (
               let next_states = List.mapi ( fun idx _->
                 let t = List.nth transition_set idx in
@@ -968,7 +953,10 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               ) current_states in
 
               let next_prod_state = get_product_state next_states in
-              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state first_label false false false (List.for_all (fun t -> t.is_conditional) transition_set);
+              let combined_label = List.fold_left ( fun acc t ->
+                LabelSet.union acc t.label
+              ) LabelSet.empty transition_set in
+              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label  false false false (List.for_all (fun t -> t.is_conditional) transition_set);
               if not (IntListSet.mem next_states !visited) then 
                 worklist := next_states :: !worklist
             )

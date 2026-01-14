@@ -1,47 +1,47 @@
-// // // Basic types for session interfaces (check automaton construction)
+// // // // Basic types for session interfaces (check automaton construction)
 
-interface t1 (ep : left ch) = ep.req;
+// interface t1 (ep : left ch) = ep.req;
 
-interface t1 (ep : left ch) = #ep.req || #1;
+// interface t1 (ep : left ch) = #ep.req || #1;
 
-interface t2 (ep : left ch) = #ep.req || #ep.ack || #1 ;
+// interface t2 (ep : left ch) = #ep.req || #ep.ack || #1 ;
 
-interface t2 (ep : left ch) = #ep.req || #ep.ack ;
+// interface t2 (ep : left ch) = #ep.req || #ep.ack ;
 
-interface t3 (ep : left ch) = &(#ep.req, #ep.ack) ;
+// interface t3 (ep : left ch) = &(#ep.req, #ep.ack) ;
 
-interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
-
-
-interface t1 (ep : left ch) = #ep.req || #ep.ack  ;
+// interface t2a (ep : left ch) =  rec X . ^( #ep.req , * : #1 >> X )  ;
 
 
-
-interface t3 (ep : left ch) = #ep.req ;
-
-interface t4 (ep : left ch) = ep.req + ep.ack ;
-
-interface t5 (ep : left ch) = ^(ep.req, ep.ack) ;
-
-interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) ;
-
-
-interface t7 (ep : left ch) = &(ep.req, ep.ack) ;
-
-interface t8 (ep : left ch) = &( ep.req, ep.ack, *) ;
-
-
-interface t9 (ep : left ch) = rec X .  ^( #ep.req, * : X) ;
-
-interface t10 (ep : left ch) = (ep.req >> ep.ack) || ( ep.nack >> ep.rreq ) ;
-
-interface t11 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) ;
-
-interface t12 (ep : left ch) = ep.m1 || ep.m2;
+// interface t1 (ep : left ch) = #ep.req || #ep.ack  ;
 
 
 
-// Pools to test type combinations
+// interface t3 (ep : left ch) = #ep.req ;
+
+// interface t4 (ep : left ch) = ep.req + ep.ack ;
+
+// interface t5 (ep : left ch) = ^(ep.req, ep.ack) ;
+
+// interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) ;
+
+
+// interface t7 (ep : left ch) = &(ep.req, ep.ack) ;
+
+// interface t8 (ep : left ch) = &( ep.req, ep.ack, *) ;
+
+
+// interface t9 (ep : left ch) = rec X .  ^( #ep.req, * : X) ;
+
+// interface t10 (ep : left ch) = (ep.req >> ep.ack) || ( ep.nack >> ep.rreq ) ;
+
+// interface t11 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) ;
+
+// interface t12 (ep : left ch) = ep.m1 || ep.m2;
+
+
+
+// // Pools to test type combinations
 pool p1 { // trued
     ep_le -- ep_ri : ch;
     ip11 : (ep.req >> ep.ack) ;
@@ -93,6 +93,13 @@ pool p9 { // true
     ip92 : rec X . ^( #ep.m1 , * : X ) 
 }
 
+pool p10 { // true
+    ep_le -- ep_ri : ch;
+    ip101 : #ep.m1 || #ep.m2 ;
+    ip102 : #ep.m1;
+    ip103 : #ep.m2
+}
+
 // Negative cases
 pool n1 { // false
     ep_le -- ep_ri : ch;
@@ -117,4 +124,5 @@ pool n4 { // false
     in41 : F #ep.m1 ;
     in42 : #ep.m1 
 }
+
     
