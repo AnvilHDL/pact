@@ -1,10 +1,10 @@
 chan local_ch{
     left req : (logic@#1),
     right ack : (logic@#1)
-    protocol :: (ep.req >> ep.ack)
+    protocol :: (ep.req ; ep.ack)
 }
 
-interface test_local (ep : left local_ch) = (ep.req >> #3 >> ep.ack >> ep.req >> #1);
+interface test_local (ep : left local_ch) = (ep.req ; #3 ; ep.ack ; ep.req ; #1);
 
 
 proc test_local(test_local){

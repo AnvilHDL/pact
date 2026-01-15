@@ -341,7 +341,7 @@ type_def:
 
 
 interface_pool_def:
-| KEYWORD_POOL; id = IDENT; LEFT_BRACE; channel_defs = separated_list(COMMA, node(channel_def)); SEMICOLON; interface_mem = separated_list(SEMICOLON, node(interface_members_def)); RIGHT_BRACE
+| KEYWORD_POOL; id = IDENT; LEFT_BRACE; channel_defs = separated_list(COMMA, node(channel_def)); SEMICOLON; interface_mem = separated_list(COMMA, node(interface_members_def)); RIGHT_BRACE
   {
     {
     pool_id = id;
@@ -371,7 +371,7 @@ interface_members_def:
 ;
 
 session_def:
-| KEYWORD_INTERFACE; name = IDENT; LEFT_PAREN; params = proc_def_arg_list; RIGHT_PAREN; EQUAL ; body = node(local_session_type); SEMICOLON
+| KEYWORD_INTERFACE; name = IDENT; LEFT_PAREN; params = proc_def_arg_list; RIGHT_PAREN; EQUAL ; body = node(local_session_type);
   {
     { name = name; body = body; params = params } : Lang.session_def
   }
@@ -389,7 +389,7 @@ local_session_type:
   { Lang.StyVar id }
 | act = atomic_action
   { Lang.StyAtom (Lang.AtomicAct act) }
-| act1 = local_session_type ;DOUBLE_GT; act2 = local_session_type
+| act1 = local_session_type ;SEMICOLON; act2 = local_session_type
   { Lang.StySeq (act1, act2) }
 | act1 = local_session_type ;PLUS; act2 = local_session_type
   { Lang.StyChoice (act1, act2) }

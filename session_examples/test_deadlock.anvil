@@ -4,8 +4,8 @@ chan ch {
 }
 
 
-interface foo1_intfc (ep : right ch) = ep.req >> ep.gnt >> #1;
-interface foo2_intfc (ep : left ch) = ep.gnt >> ep.req >> #1;
+interface foo1_intfc (ep : right ch) = ep.req ; ep.gnt ; #1;
+interface foo2_intfc (ep : left ch) = ep.gnt ; ep.req ; #1;
 
 
 proc foo1 (foo1_intfc){

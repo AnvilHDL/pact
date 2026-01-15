@@ -8,25 +8,25 @@ digraph SessionTypes {
   
   // Node definitions with types
   event0 [
-    label="event0\n( rd_ep.req : F( #rd_ep.res ) & wr_ep.req ) >> #1",
+    label="event0\n( rd_ep.req : F( #rd_ep.res ) & wr_ep.req ) ; #1",
     fillcolor="lightgreen",
     tooltip="Initial state with type T"
   ];
   
   event1 [
-    label="event1\n( (rd_ep.req >> F( #rd_ep.res )) + wr_ep.req ) >> #1",
+    label="event1\n( (rd_ep.req ; F( #rd_ep.res )) + wr_ep.req ) ; #1",
     fillcolor="lightyellow",
     tooltip="Intermediate state with type T"
   ];
   
   event2 [
-    label="event2\nF( #rd_ep.res ) >> #1",
+    label="event2\nF( #rd_ep.res ) ; #1",
     fillcolor="lightyellow",
     tooltip="Intermediate state with type T"
   ];
   
   event4 [
-    label="event4\nF( #rd_ep.res ) >> #1",
+    label="event4\nF( #rd_ep.res ) ; #1",
     fillcolor="lightyellow",
     tooltip="Intermediate state with type T"
   ];

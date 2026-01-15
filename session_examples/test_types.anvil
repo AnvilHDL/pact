@@ -9,7 +9,7 @@ chan ch{
 }
 pool p1 { // true
     ep_le -- ep_ri : ch;
-    i1 : (ep.req >> ep.ack) ;
+    i1 : (ep.req ; ep.ack) ;
     i2 : (ep.req || ep.ack)
 }
 
@@ -21,7 +21,7 @@ pool p2 {//true
 
 pool p3{ // false
     ep_le -- ep_ri : ch;
-    i1 : (ep.req + ep.ack) >> (ep.ack + ep.req);
+    i1 : (ep.req + ep.ack) ; (ep.ack + ep.req);
     i2 : &(ep.req : ep.ack, ep.ack : ep.req)
 }
 
@@ -42,8 +42,8 @@ pool p6{ // true
     ep_1_le -- ep_1_ri : ch,
     ep_2_le -- ep_2_ri : ch,
     ep_3_le -- ep_3_ri : ch;
-    i1 : ep_1.req >> ep_1.ack;
-    i2 : ep_1.req >> ep_2.req >> ep_1.ack;
+    i1 : ep_1.req ; ep_1.ack;
+    i2 : ep_1.req ; ep_2.req ; ep_1.ack;
     i3 : ep_2.req + ep_3.req;
     i4 : ep_3.req
 }
@@ -51,33 +51,33 @@ pool p6{ // true
 pool mem_pool{ // true
     rd_ep_le -- rd_ep_ri : rd_ch,
     wr_ep_le -- wr_ep_ri : wr_ch;
-    i1 : #1 + (rd_ep_le.req >> rd_ep_le.res >> #1);
-    i2 : &(rd_ep_le.req : F #rd_ep_le.res, wr_ep_ri.req) >> #1;
-    i3 : wr_ep_ri.req >> #1
+    i1 : #1 + (rd_ep_le.req ; rd_ep_le.res ; #1);
+    i2 : &(rd_ep_le.req : F #rd_ep_le.res, wr_ep_ri.req) ; #1;
+    i3 : wr_ep_ri.req ; #1
 }
 
 pool p7{//true
     ep_le -- ep_ri : ch;
     i1 : ep.req || ep.res;
-    i2 : ep.req >> ep.res
+    i2 : ep.req ; ep.res
 }
 
 pool p8{//should be false
     ep -- ep_ri : ch;
-    i1 : ep1.m1 >> F #ep2.m2;
+    i1 : ep1.m1 ; F #ep2.m2;
     i2 : ep2.m2;
     i3 : #ep1.m1
 }
 
 pool p9{// true
     ep_le -- ep_ri : ch;
-    i1 : (ep.full >> ep.pop) + (ep.empty >> ep.push) + &(ep.push , ep.pop);
+    i1 : (ep.full ; ep.pop) + (ep.empty ; ep.push) + &(ep.push , ep.pop);
     i2 : ^(ep.full : ep.pop, ep.empty : ep.push, * : &(ep.push ,ep.pop))
 }
 
 pool p10{ // false
     ep_le -- ep_ri : ch;
-    i1 : (ep.full >> ep.pop) + (ep.empty >> ep.push) + &(ep.push , ep.pop);
+    i1 : (ep.full ; ep.pop) + (ep.empty ; ep.push) + &(ep.push , ep.pop);
     i2 : ^(ep.full : ep.pop, ep.empty : ep.push)
 }
 

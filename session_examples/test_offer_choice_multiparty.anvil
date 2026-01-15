@@ -4,9 +4,9 @@ chan ch {
     right ack : (logic@#1) <<
 }
 
-interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req >> ep1.req >> (ep1.ack : (#4 >> ep.reset >> ep.ack)) & ep1.reset (#2 >> ep.ack >> ep.reset)) >> #1;
-interface foo2_intfc (ep : left ch) = ep.req >> ^(ep.reset : F ep.ack,ep.ack : F ep.reset) >> #1;
-interface foo3_intfc (ep1 : left ch) = ep1.req >> 
+interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req ; ep1.req ; (ep1.ack : (#4 ; ep.reset ; ep.ack)) & ep1.reset (#2 ; ep.ack ; ep.reset)) ; #1;
+interface foo2_intfc (ep : left ch) = ep.req ; ^(ep.reset : F ep.ack,ep.ack : F ep.reset) ; #1;
+interface foo3_intfc (ep1 : left ch) = ep1.req ; 
 
 
 proc foo1 (foo1_intfc){

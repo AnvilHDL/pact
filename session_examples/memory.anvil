@@ -12,7 +12,7 @@ chan write_ch{
     right res : (addr_data_pair@#1)
 }
 
-interface mem_itfc (rd_ep : right read_ch, wr_ep : left write_ch) = &(rd_ep.req : F #rd_ep.res, wr_ep.req) >> #1;
+interface mem_itfc (rd_ep : right read_ch, wr_ep : left write_ch) = &(rd_ep.req : F #rd_ep.res, wr_ep.req) ; #1;
 
 proc memory(mem_itfc){
     reg mem : byte[256];

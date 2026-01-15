@@ -4,9 +4,9 @@ chan ch{
 }
 
 
-interface foo1_intfc (ep12 : left ch, ep13 : right ch) =   #1 >> ep13.req >> ep12.req >> ep12.ack >> ep13.ack >> #1;
-interface foo2_intfc (ep12 : right ch, ep23 : left ch) =  #1 >> ep12.req >> ep23.req >> ep23.ack >> ep12.ack >> #1; 
-interface foo3_intfc (ep13 : left ch, ep23 : right ch)  = #1 >> ep23.req >> ep13.req >> ep23.ack >> ep13.ack >> #1;
+interface foo1_intfc (ep12 : left ch, ep13 : right ch) =   #1 ; ep13.req ; ep12.req ; ep12.ack ; ep13.ack ; #1;
+interface foo2_intfc (ep12 : right ch, ep23 : left ch) =  #1 ; ep12.req ; ep23.req ; ep23.ack ; ep12.ack ; #1; 
+interface foo3_intfc (ep13 : left ch, ep23 : right ch)  = #1 ; ep23.req ; ep13.req ; ep23.ack ; ep13.ack ; #1;
 
 
 

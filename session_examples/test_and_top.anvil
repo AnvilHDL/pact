@@ -3,7 +3,7 @@ chan ch {
     left ack : (logic@#1)
 }
 
-interface tryand_interfcace (ep : left ch) = &(ep.req : #5, ep.ack : #3, * ) >> #1 ;
+interface tryand_interfcace (ep : left ch) = &(ep.req : #5, ep.ack : #3, * ) ; #1 ;
 proc tryand(tryand_interfcace){
     reg cyc : logic[8];
     loop{

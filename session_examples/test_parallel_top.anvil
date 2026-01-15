@@ -4,7 +4,7 @@ chan ch {
 }
 
 
-interface test_parallel_interface (ep : left ch) = ((ep.req >> ep.ack) || (ep.ack >> ep.req)) >> #1 ;
+interface test_parallel_interface (ep : left ch) = ((ep.req ; ep.ack) || (ep.ack ; ep.req)) ; #1 ;
 
 proc test_parallel_top(test_parallel_interface){
     reg cyc : logic[8];
