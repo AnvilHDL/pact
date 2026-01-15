@@ -333,7 +333,7 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
       TypeAutomaton.add_transition auto current right_root LabelSet.empty false true false false;
       let left_end = build st1 left_root in
       let right_end = build st2 right_root in
-      TypeAutomaton.append_offers auto current ( (Hashtbl.find auto.states left_root).offers @ (Hashtbl.find auto.states right_root).offers );
+      (* TypeAutomaton.append_offers auto current ( (Hashtbl.find auto.states left_root).offers @ (Hashtbl.find auto.states right_root).offers ); *)
       (Hashtbl.find auto.states left_end).accepting <- false;
       (Hashtbl.find auto.states right_end).accepting <- false;
       let choice_state = TypeAutomaton.new_state auto true in
@@ -813,6 +813,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           ) transition_set
         ) transitions_list in
 
+        let theta_transitions = List.map (fun transition_set ->
+          List.filter_map (fun t ->
+            if t.is_theta then Some t else None
+          ) transition_set
+        ) epsilon_transitions in
+
+        if List.for_all (fun ts -> ts = []) theta_transitions then (
         let sync_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
             if not t.is_epsilon && not t.is_theta && not t.is_recurse && not (is_delay t) 
@@ -945,6 +952,19 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )
           )
         ) all_delay_combinations;
+        )
+        else
+        (
+          List.iteri (fun i ep_set -> 
+            List.iter (fun t ->
+              let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
+              let next_prod_state = get_product_state next_states in
+              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+              if not (IntListSet.mem next_states !visited) then 
+                 worklist := next_states :: !worklist
+            ) ep_set
+          ) theta_transitions;
+        )   
 
       )
     )
