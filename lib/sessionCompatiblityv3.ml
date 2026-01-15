@@ -193,7 +193,7 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
   Printf.fprintf out "digraph TypeAutomaton {\n";
   Hashtbl.iter (fun id state ->
     let shape = if state.accepting then "doublecircle" else if state.adversary then "square" else "circle" in
-    let color = if state.is_winning then "green" else "red" in
+    let color = if state.is_winning then "green" else if state.is_fair then "yellow" else "red" in
     Printf.fprintf out "  %d [shape=%s, color=%s];\n" id shape color
   ) auto.states;
   
@@ -677,11 +677,13 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
             ) list1)
           in
         (* Handle synchronized transitions *)
+       let delay_trans1 = List.filter is_delay trans1 in
+       let delay_trans2 = List.filter is_delay trans2 in
         let trans1 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not (is_delay t) ) trans1 in
-        let delay_trans1 = List.filter is_delay trans1 in
+
         let trans2 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not (is_delay t) ) trans2 in
 
-        let delay_trans2 = List.filter is_delay trans2 in
+
 
         if List.length trans1 = 0 then (
           List.iter( fun t ->
@@ -745,8 +747,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     let auto = build_automaton st_node.d st_node.span in
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
     assert (List.length final_state = 1);
-    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false true false false;
-    TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.singleton Delay) false true false false;
+    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty true false false false;
+    TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.singleton Delay) true false false false;
     TypeAutomaton.make_fair auto (List.hd final_state);
     (auto, intf_id)
   ) session_ids in
@@ -992,6 +994,31 @@ let label_adversary_state (auto : TypeAutomaton.t) (state_id : int) =
   if check_if_adversary_state then
     state.adversary <- true
 
+let can_reach_self (graph_transitions : transition list) (start_node : int) (target_node : int) : bool =
+  let queue = Queue.create () in
+  Queue.add start_node queue;
+  let visited = Hashtbl.create 16 in
+  Hashtbl.add visited start_node ();
+  
+  let found = ref false in
+  
+  while not !found && not (Queue.is_empty queue) do
+    let u = Queue.take queue in
+    if u = target_node then 
+      found := true
+    else
+      let neighbors = List.filter_map (fun t -> 
+        if t.from_state = u then Some t.to_state else None
+      ) graph_transitions in
+      
+      List.iter (fun v ->
+        if not (Hashtbl.mem visited v) then (
+          Hashtbl.add visited v ();
+          Queue.add v queue
+        )
+      ) neighbors
+  done;
+  !found
 let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
   
   let is_winning : (int, bool) Hashtbl.t = Hashtbl.create 10 in
@@ -1019,27 +1046,24 @@ let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
           ()
         else
           (* look for transitions leading to self starting with this transition *)
-          let rec path_to_self state_id t visited =
-            if List.mem t.to_state visited then
-              false
-            else
-              if t.to_state = state_id then
-                true
-              else
-                let visited = t.to_state :: visited in
-                let next_transitions = List.filter (fun tr ->
-                  tr.from_state = t.to_state
-                ) prod_auto.transitions in
-                List.exists (fun nt ->
-                  path_to_self state_id nt visited
-                ) next_transitions
-
-          in
 
           let should_mark_winning = 
-            if state.adversary then
+            if state.is_fair then
               (
-                  if not state.is_fair then (
+                      List.for_all (fun t ->
+                        if t.from_state = t.to_state then true
+                        else (
+                          let has_path_to_self = can_reach_self prod_auto.transitions t.to_state state.id in
+
+                        (Hashtbl.mem is_winning t.to_state &&
+                        Hashtbl.find is_winning t.to_state) || has_path_to_self
+
+                        )
+                      ) outgoing
+                  )
+            
+                  else if state.adversary then
+                  (
                         List.for_all (fun t ->
                           if t.from_state = t.to_state then
                             true
@@ -1048,31 +1072,17 @@ let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
                           Hashtbl.find is_winning t.to_state
                         )outgoing
                   )
-                  else (
-                      List.for_all (fun t ->
-                        if t.from_state = t.to_state then true
-                        else (
-                          let has_path_to_self = path_to_self state_id t [] in
-
-                        (Hashtbl.mem is_winning t.to_state &&
-                        Hashtbl.find is_winning t.to_state) || has_path_to_self
-
-                        )
-                      ) outgoing
-                  )
-              )
-
-            else
-              (
-              (* Player state: AT LEAST ONE child must be winning *)
-              List.exists (fun t ->
-                if t.from_state = t.to_state then
-                  false
-                else
-                Hashtbl.mem is_winning t.to_state &&
-                Hashtbl.find is_winning t.to_state
-              ) outgoing
-              )
+                  else
+                    (
+                    (* Player state: AT LEAST ONE child must be winning *)
+                    List.exists (fun t ->
+                      if t.from_state = t.to_state then
+                        false
+                      else
+                      Hashtbl.mem is_winning t.to_state &&
+                      Hashtbl.find is_winning t.to_state
+                    ) outgoing
+                    )
           in
           
           if should_mark_winning then (
