@@ -146,12 +146,12 @@ let automata_debug _out config =
   ) session_type_defs;
 
   List.iter (fun (pool : interface_pool_def ast_node) ->
-    let session_ids = List.filter_map (fun intf_member ->
-        match intf_member.d.interface_def with
-        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
-        | None -> raise (Failure "Interface member missing definition")
-    ) pool.d.interface_members in
     Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
+    
+
+    let session_ids = SessionHelper.preprocess_pool_for_compatibility 
+        pool session_type_defs in
+    
     let compat, err = try check_compatiblity_multiparty session_ids config.verbose pool.span with
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
@@ -198,14 +198,19 @@ let generalized_type_debug _out config =
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
   Printf.eprintf "\nPool Compatiblity Checks:\n\n";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-    let _ = List.filter_map (fun intf_member ->
-        match intf_member.d.interface_def with
-        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
-        | None -> raise (Failure "Interface member missing definition")
-    ) pool.d.interface_members in
     Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
     let open SessionCompatiblityv3 in
-    let compat, err = try check_compatibility_multiparty pool config.verbose
+    
+    (* Preprocess the pool to get session_ids with unified endpoints *)
+    let session_ids = SessionHelper.preprocess_pool_for_compatibility 
+        pool session_type_defs in
+
+      Printf.eprintf "Session IDs in Pool %s: \n" pool.d.pool_id;
+      List.iter (fun (st_node, intf_id) ->
+        Printf.eprintf "- Interface %s : %s \n" intf_id (string_of_protocol st_node.d)
+      ) session_ids;
+    
+    let compat, err = try check_compatibility_multiparty session_ids pool.d.pool_id config.verbose
       with
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")

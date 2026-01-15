@@ -1857,14 +1857,10 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     weak_typecasts = wty
   } in
 
-  let lookup_interface (interfaces : session_def ast_node list) (intf : identifier) : session_def ast_node option =
-    List.find_opt (fun (s:session_def ast_node) -> s.d.name = intf) interfaces
-  in
-
   let add_proc_args (proc : proc_def) =
     if Option.is_some proc.interface then
       let intf = Option.get proc.interface in
-      let session = lookup_interface cunit.session_defs intf.d
+      let session = SessionHelper.lookup_interface cunit.session_defs intf.d
         |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
       let session_params = session.d.params in
       proc.args <- session_params
@@ -1923,27 +1919,6 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
       raise (Except.TypeError [Text ("Undefined interface member " ^ ip.pifc_id ^ " in pool " ^ ip.pid); Except.codespan_local default_span])
   in
     
-  let lookup_session_types_from_pool_inst (id : identifier) (p_defs : (interface_pool_def ast_node) list) (s_defs : (session_def ast_node)list) (default_span : code_span) =
-    let pool_def = lookup_pool_inst_from_pools id p_defs default_span in
-
-    let session_defs = List.map (fun im ->
-      match im.d.interface_class_id with
-      | Some intf_id ->
-        (
-          let session_opt = lookup_interface s_defs intf_id.id in
-          match session_opt with
-          | Some session -> (session.d.body, intf_id.id)
-          | None ->
-            raise (Except.TypeError [Text ("Undefined Session type " ^ intf_id.id ^ " in pool member " ^ im.d.inf_mem_id); Except.codespan_local default_span])
-        )
-      | None ->
-        raise (Except.TypeError [Text ("Currently only interface instantiation is supported in pool members, but got none for " ^ im.d.inf_mem_id ^ " in pool " ^ id);
-          Except.codespan_local default_span])
-
-    ) pool_def.d.interface_members in
-    session_defs
-      
- in
 
   List.iter (fun (proc : proc_def) ->
     match proc.body with
@@ -1952,137 +1927,14 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
       List.iter (fun (ps : pool_inst ast_node) ->
         let channels = lookup_channel_inst_from_pools ps.d cunit.pools ps.span in
         p.channels <- p.channels @ channels ;
-        let session_with_id = lookup_session_types_from_pool_inst ps.d.p_ty cunit.pools cunit.session_defs ps.span in
 
-        (* (if List.length session_with_id > 2 then
-          raise (Except.UnimplementedError [Text "Currently only up to two session types are supported in pool instances!"; Except.codespan_local ps.span])
-        else *)
-          (* let session1 = snd (List.hd session_with_id) in
-          let session2 = snd (List.nth session_with_id 1) in
-          let id1 = fst (List.hd session_with_id) in
-          let id2 = fst (List.nth session_with_id 1) in *)
-          
-          (* Preprocess session types to replace interface parameters with actual endpoint names *)
-          let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.session_type =
-            let replace_endpoint_in_msg_spec (msg_spec : Lang.message_specifier) : Lang.message_specifier =
-              match Utils.StringMap.find_opt msg_spec.endpoint endpoint_mapping with
-              | Some new_endpoint -> {msg_spec with endpoint = new_endpoint}
-              | None -> msg_spec
-            in
-            
-            let replace_in_atomic_action (action : Lang.atomic_action) : Lang.atomic_action =
-              match action with
-              | Lang.AtomBMsg msg_spec -> Lang.AtomBMsg (replace_endpoint_in_msg_spec msg_spec)
-              | Lang.AtomNBMsg msg_spec -> Lang.AtomNBMsg (replace_endpoint_in_msg_spec msg_spec)
-            in
-            
-            let replace_in_action_with_gap (action : Lang.atomic_action_with_gap) : Lang.atomic_action_with_gap =
-              match action with
-              | Lang.AtomDelay n -> Lang.AtomDelay n
-              | Lang.AtomicAct atomic -> Lang.AtomicAct (replace_in_atomic_action atomic)
-              | _ -> raise (Except.UnimplementedError [Text ("Unsupported atomic action with gap in preprocessing!"^(string_of_atomic_action_with_gap action)); Except.codespan_local ps.span]) 
-            in
-            
-            let rec preprocess_sty (sty : Lang.session_type) : Lang.session_type =
-              match sty with
-              | Lang.StySeq (s1, s2) -> Lang.StySeq (preprocess_sty s1, preprocess_sty s2)
-              | Lang.StyChoice (s1, s2) -> Lang.StyChoice (preprocess_sty s1, preprocess_sty s2)
-              | Lang.StyParallel (s1, s2) -> Lang.StyParallel (preprocess_sty s1, preprocess_sty s2)
-              | Lang.StyFuture s -> Lang.StyFuture (preprocess_sty s)
-              | Lang.StyAtom action -> Lang.StyAtom (replace_in_action_with_gap action)
-              | Lang.StyXOffer offerings ->
-                  let process_offering (off : Lang.offering_session_type) : Lang.offering_session_type =
-                    {
-                      trigger = replace_in_action_with_gap off.trigger;
-                      continuation = Option.map preprocess_sty off.continuation;
-                    }
-                  in
-                  Lang.StyXOffer (List.map process_offering offerings)
-              | Lang.StyOffer offerings ->
-                  let process_offering (off : Lang.offering_session_type) : Lang.offering_session_type =
-                    {
-                      trigger = replace_in_action_with_gap off.trigger;
-                      continuation = Option.map preprocess_sty off.continuation;
-                    }
-                  in
-                  Lang.StyOffer (List.map process_offering offerings)
-              | Lang.StyTrue -> Lang.StyTrue
-              | _ -> raise (Except.UnimplementedError [Text "Unsupported session type with interface parameters in preprocessing!"])
-            in
-            preprocess_sty sty
-          in
-          
-          (* Build endpoint mapping from interface params to actual endpoints from channels *)
-          (* Additionally, map both left and right endpoints to the left endpoint name *)
-          let build_endpoint_mapping (interface_member : Lang.interface_mem_def ast_node) (pool_channels : Lang.channel_def ast_node list) : identifier Utils.string_map =
-            match interface_member.d.interface_class_id with
-            | Some intf_inst ->
-                (* Look up the interface definition to get parameter names *)
-                let interface_opt = lookup_interface cunit.session_defs intf_inst.id in
-                (match interface_opt with
-                | Some interface_def ->
-                    (* Map interface parameter names to actual endpoint names from channels *)
-                    (* interface_def.d.params is a list of endpoint_def ast_node *)
-                    (* intf_inst.params is a list of identifier (actual endpoint names) *)
-                    let endpoint_param_names = List.map (fun (ep : Lang.endpoint_def ast_node) -> ep.d.name) interface_def.d.params in
-                    let actual_endpoints = intf_inst.params in
-                    
-                    (* Build set of actual endpoints used by this interface *)
-                    let actual_endpoints_set = List.fold_left (fun set ep ->
-                      Utils.StringSet.add ep set
-                    ) Utils.StringSet.empty actual_endpoints in
-                    
-                    (* Create unification map ONLY for channels where at least one endpoint is used by this interface *)
-                    let relevant_unification_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
-                      let left_used = Utils.StringSet.mem chan.d.endpoint_left actual_endpoints_set in
-                      let right_used = Utils.StringSet.mem chan.d.endpoint_right actual_endpoints_set in
-                      if left_used || right_used then
-                        (* At least one endpoint is used - unify both to left *)
-                        Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
-                      else
-                        map
-                    ) Utils.StringMap.empty pool_channels in
-                    
-                    (* Build base mapping, applying unification if actual_ep is a right endpoint *)
-                    let base_mapping = List.fold_left2 (fun map param_name actual_ep ->
-                      let unified_ep = match Utils.StringMap.find_opt actual_ep relevant_unification_map with
-                        | Some left_ep -> left_ep  (* actual_ep is a right endpoint, use left instead *)
-                        | None -> actual_ep        (* actual_ep is already a left endpoint or standalone *)
-                      in
-                      Utils.StringMap.add param_name unified_ep map
-                    ) Utils.StringMap.empty endpoint_param_names actual_endpoints in
-                    
-                    (* Merge: add relevant unifications for direct endpoint-to-endpoint mapping within this interface *)
-                    Utils.StringMap.fold Utils.StringMap.add relevant_unification_map base_mapping
-                | None -> Utils.StringMap.empty)
-            | None -> Utils.StringMap.empty
-          in
-          
-          (* Apply preprocessing to all session types in the pool instance *)
           let pool_def = lookup_pool_inst_from_pools ps.d.p_ty cunit.pools ps.span in
-          let session_with_id = List.map2 (fun (sty_node, _) interface_member ->
-            let endpoint_mapping = build_endpoint_mapping interface_member pool_def.d.pool_channels in
-            let preprocessed_sty = preprocess_session_type endpoint_mapping sty_node.d in
-            ({sty_node with d = preprocessed_sty}, interface_member.d.inf_mem_id)
-          ) session_with_id pool_def.d.interface_members in
-
-          (* Map each left endpoint to the list of all interface IDs that use it *)
-          (* This includes interfaces that use the left endpoint directly OR use its paired right endpoint *)
-
-          
-          if config.verbose then
-          (
-            List.iter (fun ((session : session_type ast_node), intf_id) ->
-              Printf.eprintf "[Info] Preprocessed session type for interface %s in pool instance %s of process %s:\n%s\n"
-                intf_id ps.d.p_id module_name (Lang.string_of_protocol session.d)
-            ) session_with_id
-          );
-          let ep_itfc_id_map = SessionCompatiblityv2.create_ep_id_intfc_id_map pool_def in
+          let session_with_ids = SessionHelper.preprocess_pool_for_compatibility pool_def cunit.session_defs in
 
           if not config.disable_compat_checks then
           (
-              let check, err = SessionCompatiblityv2.compatiblity_check_multiparty session_with_id ep_itfc_id_map config.verbose_max ps.span in
-              let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_id in
+              let check, err = SessionCompatiblityv3.check_compatibility_multiparty session_with_ids ps.d.p_id config.verbose in
+              let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_ids in
               if check then Printf.eprintf "[Info] Compatibility check passed for pool instance %s in process %s\n" ps.d.p_id module_name
               else
                 raise (Except.TypeError (

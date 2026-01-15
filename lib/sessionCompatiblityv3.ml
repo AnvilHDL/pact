@@ -1147,75 +1147,12 @@ Hashtbl.iter (fun state_id state ->
 
 
 
-let rec highest_level_endpoint (session_type : session_type) : identifier list =
-    
-    match session_type with
-    | StyAtom (AtomicAct (AtomNBMsg m)) -> [m.endpoint]
-    | StyAtom (AtomicAct (AtomBMsg m)) -> [m.endpoint]
-    | StyAtom (AtomDelay _) -> []
-    | StySeq (s1, s2) | StyParallel (s1, s2) | StyChoice (s1, s2) -> (match highest_level_endpoint s1 with
-        | [] -> highest_level_endpoint s2
-        | eps1 -> eps1 @ highest_level_endpoint s2
-    )
-    | StyOffer ps | StyXOffer ps ->
-        (
-        let endpoints = List.flatten (List.map (fun oty ->
-            match oty.trigger with
-            | AtomicAct (AtomNBMsg m) -> [m.endpoint]
-            | AtomicAct (AtomBMsg m) -> [m.endpoint]
-            | AtomDelay _ -> []
-            | _ -> raise (Except.TypeError [Text ("Unsupported atomic action in highest level endpoint extraction"^(string_of_atomic_action_with_gap oty.trigger))])
-        ) ps) in
-        let endpoints_continuation = List.flatten (List.map (fun oty ->
-            match oty.continuation with
-            | Some cont -> highest_level_endpoint cont
-            | None -> []
-        ) ps) in
-        endpoints @ endpoints_continuation
-        )
+let check_compatibility_multiparty 
+    (session_ids : ((session_type ast_node) * identifier) list)
+    (pool_id : identifier)
+    (verbose : bool) 
+    : (bool * string) =
 
-    | StyFuture s -> highest_level_endpoint s
-    | StyTrue -> []
-    | _ -> []
-
-let create_ep_id_intfc_id_map_with_debug (pool_def : interface_pool_def ast_node) : identifier list Utils.string_map =
-    (* match with highest level endpoint,without duplicates *)
-    List.fold_left(
-    fun acc_map interface_member ->
-        match interface_member.d.interface_def with
-        | Some intf_in ->
-            let eps = highest_level_endpoint intf_in in
-            List.fold_left (fun map ep ->
-                let existing_ids = match Utils.StringMap.find_opt ep map with
-                    | Some ids -> ids
-                    | None -> []
-                in
-                let unique_ids = List.fold_left (fun acc id ->
-                    if List.mem id acc then acc else id :: acc
-                ) existing_ids [interface_member.d.inf_mem_id] in
-                Utils.StringMap.add ep unique_ids map
-            ) acc_map eps
-        | None -> raise (Failure "Interface member missing definition")
-
-    ) Utils.StringMap.empty pool_def.d.interface_members 
-(* for each pool member map based on endpoint of the message used at highest level *)
-
-let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (verbose : bool) : (bool * string) =
-    let ep_intfc_map = create_ep_id_intfc_id_map_with_debug pool_def in
-    if verbose then
-        (
-        Printf.eprintf "[Debug] Endpoint to Interface ID map: %d\n" (Utils.StringMap.cardinal ep_intfc_map);
-        Printf.eprintf "[Debug] Endpoint mappings:\n";
-        Utils.StringMap.iter (fun ep intf_ids ->
-            Printf.eprintf "  Endpoint %s: Interface IDs [%s]\n" ep (String.concat "; " intf_ids)
-        ) ep_intfc_map;
-        );
-    
-    let session_ids = List.filter_map (fun intf_member ->
-        match intf_member.d.interface_def with
-        | Some intf_in -> Some ({d = intf_in; span = intf_member.span}, intf_member.d.inf_mem_id)
-        | None -> raise (Failure "Interface member missing definition")
-    ) pool_def.d.interface_members in
 
     let prod_auto = create_product session_ids verbose in
 
@@ -1228,7 +1165,7 @@ let check_compatibility_multiparty (pool_def : interface_pool_def ast_node) (ver
     let total_reachable_states = Hashtbl.length prod_auto.states in
     if verbose then
         Printf.eprintf "[Debug] Total reachable states in product automaton: %d\n" total_reachable_states;
-    let out = Stdlib.open_out ("prod_auto_"^pool_def.d.pool_id^".dot") in
+    let out = Stdlib.open_out ("prod_auto_"^pool_id^".dot") in
     print_automaton_dot prod_auto out;
     Stdlib.close_out out;
     flush stderr;
