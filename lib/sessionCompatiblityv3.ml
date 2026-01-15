@@ -747,8 +747,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     let auto = build_automaton st_node.d st_node.span in
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
     assert (List.length final_state = 1);
-    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty true false false false;
-    TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.singleton Delay) true false false false;
+    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false true false false;
+    TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.singleton Delay) false true false false;
     TypeAutomaton.make_fair auto (List.hd final_state);
     (auto, intf_id)
   ) session_ids in
@@ -761,9 +761,6 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
       flush stderr;
     ) automata_ids
   );
-    
-
-  let state_space_size = List.fold_left (fun acc (auto, _) -> acc * (Hashtbl.length auto.states)) 1 automata_ids in
   
   let state_map : (int list, int) Hashtbl.t = Hashtbl.create 10 in
   let prod_auto = TypeAutomaton.create () in
@@ -777,8 +774,6 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     )
   in
 
-  if verbose then
-    Printf.eprintf "Creating product automaton with state space size: %d\n" state_space_size;
 
   let worklist = ref [List.map(fun (auto, _) -> auto.start_state) automata_ids] in
   let visited = ref IntListSet.empty  in
@@ -1126,15 +1121,15 @@ let check_compatibility_multiparty
 
     let prod_auto = create_product session_ids verbose in
 
+    Printf.eprintf "Product Construction Completed. Total States: %d\n" (Hashtbl.length prod_auto.states);
+
     Hashtbl.iter (fun state_id _ ->
         label_adversary_state prod_auto state_id
     ) prod_auto.states;
     
     let result, err = play_game prod_auto in
+    Printf.eprintf "Game Analysis Completed.\n";
 
-    let total_reachable_states = Hashtbl.length prod_auto.states in
-    if verbose then
-        Printf.eprintf "[Debug] Total reachable states in product automaton: %d\n" total_reachable_states;
     let out = Stdlib.open_out ("prod_auto_"^pool_id^".dot") in
     print_automaton_dot prod_auto out;
     Stdlib.close_out out;

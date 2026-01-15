@@ -176,7 +176,8 @@ let generalized_type_debug _out config =
   );
   let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
     let open Lang in
-    Printf.eprintf "\nGeneralized Types:\n\n";
+    if config.verbose then Printf.eprintf "\nGeneralized Types:\n\n";
+  if config.verbose then
     List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
       Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol sdef.d.body.d);
     ) session_type_defs;
@@ -184,7 +185,7 @@ let generalized_type_debug _out config =
 
   let open SessionCompatiblityv3 in
 
-  Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
+  if config.verbose then Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
         let gen_type = build_automaton sdef.d.body.d sdef.d.body.span in 
@@ -196,8 +197,9 @@ let generalized_type_debug _out config =
 
   (* check compatibility *)
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
-  Printf.eprintf "\nPool Compatiblity Checks:\n\n";
+  if config.verbose then Printf.eprintf "\nPool Compatiblity Checks:\n\n";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
+if config.verbose then
     Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
     let open SessionCompatiblityv3 in
     
