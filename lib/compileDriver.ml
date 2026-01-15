@@ -205,10 +205,10 @@ let generalized_type_debug _out config =
     let session_ids = SessionHelper.preprocess_pool_for_compatibility 
         pool session_type_defs in
 
-      Printf.eprintf "Session IDs in Pool %s: \n" pool.d.pool_id;
+      (* Printf.eprintf "Session IDs in Pool %s: \n" pool.d.pool_id;
       List.iter (fun (st_node, intf_id) ->
         Printf.eprintf "- Interface %s : %s \n" intf_id (string_of_protocol st_node.d)
-      ) session_ids;
+      ) session_ids; *)
     
     let compat, err = try check_compatibility_multiparty session_ids pool.d.pool_id config.verbose
       with

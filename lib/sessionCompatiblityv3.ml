@@ -30,6 +30,8 @@ end
 
 module LabelSet = Set.Make(LabelKindOrd)
 
+let union_labelsets (sets : LabelSet.t list) : LabelSet.t =
+  List.fold_left (fun acc s -> LabelSet.union acc s) LabelSet.empty sets
 module IntListSet = Set.Make(struct
     type t = int list
     let compare = Stdlib.compare
@@ -74,6 +76,9 @@ let print_string_of_transitions (transitions: transition list) : unit =
   ) transitions
 
 let string_of_transitions (transitions: transition list) : string =
+
+  let init = "[\n"  in
+
   let lines = List.map (fun t ->
     let label_str = 
       if t.is_epsilon then "ε"
@@ -83,7 +88,7 @@ let string_of_transitions (transitions: transition list) : string =
     in
     Printf.sprintf "  %d -> %d [label=\"%s\"];" t.from_state t.to_state label_str
   ) transitions in
-  String.concat "\n" lines
+  init ^ (String.concat "\n" lines) ^ "\n]"
 
 
 type typeAutomaton = {
@@ -735,7 +740,6 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
   flush stderr;
   auto
 
-
 let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool)  =
   let automata_ids = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton st_node.d st_node.span in
@@ -758,9 +762,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
   let state_space_size = List.fold_left (fun acc (auto, _) -> acc * (Hashtbl.length auto.states)) 1 automata_ids in
   
   let state_map : (int list, int) Hashtbl.t = Hashtbl.create 10 in
-
   let prod_auto = TypeAutomaton.create () in
-
 
   let get_product_state (states: int list) : int =
     try Hashtbl.find state_map states
@@ -769,22 +771,12 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
       Hashtbl.add state_map states new_id;
       new_id
     )
-    in
-
-  let accepting_states : int list list = List.map (fun (auto, _) ->
-      Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states []
-  ) automata_ids in
-
-  let accepting_states = List.flatten accepting_states in
-
-  assert (List.length accepting_states  == List.length session_ids);
-
+  in
 
   if verbose then
     Printf.eprintf "Creating product automaton with state space size: %d\n" state_space_size;
 
   let worklist = ref [List.map(fun (auto, _) -> auto.start_state) automata_ids] in
-
   let visited = ref IntListSet.empty  in
 
   while !worklist <> [] do
@@ -805,167 +797,141 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         state.accepting
       ) current_states automata_ids in
 
-      let all_accepting = List.for_all (fun x -> x) is_accepting_array in
-
-      if all_accepting then (
+      if List.for_all (fun x -> x) is_accepting_array then (
         (Hashtbl.find prod_auto.states prod_state_id).accepting <- true
-      )
-      else(
+      ) else (
+        
         let transitions_list = List.mapi (fun idx (auto, _) ->
           let state_id = List.nth current_states idx in
           List.filter (fun t -> t.from_state = state_id) auto.transitions
         ) automata_ids in
         
-        (* filter out the epsilon transitions *)
-
-        let epsilon_transitions = List.map ( fun  transition_set ->
-          List.filter_map (fun t ->
-            if t.is_epsilon || t.is_theta || t.is_recurse || t.is_conditional then Some t else None
-          ) transition_set
-        ) transitions_list in
-
         let is_delay t = LabelSet.exists (function Delay -> true | _ -> false) t.label in
 
-
-        let non_epsilon_transitions = List.map ( fun  transition_set ->
+        let epsilon_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
-            if not t.is_epsilon && not t.is_theta && not t.is_recurse && (not (is_delay t) && (not t.is_conditional)) then Some t else None
+            if t.is_epsilon || t.is_theta || t.is_recurse then Some t else None
           ) transition_set
         ) transitions_list in
 
-        let delay_transitions = List.map ( fun  transition_set ->
+        let sync_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
-            if is_delay t then Some t else None
+            if not t.is_epsilon && not t.is_theta && not t.is_recurse && not (is_delay t) 
+            then Some t 
+            else None
           ) transition_set
         ) transitions_list in
 
+        let delay_transitions = List.map (fun transition_set ->
+          List.filter_map (fun t -> if is_delay t then Some t else None) transition_set
+        ) transitions_list in
 
-      
-        (* Handle epsilon transitions first *)
-        (* Then for non epsilon transitions we first pick all valid sets of transitions and make it. at the end if we have an empty worklist and not reached accepting state we can just fail *)
-        List.iteri ( fun i ep_set -> 
-          (
-          List.iter ( fun t ->
-            if not t.is_conditional then (
-            let next_states = List.mapi ( fun idx s->
-              if idx = i then t.to_state
-              else s
-            ) current_states in
 
+        List.iteri (fun i ep_set -> 
+          List.iter (fun t ->
+            let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
             let next_prod_state = get_product_state next_states in
             TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
             if not (IntListSet.mem next_states !visited) then 
-              worklist := next_states :: !worklist
-            )
-          else (
-            (* check if the current states have outgoing labels with messages in the neg msg list *)
-              let msg_list = List.filter_map (function l->
-                match l with
-                | Negation ms -> Some ms
-                | _ -> None
-              ) (LabelSet.elements t.label) in
-              let msg_list = List.flatten msg_list in
-              let has_conflict = List.mapi ( fun idx s->
-                if idx == i then false
-                else (
-                    let auto, _ = List.nth automata_ids idx in
-                    let state = Hashtbl.find auto.states s in
-                    if state.adversary then true
-                    else (
-                    List.exists ( fun m ->
-                      List.exists ( fun offered_m ->
-                        m = offered_m
-                      ) state.offers
-                    ) msg_list
-                    )
-                )
-              ) current_states in
-              if not (List.exists (fun x -> x) has_conflict) then (
-                let next_states = List.mapi ( fun idx s->
-                  if idx = i then t.to_state
-                  else s
-                ) current_states in
+               worklist := next_states :: !worklist
+          ) ep_set
+        ) epsilon_transitions;
 
-                let next_prod_state = get_product_state next_states in
-                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-                if not (IntListSet.mem next_states !visited) then 
-                  worklist := next_states :: !worklist
-              )
-          )
 
-          )ep_set
-          )
-         )epsilon_transitions;
-
-          (* Generate all possible combinations of transitions (one from each automaton) *)
-          let rec cartesian_product lists =
+        let rec cartesian_product lists =
             match lists with
             | [] -> [[]]
             | h :: t ->
                 let rest = cartesian_product t in
-                List.flatten (List.map (fun x ->
-                  List.map (fun r -> x :: r) rest
-                ) h)
-          in
-          
-          let all_transition_combinations = cartesian_product non_epsilon_transitions in
-          (* Printf.eprintf "All transition combinations: \n%s\n" (String.concat "\n|||\n" (List.map string_of_transitions non_epsilon_transitions)); *)
-          let all_delay_combinations = cartesian_product delay_transitions in
+                if h = [] then
+                    (* If this list is empty, use None for this position *)
+                    List.map (fun r -> None :: r) rest
+                else
+                    List.flatten (List.map (fun x -> List.map (fun r -> (Some x) :: r) rest) h)
+        in
 
-          
+        let rec cartesian_product2 lists =
+            match lists with
+            | [] -> [[]]
+            | h :: t ->
+                let rest = cartesian_product2 t in
+                List.flatten (List.map (fun x -> List.map (fun r -> x :: r) rest) h)
+        in
 
-          assert (List.for_all (fun t -> List.length t = List.length automata_ids)all_transition_combinations);
-          assert (List.for_all (fun t -> List.length t = List.length automata_ids)all_delay_combinations);
 
-          let label_set_equivalence l1 l2 =  (
-            let l1_msgs = List.filter_map ( function
-              | Action m -> Some m
-              | _ -> None
-            ) (LabelSet.elements l1) in
-            let l2_msgs = List.filter_map ( function
-              | Action m -> Some m
-              | _ -> None
-            ) (LabelSet.elements l2) in
-            List.for_all ( fun m -> List.exists ( fun m2 -> m = m2 ) l2_msgs  ) l1_msgs
-          )  in
         
+        let all_transition_combinations = cartesian_product sync_transitions in
+
+
         
+        List.iter (fun transition_set ->
 
-        List.iter( fun transition_set -> (
-          (* for all the labels should be same *)
-          if List.length transition_set < 2 then raise (Failure "Unexpected: less than 2 transitions in combination")
-          else(
-            let all_labels_satisfied = List.mapi ( fun id _ ->
-              let own_label = (List.nth transition_set id).label in
-              let other_labels = List.filteri ( fun idx _ -> idx <> id) transition_set in
-              let other_label = List.fold_left ( fun acc t2 ->
-                LabelSet.union acc t2.label
-              ) LabelSet.empty other_labels in
+          let actual_transitions = List.filter_map (fun opt -> opt) transition_set in
+          
 
-              label_set_equivalence own_label other_label
-            ) transition_set in
-            
-            if List.for_all (fun x -> x) all_labels_satisfied then
-            (
-              let next_states = List.mapi ( fun idx _->
-                let t = List.nth transition_set idx in
-                t.to_state
-              ) current_states in
+          if actual_transitions <> [] then (
 
+            let combined_actions = List.flatten (List.map (fun t -> 
+              List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label)
+            ) actual_transitions) in
+
+            let combined_actions = if combined_actions = [] then union_labelsets (List.map (fun t -> t.label) actual_transitions)
+            else List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
+          
+          
+
+          let is_compatible =  (
+            List.mapi( fun i t_opt ->
+                match t_opt with
+                | None -> true (* Empty slot is always compatible *)
+                | Some t ->
+                (
+                      let t_actions = List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label) in
+                      let actions = List.flatten ( List.mapi (fun idx t_opt ->
+                        if idx = i then [] else
+                          match t_opt with
+                          | None -> []
+                          | Some t -> List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label)
+                      ) transition_set) in
+
+                      let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
+
+                      let actions_of_this_state = List.flatten actions_of_this_state in
+
+                      let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
+                      let t_not_acts_flat = List.flatten t_not_acts in
+                      List.for_all( fun ua ->
+                        List.mem ua actions
+                      )t_actions &&
+                      List.for_all( fun tna ->
+                        not (List.mem tna actions_of_this_state)
+                      )t_not_acts_flat
+                )
+            )transition_set
+          ) in 
+
+          let is_compatible = List.for_all (fun x -> x) is_compatible in
+
+            if is_compatible then (
+              let next_states = List.mapi (fun idx t_opt ->
+                let current_state = List.nth current_states idx in
+                match t_opt with
+                | None -> current_state
+                | Some t -> t.to_state
+              ) transition_set in
               let next_prod_state = get_product_state next_states in
-              let combined_label = List.fold_left ( fun acc t ->
-                LabelSet.union acc t.label
-              ) LabelSet.empty transition_set in
-              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label  false false false (List.for_all (fun t -> t.is_conditional) transition_set);
+              
+              
+              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_actions false false false (List.for_all (fun t_opt -> match t_opt with None -> true | Some t -> t.is_conditional) transition_set);
+              
               if not (IntListSet.mem next_states !visited) then 
                 worklist := next_states :: !worklist
             )
           )
-        )
-        )all_transition_combinations;
+        ) all_transition_combinations;
 
+        let all_delay_combinations = cartesian_product2 delay_transitions in
         List.iter( fun transition_set -> (
-          (* for all the labels should be same *)
             if List.length transition_set < 2 then raise (Failure "Unexpected: less than 2 transitions in combination")
             else(
                 let next_states = List.mapi ( fun idx _->
@@ -979,44 +945,36 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                   worklist := next_states :: !worklist
             )
           )
-        )all_delay_combinations;
-        
-          
-    )
+        ) all_delay_combinations;
 
+      )
     )
   done;
 
-  (* assign offers and fair *)
+  (* Assign offers/fair/adversary flags as before... *)
   Hashtbl.iter (fun states prod_state_id ->
     let offers = List.flatten (List.mapi (fun idx st_id ->
       let auto, _ = List.nth automata_ids idx in
       let state = Hashtbl.find auto.states st_id in
       state.offers
     ) states) in
-    let is_fair = List.mapi (fun idx st_id ->
+    let is_fair = List.exists (fun x -> x) (List.mapi (fun idx st_id ->
       let auto, _ = List.nth automata_ids idx in
-      let state = Hashtbl.find auto.states st_id in
-      state.is_fair
-    ) states in
+      (Hashtbl.find auto.states st_id).is_fair
+    ) states) in
+    let is_adversary = List.exists (fun x -> x) (List.mapi (fun idx st_id ->
+      let auto, _ = List.nth automata_ids idx in
+      (Hashtbl.find auto.states st_id).adversary
+    ) states) in
 
-    let is_adversary = List.mapi (fun idx st_id ->
-      let auto, _ = List.nth automata_ids idx in
-      let state = Hashtbl.find auto.states st_id in
-      state.adversary
-    ) states in
-    let is_fair = List.exists (fun x -> x) is_fair in
-    let is_adversary = List.exists (fun x -> x) is_adversary in
     let prod_state = Hashtbl.find prod_auto.states prod_state_id in
     prod_state.offers <- offers;
     prod_state.is_fair <- is_fair;
     prod_state.adversary <- is_adversary
   ) state_map;
-    
 
-  (* print_state_map *)
+  (* Debug output *)
   if verbose then Hashtbl.iter (fun states prod_state_id ->
-    if verbose then
       Printf.eprintf "Product state %d corresponds to states %s\n" prod_state_id (String.concat "," (List.map string_of_int states))
   ) state_map;
 
