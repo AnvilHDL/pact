@@ -745,7 +745,9 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     let auto = build_automaton st_node.d st_node.span in
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
     assert (List.length final_state = 1);
-    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false false true false;
+    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false true false false;
+    TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.singleton Delay) false true false false;
+    TypeAutomaton.make_fair auto (List.hd final_state);
     (auto, intf_id)
   ) session_ids in
 
