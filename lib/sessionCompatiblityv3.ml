@@ -21,11 +21,14 @@ type label_kind =
   | Action of message_specifier
   | Delay
   | Negation of message_specifier list
+  | Theta of session_type
+  | Recurse of identifier
   | Terminal of int
 
 module LabelKindOrd = struct
   type t = label_kind
   let compare = Stdlib.compare
+  let equal l1 l2 = (compare l1 l2) = 0
 end
 
 module LabelSet = Set.Make(LabelKindOrd)
@@ -48,7 +51,9 @@ let string_of_label_set (ls: LabelSet.t) : string =
     | Negation ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
       Printf.sprintf "Negation([%s])" ms_str
+    | Theta st -> Printf.sprintf "Theta(%s)" (Lang.string_of_protocol st)
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
+    | Recurse var -> Printf.sprintf "$"^var
   ) elements in
   "{" ^ (String.concat ", " str_list) ^ "}"
 
@@ -67,7 +72,7 @@ let print_string_of_transitions (transitions: transition list) : unit =
   List.iter (fun t ->
     let label_str = 
       if t.is_epsilon then "ε"
-      else if t.is_theta then "θ"
+      else if t.is_theta then "θ"^(string_of_label_set t.label)
       else if t.is_recurse then "$"
       else
         string_of_label_set t.label
@@ -83,6 +88,7 @@ let string_of_transitions (transitions: transition list) : string =
     let label_str = 
       if t.is_epsilon then "ε"
       else if t.is_theta then "θ"
+      else if t.is_recurse then (string_of_label_set t.label)
       else
         string_of_label_set t.label
     in
@@ -100,6 +106,7 @@ let string_of_transition (t: transition) : string =
   Printf.sprintf "  %d -> %d [label=\"%s\"];" t.from_state t.to_state label_str
 
 type typeAutomaton = {
+  mutable name : identifier;
   mutable states : (int, state) Hashtbl.t;
   mutable transitions : transition list;
   mutable start_state : int;
@@ -119,12 +126,15 @@ module TypeAutomaton = struct
     Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false; is_winning = false; offers = []; is_fair = false };
     let rec_var_state_map = Hashtbl.create 10 in
     {
+      name = "";
       states = states;
       transitions = [];
       start_state = start_state;
       next_state_id = 1;
       rec_var_state_map = rec_var_state_map;
     }
+  let change_name (id : identifier) (auto: t) : unit =
+    auto.name <- id
 
   let new_state (auto: t) (accepting: bool) : int =
     let id = auto.next_state_id in
@@ -209,7 +219,6 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
     let label_str = 
       if t.is_epsilon then "ε"
       else if t.is_theta then "θ"
-      else if t.is_recurse then "$"
       else
         String.concat "," (LabelSet.elements t.label |> List.map (function
           | Action m -> Printf.sprintf "%s" (Lang.string_of_msg_spec m)
@@ -218,6 +227,8 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
           | Negation ms ->
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
             Printf.sprintf "¬[%s]" ms_str
+          | Theta st -> Printf.sprintf "θ(%s)" (Lang.string_of_protocol st)
+          | _ -> string_of_label_set t.label
         ))
     in
     Printf.fprintf out "  %d -> %d [label=\"%s\"];\n" t.from_state t.to_state label_str
@@ -284,8 +295,15 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
 
 
 
-let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) : TypeAutomaton.t =
+let rec build_automaton (name : identifier option) (st: Lang.session_type) (default_span : Lang.code_span)  : TypeAutomaton.t =
   let auto = TypeAutomaton.create () in
+
+  (
+  match name with 
+  | Some id -> TypeAutomaton.change_name id auto
+  | None -> ()
+  )
+  ;
   
   (* Internal recursive builder *)
   let rec build (s_type: Lang.session_type) (current: int) : int =
@@ -336,17 +354,18 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
     | Lang.StyChoice (st1, st2) -> (* Internal choice m1 + m2 *)
       (Hashtbl.find auto.states current).accepting <- false;
       let left_root = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current left_root LabelSet.empty false true false false;
+      TypeAutomaton.add_transition auto current left_root (LabelSet.singleton (Theta st1)) false true false false;
       let right_root = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current right_root LabelSet.empty false true false false;
+      TypeAutomaton.add_transition auto current right_root (LabelSet.singleton (Theta st2)) false true false false;
       let left_end = build st1 left_root in
       let right_end = build st2 right_root in
-      (* TypeAutomaton.append_offers auto current ( (Hashtbl.find auto.states left_root).offers @ (Hashtbl.find auto.states right_root).offers ); *)
       (Hashtbl.find auto.states left_end).accepting <- false;
       (Hashtbl.find auto.states right_end).accepting <- false;
       let choice_state = TypeAutomaton.new_state auto true in
-      TypeAutomaton.reroute_transitions auto left_end choice_state;
-      TypeAutomaton.reroute_transitions auto right_end choice_state;
+      if not (left_end = current) then
+        TypeAutomaton.reroute_transitions auto left_end choice_state;
+      if not (right_end = current) then
+        TypeAutomaton.reroute_transitions auto right_end choice_state;
       choice_state
     | Lang.StyTrue -> 
       (* StyTrue represents successful termination - just return current state as accepting *)
@@ -561,8 +580,8 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
 
   and create_synchronous_product (auto: TypeAutomaton.t) (st1: Lang.session_type) (st2: Lang.session_type) (current_start_node: int) (default_span : code_span) : int =
     (* Build sub-automata for st1 and st2 *)
-    let auto1 = build_automaton st1 default_span in
-    let auto2 = build_automaton st2 default_span in
+    let auto1 = build_automaton None st1 default_span in
+    let auto2 = build_automaton None st2 default_span in
     
     (* Build product automaton manually into `auto` *)
     let state_map : ((int * int), int) Hashtbl.t = Hashtbl.create 10 in
@@ -752,12 +771,13 @@ let rec build_automaton (st: Lang.session_type) (default_span : Lang.code_span) 
 
 let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool)  =
   let automata_ids = List.map (fun (st_node, intf_id) ->
-    let auto = build_automaton st_node.d st_node.span in
+    let auto = build_automaton (Some intf_id) st_node.d st_node.span in
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
     assert (List.length final_state = 1);
-    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false true false false;
-    TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.singleton Delay) false true false false;
-    TypeAutomaton.make_fair auto (List.hd final_state);
+    (* TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state LabelSet.empty false true false false; *)
+    (* TypeAutomaton.add_transition auto (List.hd final_state) (List.hd final_state) (LabelSet.empty) false true false false; *)
+    (* TypeAutomaton.make_fair auto (List.hd final_state); *)
+    TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state (LabelSet.singleton (Recurse intf_id)) false false true false;
     (auto, intf_id)
   ) session_ids in
 
@@ -805,7 +825,12 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
       ) current_states automata_ids in
 
       if List.for_all (fun x -> x) is_accepting_array then (
-        (Hashtbl.find prod_auto.states prod_state_id).accepting <- true
+        (Hashtbl.find prod_auto.states prod_state_id).accepting <- true;
+        let combined_label = List.map(fun (_, id) ->
+          LabelSet.singleton (Recurse id)
+        )automata_ids  in
+        let combined_label = union_labelsets combined_label in
+        TypeAutomaton.add_transition prod_auto prod_state_id prod_auto.start_state combined_label false false true false;
       ) else (
         
         let transitions_list = List.mapi (fun idx (auto, _) ->
@@ -827,6 +852,18 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           ) transition_set
         ) epsilon_transitions in
 
+        let _recurse_transitions = List.map (fun transition_set ->
+          List.filter_map (fun t ->
+            if t.is_recurse then Some t else None
+          ) transition_set
+        ) epsilon_transitions in
+
+        let epsilon_transitions = List.map (fun transition_set ->
+          List.filter_map (fun t ->
+            if t.is_epsilon then Some t else None
+          ) transition_set
+        ) epsilon_transitions in
+
         if List.for_all (fun ts -> ts = []) theta_transitions then (
         let sync_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
@@ -839,6 +876,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         let delay_transitions = List.map (fun transition_set ->
           List.filter_map (fun t -> if is_delay t then Some t else None) transition_set
         ) transitions_list in
+
+        let all_has_delay = List.for_all (fun dt -> dt <> []) delay_transitions in
 
 
         List.iteri (fun i ep_set -> 
@@ -876,11 +915,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         
         let all_transition_combinations = cartesian_product sync_transitions in
 
-
+        let found = ref false in
         
         List.iter (fun transition_set ->
 
           let actual_transitions = List.filter_map (fun opt -> opt) transition_set in
+
+
           
 
           if actual_transitions <> [] then (
@@ -891,13 +932,16 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
             let combined_actions = if combined_actions = [] then union_labelsets (List.map (fun t -> t.label) actual_transitions)
             else List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
-          
+          (* let no_delay_transitions = List.for_all(
+            fun t ->
+              t = []
+          )delay_transitions in *)
 
 
-          let is_compatible =  (
+          let is_compatible  =  (
             List.mapi( fun i t_opt ->
                 match t_opt with
-                | None -> true (* Empty slot is always compatible *)
+                | None -> (true,true, true) (* Empty slot is always compatible *)
                 | Some t ->
                 (
                       let t_actions = List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label) in
@@ -908,23 +952,40 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                           | Some t -> List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label)
                       ) transition_set) in
 
-                      (* let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
+                      let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
 
-                      let actions_of_this_state = List.flatten actions_of_this_state in *)
+                      let actions_of_this_state = List.flatten actions_of_this_state in
 
                       let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
                       let t_not_acts_flat = List.flatten t_not_acts in
-                      List.for_all( fun ua ->
-                        List.mem ua actions
-                      )t_actions &&
-                      List.for_all( fun tna ->
-                        not (List.mem tna actions)
-                      )t_not_acts_flat
+                      (
+                        (
+                          List.for_all( fun ua ->
+                            List.mem ua actions
+                          )t_actions &&
+                          List.for_all( fun tna ->
+                            not (List.mem tna actions)
+                          )t_not_acts_flat
+                        ), 
+                        t.is_conditional,
+                        (
+                        List.for_all( fun tna ->
+                          not (List.mem tna actions_of_this_state)
+                        )t_not_acts_flat
+                        )&&t.is_conditional
+                      )
                 )
             )transition_set
           ) in 
 
-          let is_compatible = List.for_all (fun x -> x) is_compatible in
+          let is_all_conditional = List.for_all (fun (_, cond,_) -> cond) is_compatible in
+          let is_strongly_needed = List.for_all (fun (_, _, strong) -> strong) is_compatible in
+
+          (* let is_strong_compatible = List.map (fun (_, _ , strong) -> strong) is_compatible in *)
+
+          let is_compatible = List.for_all (fun (x, _,_) -> x) is_compatible in
+
+
 
           (* Printf.eprintf "[%s] Transition Combination: %s\n" (string_of_bool is_compatible) (String.concat "; " (List.mapi (fun i t_opt ->
             match t_opt with
@@ -932,24 +993,41 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             | Some t -> "Auto "^(string_of_int i)^": "^(string_of_transition t)
           ) transition_set)); *)
 
-            if is_compatible then (
+            if is_compatible && (not is_all_conditional || is_strongly_needed) then (
               let next_states = List.mapi (fun idx t_opt ->
                 let current_state = List.nth current_states idx in
                 match t_opt with
                 | None -> current_state
-                | Some t -> t.to_state
+                | Some t -> if (not t.is_conditional || is_strongly_needed) then t.to_state else current_state
               ) transition_set in
               let next_prod_state = get_product_state next_states in
               
               
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_actions false false false (List.for_all (fun t_opt -> match t_opt with None -> true | Some t -> t.is_conditional) transition_set);
-              
+              found := true;
               if not (IntListSet.mem next_states !visited) then 
                 worklist := next_states :: !worklist
+
             )
           )
         ) all_transition_combinations;
 
+        if not !found then (
+          List.iteri (fun i t_set -> 
+            if List.length t_set > 1 then raise (Failure "Unexpected: more than 1 recurse transition in set")
+            else if List.length t_set = 1 then (
+              let t = List.hd t_set in
+              let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
+              let next_prod_state = get_product_state next_states in
+              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+              if not (IntListSet.mem next_states !visited) then 
+                 worklist := next_states :: !worklist
+            ) 
+          )_recurse_transitions
+        );
+
+        if all_has_delay then
+        ( 
         let all_delay_combinations = cartesian_product2 delay_transitions in
         List.iter( fun transition_set -> (
             if List.length transition_set < 2 then raise (Failure "Unexpected: less than 2 transitions in combination")
@@ -966,6 +1044,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )
           )
         ) all_delay_combinations;
+        )
         )
         else
         (
@@ -1048,70 +1127,89 @@ let can_reach_self (graph_transitions : transition list) (start_node : int) (tar
       ) neighbors
   done;
   !found
-let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
+let find_counterexample (auto : TypeAutomaton.t) (start_id : int) (is_winning : (int, bool) Hashtbl.t) : string =
+  let visited = Hashtbl.create 16 in
+  let buffer = Buffer.create 256 in
+  
+  let rec traverse (curr_id : int) (steps : int) =
+    if steps > 50 then 
+      Buffer.add_string buffer "\n...[Trace truncated: depth limit reached]"
+    else if Hashtbl.mem visited curr_id then
+      Printf.bprintf buffer "\nState %d (CYCLE DETECTED - Loop in losing set)" curr_id
+    else (
+      Hashtbl.add visited curr_id ();
+      let state = Hashtbl.find auto.states curr_id in
+      
+      let role = if state.adversary then "Adversary" else "Player" in
+      Printf.bprintf buffer "\n-> State %d [%s]" curr_id role;
+
+      let outgoing = List.filter (fun t -> t.from_state = curr_id) auto.transitions in
+      if outgoing = [] then
+         if not state.accepting then 
+           Buffer.add_string buffer " -> DEADLOCK (Non-accepting state with no moves)"
+         else 
+           Buffer.add_string buffer " -> END (Accepting state, but logic marked it losing?)"
+      else
+        let next_step = 
+          if state.adversary then
+
+            try Some (List.find (fun t -> not (Hashtbl.mem is_winning t.to_state)) outgoing)
+            with Not_found -> None 
+          else
+            match outgoing with
+            | [] -> None
+            | h :: _ -> Some h
+        in
+
+        match next_step with
+        | Some t ->
+            let label_str = string_of_label_set t.label in
+            Printf.bprintf buffer " --[%s]--> " label_str;
+            traverse t.to_state (steps + 1)
+        | None -> 
+            Buffer.add_string buffer " [Analysis stuck: No transitions to losing states found]"
+    )
+  in
+  traverse start_id 0;
+  Buffer.contents buffer
+
+
+let play_game (prod_auto : TypeAutomaton.t) (_ids : identifier list ) : (bool * string) =
   
   let is_winning : (int, bool) Hashtbl.t = Hashtbl.create 10 in
-  
 
   Hashtbl.iter (fun state_id state ->
     if state.accepting then
       Hashtbl.add is_winning state_id true
   ) prod_auto.states;
-  
 
   let changed = ref true in
   while !changed do
     changed := false;
-    
     Hashtbl.iter (fun state_id state ->
-      (* Skip if already marked as winning *)
       if not (Hashtbl.mem is_winning state_id) then (
-        (* Get all outgoing transitions from this state *)
-        let outgoing = List.filter (fun t -> 
-          t.from_state = state_id
-        ) prod_auto.transitions in
+        let outgoing = List.filter (fun t -> t.from_state = state_id) prod_auto.transitions in
         
-        if outgoing = [] then
-          ()
-        else
-          (* look for transitions leading to self starting with this transition *)
-
+        if outgoing <> [] then
           let should_mark_winning = 
-            if state.is_fair then
-              (
-                      List.for_all (fun t ->
-                        if t.from_state = t.to_state then true
-                        else (
-                          let has_path_to_self = can_reach_self prod_auto.transitions t.to_state state.id in
-
-                        (Hashtbl.mem is_winning t.to_state &&
-                        Hashtbl.find is_winning t.to_state) || has_path_to_self
-
-                        )
-                      ) outgoing
-                  )
-            
-                  else if state.adversary then
-                  (
-                        List.for_all (fun t ->
-                          if t.from_state = t.to_state then
-                            true
-                          else
-                          Hashtbl.mem is_winning t.to_state &&
-                          Hashtbl.find is_winning t.to_state
-                        )outgoing
-                  )
-                  else
-                    (
-                    (* Player state: AT LEAST ONE child must be winning *)
-                    List.exists (fun t ->
-                      if t.from_state = t.to_state then
-                        false
-                      else
-                      Hashtbl.mem is_winning t.to_state &&
-                      Hashtbl.find is_winning t.to_state
-                    ) outgoing
-                    )
+            if state.is_fair then (
+              List.for_all (fun t ->
+                 if t.from_state = t.to_state then true
+                 else (
+                   let has_path_to_self = can_reach_self prod_auto.transitions t.to_state state.id in
+                   (Hashtbl.mem is_winning t.to_state && Hashtbl.find is_winning t.to_state) 
+                   || has_path_to_self
+                 )
+              ) outgoing
+            ) else if state.adversary then (
+              List.for_all (fun t ->
+                Hashtbl.mem is_winning t.to_state && Hashtbl.find is_winning t.to_state
+              ) outgoing
+            ) else (
+              List.exists (fun t ->
+                Hashtbl.mem is_winning t.to_state && Hashtbl.find is_winning t.to_state
+              ) outgoing
+            )
           in
           
           if should_mark_winning then (
@@ -1122,30 +1220,19 @@ let play_game (prod_auto : TypeAutomaton.t) : (bool * string) =
     ) prod_auto.states
   done;
   
+  Hashtbl.iter (fun state_id state ->
+    state.is_winning <- Hashtbl.mem is_winning state_id
+  ) prod_auto.states;
 
-Hashtbl.iter (fun state_id is_win ->
-  if is_win then
-    let state = Hashtbl.find prod_auto.states state_id in
-    state.is_winning <- true;
-) is_winning;
-
-Hashtbl.iter (fun state_id state ->
-  if not (Hashtbl.mem is_winning state_id) then
-    state.is_winning <- false;
-
-) prod_auto.states;
-  let start_is_winning = 
-    Hashtbl.mem is_winning prod_auto.start_state &&
-    Hashtbl.find is_winning prod_auto.start_state
-  in
+  let start_is_winning = Hashtbl.mem is_winning prod_auto.start_state in
   
   if start_is_winning then
-    (true, "Compatibility verified: winning strategy exists from start state")
-  else
-    (false, Printf.sprintf "Compatibility failed: start state %d is not winning" prod_auto.start_state)
-
-
-
+    (true, "Compatibility verified: winning strategy exists.")
+  else (
+    let trace = find_counterexample prod_auto prod_auto.start_state is_winning in
+    let error_msg = Printf.sprintf "Compatibility failed. Losing Trace:\n%s" trace in
+    (false, error_msg)
+  )
 let check_compatibility_multiparty 
     (session_ids : ((session_type ast_node) * identifier) list)
     (pool_id : identifier)
@@ -1160,8 +1247,10 @@ let check_compatibility_multiparty
     Hashtbl.iter (fun state_id _ ->
         label_adversary_state prod_auto state_id
     ) prod_auto.states;
+
+    let ids_list = List.map snd session_ids in
     
-    let result, err = play_game prod_auto in
+    let result, err = play_game prod_auto ids_list in
     Printf.eprintf "Game Analysis Completed.\n";
 
     let out = Stdlib.open_out ("prod_auto_"^pool_id^".dot") in

@@ -932,7 +932,7 @@ in get_lv lv
       StyAtom (AtomicAct (add_ep_to_atomic_action ep atm))
   | StySeq (p1, p2) -> *)
 
-let rec string_of_protocol p =
+let rec string_of_protocol_for_graph p =
 let rec aux p =
   match p with
   | StySeq (p1, p2) ->
@@ -963,7 +963,50 @@ and string_of_atomic_action atomic_action =
 and string_of_aa_with_gap = function
   | AtomicAct act -> string_of_atomic_action act
   | AtomDelay n -> Printf.sprintf "#<%d>" n
+  | AtomTerminal sty -> "( end of " ^ string_of_protocol_for_graph sty ^ " )"
+and aux2 p =
+  match p with
+  | {trigger; continuation} ->
+    match continuation with
+    | None -> string_of_aa_with_gap trigger
+    | Some p_continuation -> string_of_aa_with_gap trigger ^ " : " ^ aux p_continuation
+in aux p
+
+
+
+let rec string_of_protocol p =
+let rec aux p =
+  match p with
+  | StySeq (p1, p2) ->
+      aux p1 ^ ";" ^ aux p2 
+  | StyTrue ->
+      "∅"
+  | StyChoice (p1, p2) ->
+      "(" ^ aux p1 ^ "+" ^ aux p2 ^ ")"
+  | StyOffer ps ->
+      "(" ^ String.concat "& " (List.map aux2 ps) ^ ")"
+  | StyXOffer ps ->
+      "(" ^ String.concat " ^ " (List.map aux2 ps) ^ ")"
+  | StyAtom act -> string_of_aa_with_gap act
+  | StyFuture p_inner ->
+      "F(" ^ aux p_inner ^ ")"
+  | StyParallel (p1, p2) ->
+      "(" ^ aux p1 ^ " ||  " ^ aux p2 ^ ")"
+  | StyRec (id, p_body) ->
+      "μ " ^ id ^ ".( " ^ aux p_body ^ ")"
+  | StyVar id ->
+      id
+  | StyLet (id, p_def, p_body) ->
+      "let " ^ id ^ " = " ^ aux p_def ^ " in " ^ aux p_body
+and string_of_atomic_action atomic_action =
+  match atomic_action with
+  | AtomBMsg id -> string_of_msg_spec id
+  | AtomNBMsg id -> "#" ^ string_of_msg_spec id
+and string_of_aa_with_gap = function
+  | AtomicAct act -> string_of_atomic_action act
+  | AtomDelay n when n > 0 -> Printf.sprintf "#<%d>" n
   | AtomTerminal sty -> "( end of " ^ string_of_protocol sty ^ " )"
+  | _ -> "*"
 and aux2 p =
   match p with
   | {trigger; continuation} ->
@@ -979,8 +1022,9 @@ let  string_of_atomic_action act =
   
 let string_of_atomic_action_with_gap = function
   | AtomicAct act -> string_of_atomic_action act
-  | AtomDelay n -> Printf.sprintf "#<%d>" n
+  | AtomDelay n when n > 0 -> Printf.sprintf "#<%d>" n
   | AtomTerminal sty -> "( end of " ^ string_of_protocol sty ^ " )"
+  | _ -> "*"
 
 
 

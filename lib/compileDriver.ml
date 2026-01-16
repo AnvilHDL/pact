@@ -138,7 +138,7 @@ let automata_debug _out config =
     let open SessionCompatiblityv3 in
   (* First build and print automaton for session types *)
   List.iter (fun (sdef : session_def ast_node) ->
-    let auto = SessionCompatiblityv3.build_automaton sdef.d.body.d sdef.d.body.span in
+    let auto = SessionCompatiblityv3.build_automaton None sdef.d.body.d sdef.d.body.span in
     let out_channel = Printf.sprintf "automaton_%s.dot" sdef.d.name in
     let out = open_out out_channel in
     print_automaton_dot auto out;
@@ -188,7 +188,7 @@ let generalized_type_debug _out config =
   if config.verbose then Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
-        let gen_type = build_automaton sdef.d.body.d sdef.d.body.span in 
+        let gen_type = build_automaton None sdef.d.body.d sdef.d.body.span in 
         let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
         let out = open_out out_channel in
         print_automaton_dot gen_type out;
