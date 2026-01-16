@@ -90,6 +90,14 @@ let string_of_transitions (transitions: transition list) : string =
   ) transitions in
   init ^ (String.concat "\n" lines) ^ "\n]"
 
+let string_of_transition (t: transition) : string =
+  let label_str = 
+    if t.is_epsilon then "ε"
+    else if t.is_theta then "θ"
+    else
+      string_of_label_set t.label
+  in
+  Printf.sprintf "  %d -> %d [label=\"%s\"];" t.from_state t.to_state label_str
 
 type typeAutomaton = {
   mutable states : (int, state) Hashtbl.t;
@@ -884,7 +892,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             let combined_actions = if combined_actions = [] then union_labelsets (List.map (fun t -> t.label) actual_transitions)
             else List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
           
-          
+
 
           let is_compatible =  (
             List.mapi( fun i t_opt ->
@@ -900,9 +908,9 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                           | Some t -> List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label)
                       ) transition_set) in
 
-                      let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
+                      (* let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
 
-                      let actions_of_this_state = List.flatten actions_of_this_state in
+                      let actions_of_this_state = List.flatten actions_of_this_state in *)
 
                       let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
                       let t_not_acts_flat = List.flatten t_not_acts in
@@ -910,13 +918,19 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                         List.mem ua actions
                       )t_actions &&
                       List.for_all( fun tna ->
-                        not (List.mem tna actions_of_this_state)
+                        not (List.mem tna actions)
                       )t_not_acts_flat
                 )
             )transition_set
           ) in 
 
           let is_compatible = List.for_all (fun x -> x) is_compatible in
+
+          (* Printf.eprintf "[%s] Transition Combination: %s\n" (string_of_bool is_compatible) (String.concat "; " (List.mapi (fun i t_opt ->
+            match t_opt with
+            | None -> Printf.sprintf "Auto %d: None" i
+            | Some t -> "Auto "^(string_of_int i)^": "^(string_of_transition t)
+          ) transition_set)); *)
 
             if is_compatible then (
               let next_states = List.mapi (fun idx t_opt ->

@@ -1,10 +1,153 @@
-// interface seq (ep : left ch) = (ep.req >> ep.ack) ;
 
-// interface nb_seq (ep : left ch) = #ep.req >> ep.ack ;
+interface slave_itfc(r_req_ep :left arbiter_slave_ch<T1> , slv_r_ep : left slv_r_ch<r_pack_t> ) =
+         r_req_ep.req ; r_req_ep.gnt ; slv_r_ep.res; ^(slv_r_ep.data, slv_r_ep.err) ; #1 
 
-// interface Fd (ep : left ch) = F ep.req >> ep.ack ;
+interface rr_arbiter_itfc(slv_ep1 : right arbiter_slave_ch<T>, slv_ep2 : right arbiter_slave_ch<T>, slv_ep3 : right arbiter_slave_ch<T>, slv_ep4 : right arbiter_slave_ch<T>, slv_ep5 : right arbiter_slave_ch<T>, slv_ep6 : right arbiter_slave_ch<T>, slv_ep7 : right arbiter_slave_ch<T>, slv_ep8 : right arbiter_slave_ch<T>, mst_ep : left req_inp_ch<ar_sel_pack_t>) =
 
-// interface choice (ep : left ch) = (ep.req + ep.ack) ;
+^( 
+   slv_ep1.req : mst_ep.req ; #slv_ep1.gnt,
+   slv_ep2.req : mst_ep.req ; #slv_ep2.gnt
+//    slv_ep3.req : mst_ep.req ; #slv_ep3.gnt,
+//    slv_ep4.req : mst_ep.req ; #slv_ep4.gnt,
+//    slv_ep5.req : mst_ep.req ; #slv_ep5.gnt,
+//    slv_ep6.req : mst_ep.req ; #slv_ep6.gnt,
+//    slv_ep7.req : mst_ep.req ; #slv_ep7.gnt,
+//    slv_ep8.req : mst_ep.req ; #slv_ep8.gnt
+) ; #1
 
-interface recType1(ep : left ch) = 
-    let t = ep.req in (t || rec X . ^ ($t , ep.ack : X )) ;
+interface fifo_itfc(ep : left fifo_ch<data_t>) =  ((ep.full ; ep.pop;#1) + (ep.empty ; ep.push;#1) + &(ep.push, ep.pop)) ; #1
+
+interface master_itfc(mst_req_ep : right ar_mast_ch,  mst_res_ep : left req_inp_ch<r_pack_t>) = #4 ; mst_req_ep.rdy ; mst_req_ep.data ; mst_res_ep.req ; #1 
+
+
+interface spill_register_itfc(inp_ep : right req_inp_ch<T>, out_ep : left reg_out_ch<T>) = (inp_ep.req ; #1) +  (&(inp_ep.req: #1, out_ep.spill: #1, *:#1)) + (out_ep.spill ; #1)
+
+// interface mux_main (
+//     ar_req_ep : right reg_out_ch<ar_sel_pack_t>,
+//     mst_req_ep : left ar_mast_ch <ar_pack_t>,
+//     r_sr_ep : right reg_out_ch <r_pack_t>,
+//     fifo_ep : right fifo_ch<select_t>,
+//     slv_ep1 : right slv_r_ch<r_pack_t>,
+//     slv_ep2 : right slv_r_ch<r_pack_t>,
+//     slv_ep3 : right slv_r_ch<r_pack_t>,
+//     slv_ep4 : right slv_r_ch<r_pack_t>,
+//     slv_ep5 : right slv_r_ch<r_pack_t>,
+//     slv_ep6 : right slv_r_ch<r_pack_t>,
+//     slv_ep7 : right slv_r_ch<r_pack_t>,
+//     slv_ep8 : right slv_r_ch<r_pack_t>
+// ) =^(
+//         fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (^(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data , slv_ep3.res : slv_ep3.err + slv_ep3.data , slv_ep4.res : slv_ep4.err + slv_ep4.data , slv_ep5.res : slv_ep5.err + slv_ep5.data , slv_ep6.res : slv_ep6.err + slv_ep6.data , slv_ep7.res : slv_ep7.err + slv_ep7.data , slv_ep8.res : slv_ep8.err + slv_ep8.data)),
+//         fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
+//         * : & (mst_req_ep.rdy : ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push, r_sr_ep.spill : fifo_ep.pop ; ^(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data , slv_ep3.res : slv_ep3.err + slv_ep3.data , slv_ep4.res : slv_ep4.err + slv_ep4.data , slv_ep5.res : slv_ep5.err + slv_ep5.data , slv_ep6.res : slv_ep6.err + slv_ep6.data , slv_ep7.res : slv_ep7.err + slv_ep7.data , slv_ep8.res : slv_ep8.err + slv_ep8.data))
+//     ) ; #1 
+
+interface mux_main (
+    ar_req_ep : right reg_out_ch<ar_sel_pack_t>,
+    mst_req_ep : left ar_mast_ch <ar_pack_t>,
+    r_sr_ep : right reg_out_ch <r_pack_t>,
+    fifo_ep : right fifo_ch<select_t>,
+    slv_ep1 : right slv_r_ch<r_pack_t>,
+    slv_ep2 : right slv_r_ch<r_pack_t>,
+    slv_ep3 : right slv_r_ch<r_pack_t>,
+    slv_ep4 : right slv_r_ch<r_pack_t>,
+    slv_ep5 : right slv_r_ch<r_pack_t>,
+    slv_ep6 : right slv_r_ch<r_pack_t>,
+    slv_ep7 : right slv_r_ch<r_pack_t>,
+    slv_ep8 : right slv_r_ch<r_pack_t>
+) =^(
+        fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (^(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data )),
+        fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
+        * : & (mst_req_ep.rdy : ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push, r_sr_ep.spill : fifo_ep.pop ; ^(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data ))
+    ) ; #1 
+
+pool arbiter_slave_pool {
+    slv_ep1 -- arb_ep1 : arbiter_slave_ch<ar_pack_t>,
+    slv_ep2 -- arb_ep2 : arbiter_slave_ch<ar_pack_t>,
+    // slv_ep3 -- arb_ep3 : arbiter_slave_ch<ar_pack_t>,
+    // slv_ep4 -- arb_ep4 : arbiter_slave_ch<ar_pack_t>,
+    // slv_ep5 -- arb_ep5 : arbiter_slave_ch<ar_pack_t>,
+    // slv_ep6 -- arb_ep6 : arbiter_slave_ch<ar_pack_t>,
+    // slv_ep7 -- arb_ep7 : arbiter_slave_ch<ar_pack_t>,
+    // slv_ep8 -- arb_ep8 : arbiter_slave_ch<ar_pack_t>,
+    arb_reg_ep -- reg_arb_ep : req_inp_ch<ar_sel_pack_t>,
+    slv_ep_r_1 -- mux_ep_r_1 : slv_r_ch<r_pack_t>,
+    slv_ep_r_2 -- mux_ep_r_2 : slv_r_ch<r_pack_t>,
+    // slv_ep_r_3 -- mux_ep_r_3 : slv_r_ch<r_pack_t>,
+    // slv_ep_r_4 -- mux_ep_r_4 : slv_r_ch<r_pack_t>,
+    // slv_ep_r_5 -- mux_ep_r_5 : slv_r_ch<r_pack_t>,
+    // slv_ep_r_6 -- mux_ep_r_6 : slv_r_ch<r_pack_t>,
+    // slv_ep_r_7 -- mux_ep_r_7 : slv_r_ch<r_pack_t>,
+    // slv_ep_r_8 -- mux_ep_r_8 : slv_r_ch<r_pack_t>,
+
+    arb_reg_ep -- reg_arb_ep : req_inp_ch<ar_sel_pack_t>,
+    reg_mst_ep -- mux_reg_ep : reg_out_ch<ar_sel_pack_t>,
+
+    mst_ep_reg -- reg_ep_r : req_inp_ch<r_pack_t>,
+    reg_ep_slv -- mux_ep_r : reg_out_ch<r_pack_t>,
+
+    mux_ep_mst -- mst_ep_mux : ar_mast_ch,
+
+    fifo_ep_le -- fifo_ep_ri : fifo_ch<select_t>;
+    
+    i1 : slave_itfc(slv_ep1 , arb_ep1),
+    i2 : slave_itfc(slv_ep2 , arb_ep2),
+    // i3 : slave_itfc(slv_ep3 , arb_ep3),
+    // i4 : slave_itfc(slv_ep4 , arb_ep4),
+    // i5 : slave_itfc(slv_ep5 , arb_ep5),
+    // i6 : slave_itfc(slv_ep6 , arb_ep6),
+    // i7 : slave_itfc(slv_ep7 , arb_ep7),
+    // i8 : slave_itfc(slv_ep8 , arb_ep8),
+    i9 : rr_arbiter_itfc(slv_ep1,slv_ep2, slv_ep3, slv_ep4, slv_ep5, slv_ep6, slv_ep7, slv_ep8, mst_ep)
+    // i10 : spill_register_itfc(reg_arb_ep, mux_reg_ep),
+    // i13 : mux_main(mux_reg_ep, mux_ep_mst, mux_ep_r,  fifo_ep_ri, mux_ep_r_1, mux_ep_r_2, mux_ep_r_3, mux_ep_r_4, mux_ep_r_5, mux_ep_r_6, mux_ep_r_7, mux_ep_r_8),
+    // i14 : fifo_itfc(fifo_ep_le),
+    // i12 : spill_register_itfc(reg_ep_r, reg_ep_slv)
+    // i11 : master_itfc(mst_ep_mux, mst_ep_reg)
+
+}
+
+// pool read_transaction_pool {
+//     slv_ep1 -- arb_ep1 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep2 -- arb_ep2 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep3 -- arb_ep3 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep4 -- arb_ep4 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep5 -- arb_ep5 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep6 -- arb_ep6 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep7 -- arb_ep7 : arbiter_slave_ch<ar_pack_t>,
+//     slv_ep8 -- arb_ep8 : arbiter_slave_ch<ar_pack_t>,
+    
+//     slv_ep_r_1 -- mux_ep_r_1 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_2 -- mux_ep_r_2 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_3 -- mux_ep_r_3 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_4 -- mux_ep_r_4 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_5 -- mux_ep_r_5 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_6 -- mux_ep_r_6 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_7 -- mux_ep_r_7 : slv_r_ch<r_pack_t>,
+//     slv_ep_r_8 -- mux_ep_r_8 : slv_r_ch<r_pack_t>,
+
+//     arb_reg_ep -- reg_arb_ep : req_inp_ch<ar_sel_pack_t>,
+//     reg_mst_ep -- mux_reg_ep : reg_out_ch<ar_sel_pack_t>,
+
+//     mst_ep_reg -- reg_ep_r : req_inp_ch<r_pack_t>,
+//     reg_ep_slv -- mux_ep_r : reg_out_ch<r_pack_t>,
+
+//     mux_ep_mst -- mst_ep_mux : ar_mast_ch,
+
+//     fifo_ep_le -- fifo_ep_ri : fifo_ch<select_t>;
+
+//     i1 : slave_itfc(slv_ep1 , slv_ep_r_1),
+//     i2 : slave_itfc(slv_ep2 , slv_ep_r_2),
+//     i3 : slave_itfc(slv_ep3 , slv_ep_r_3),
+//     i4 : slave_itfc(slv_ep4 , slv_ep_r_4),
+//     i5 : slave_itfc(slv_ep5 , slv_ep_r_5),
+//     i6 : slave_itfc(slv_ep6 , slv_ep_r_6),
+//     i7 : slave_itfc(slv_ep7 , slv_ep_r_7),
+//     i8 : slave_itfc(slv_ep8 , slv_ep_r_8),
+
+//     i9 : rr_arbiter_itfc(slv_ep1,slv_ep2, slv_ep3, slv_ep4, slv_ep5, slv_ep6, slv_ep7, slv_ep8, arb_reg_ep),
+//     i10 : spill_register_itfc(reg_arb_ep, mux_reg_ep),
+//     i11 : master_itfc(mst_ep_mux, mst_ep_reg),
+//     i12 : spill_register_itfc(reg_ep_r, reg_ep_slv),
+//     i13 : mux_main(mux_reg_ep, mux_ep_mst, mux_ep_r,  fifo_ep_ri, mux_ep_r_1, mux_ep_r_2, mux_ep_r_3, mux_ep_r_4, mux_ep_r_5, mux_ep_r_6, mux_ep_r_7, mux_ep_r_8),
+//     i14 : fifo_itfc(fifo_ep_le)
+// }
