@@ -41,7 +41,7 @@
 
 
 
-// // // Pools to test type combinations
+// Pools to test type combinations
 pool p1 { // trued
     ep_le -- ep_ri : ch;
     ip11 : (ep.req ; ep.ack) ,
@@ -108,17 +108,22 @@ pool p11 { // true
 
 pool p12 { // false
     ep_le -- ep_ri : ch;
-    in51 : (ep.m1;ep.m2) + (ep.m2;ep.m1),
-    in52 : ep.m1,
-    in53 : ep.m2
+    in121 : (ep.m1;ep.m2) + (ep.m2;ep.m1),
+    in122 : ep.m1,
+    in123 : ep.m2
 }
 pool p13 {
     ep_le -- ep_ri : ch;
-    ip1 : ep.req;#4,
-    ip2 : ep.req;#1
+    ip131 : ep.req;#4,
+    ip132 : ep.req;#1
+}
+pool p14 {
+    ep_le -- ep_ri : ch;
+    ip141 : ep.req || ep.ack,
+    ip142 : ep.req ; ep.ack
 }
 
-// Negative cases
+// // Negative cases
 pool n1 { // false
     ep_le -- ep_ri : ch;
     in11 : #ep.req + #ep.ack ,

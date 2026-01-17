@@ -21,6 +21,7 @@ type label_kind =
   | Action of message_specifier
   | Delay
   | Negation of message_specifier list
+  | OptionDelay of message_specifier list
   | Theta of session_type
   | Recurse of identifier
   | Terminal of int
@@ -28,7 +29,6 @@ type label_kind =
 module LabelKindOrd = struct
   type t = label_kind
   let compare = Stdlib.compare
-  let equal l1 l2 = (compare l1 l2) = 0
 end
 
 module LabelSet = Set.Make(LabelKindOrd)
@@ -54,6 +54,9 @@ let string_of_label_set (ls: LabelSet.t) : string =
     | Theta st -> Printf.sprintf "Theta(%s)" (Lang.string_of_protocol st)
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
     | Recurse var -> Printf.sprintf "$"^var
+    | OptionDelay ms ->
+      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+      Printf.sprintf "(#Negation[%s])" ms_str
   ) elements in
   "{" ^ (String.concat ", " str_list) ^ "}"
 
@@ -227,6 +230,9 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
             Printf.sprintf "¬[%s]" ms_str
           | Theta st -> Printf.sprintf "θ(%s)" (Lang.string_of_protocol st)
+          | OptionDelay ms ->
+            let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+            Printf.sprintf "(#¬[%s])" ms_str
           | _ -> string_of_label_set t.label
         ))
     in
@@ -235,29 +241,6 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
 
   Printf.fprintf out "}\n";
   flush out
-
-
-let check_label_satisfiability (l1: label_kind) (l2: label_kind) : bool =
-  (* placeholder for now *)
-  l1 = l2
-
-let label_equivalence (labels1: LabelSet.t) (labels2: LabelSet.t) : bool =
-  let labels1_satisfied = LabelSet.for_all (fun l1 ->
-    LabelSet.exists (fun l2 -> check_label_satisfiability l1 l2) labels2
-  ) labels1 in
-  
-  if not labels1_satisfied then false
-  else
-    LabelSet.for_all (fun l2 ->
-      LabelSet.exists (fun l1 -> check_label_satisfiability l2 l1) labels1
-    ) labels2
-
-
-let label_equivalence_one_way (labels1: LabelSet.t) (labels2: LabelSet.t) : bool =
-  let label1_satisfied = LabelSet.for_all (fun l1 ->
-    LabelSet.exists (fun l2 -> check_label_satisfiability l1 l2) labels2
-  ) labels1 in
-  label1_satisfied
 
 
 
@@ -287,7 +270,6 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
   let ms1_ep = List.map (fun m -> m.endpoint) msgs1 in
   let ms2_ep = List.map (fun m -> m.endpoint) msgs2 in
 
-  (* check if both sets are NOT equal OR both are empty *)
   let set1 = List.fold_left (fun acc ep -> IntSet.add (Hashtbl.hash ep) acc) IntSet.empty ms1_ep in
   let set2 = List.fold_left (fun acc ep -> IntSet.add (Hashtbl.hash ep) acc) IntSet.empty ms2_ep in
   (not (IntSet.equal set1 set2)) || ((IntSet.cardinal set1 < 1) && (IntSet.cardinal set2 < 1))
@@ -313,9 +295,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         | Lang.AtomicAct (Lang.AtomBMsg m) -> 
           (
             (Hashtbl.find auto.states current).accepting <- false;
-            let pseudo_next = TypeAutomaton.new_state auto false in
-            TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Negation [m])) false false false true;
-            TypeAutomaton.add_transition auto pseudo_next current (LabelSet.singleton (Delay)) false false false false;
+            (* let pseudo_next = TypeAutomaton.new_state auto false in *)
+            (* TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Negation [m])) false false false true; *)
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay [m])) false false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
             TypeAutomaton.append_offers auto current [m];
@@ -325,7 +307,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (Negation [m])) false false false true;
+            (* TypeAutomaton.add_transition auto current current (LabelSet.singleton (Negation [m])) false false false true; *)
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
             TypeAutomaton.append_offers auto current [m];
             next_s
@@ -435,10 +417,10 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
               | _ -> None
             ) all_msg_branches in
 
-            let new_state = TypeAutomaton.new_state auto false in
+            (* let new_state = TypeAutomaton.new_state auto false in *)
 
-            TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false true;
-            TypeAutomaton.add_transition auto new_state current (LabelSet.singleton (Delay)) false false false false
+            (* TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false true; *)
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
           );
 
         
@@ -532,9 +514,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
               | _ -> None
             ) all_msg_branches in
-            let new_state = TypeAutomaton.new_state auto false in
-            TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false true;
-            TypeAutomaton.add_transition auto new_state current (LabelSet.singleton (Delay)) false false false false
+            (* let new_state = TypeAutomaton.new_state auto false in *)
+            (* TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false true; *)
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
           );
         end_state
       )
@@ -695,7 +677,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         ) trans2;
 
         let is_delay t =
-          LabelSet.exists (function Delay -> true | _ -> false) t.label in
+          LabelSet.exists (function Delay -> true | OptionDelay _ -> true | _ -> false) t.label in
         
           let cartesian_product list1 list2 =
             List.flatten (List.map (fun x ->
@@ -711,24 +693,20 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
 
 
-        if List.length trans1 = 0 then (
-          List.iter( fun t ->
-            let next_ps = get_product_state (s1, t.to_state) in
-            TypeAutomaton.add_transition auto ps next_ps t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-            if not (IntPairSet.mem (s1, t.to_state) !visited) then 
-              worklist := (s1, t.to_state) :: !worklist
-          )trans2;
-        )
-        else if List.length trans2 = 0 then (
-          List.iter(
-            fun t ->
-              let next_ps = get_product_state (t.to_state, s2) in
-              TypeAutomaton.add_transition auto ps next_ps t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-              if not (IntPairSet.mem (t.to_state, s2) !visited) then 
-                worklist := (t.to_state, s2) :: !worklist
-          )trans1;
-      )
-        else (
+
+        List.iter (fun t1 ->
+          let next_ps = get_product_state (t1.to_state, s2) in
+          TypeAutomaton.add_transition auto ps next_ps t1.label t1.is_epsilon t1.is_theta t1.is_recurse t1.is_conditional;
+          if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
+            worklist := (t1.to_state, s2) :: !worklist
+        ) trans1;
+
+        List.iter (fun t2 ->
+          let next_ps = get_product_state (s1, t2.to_state) in
+          TypeAutomaton.add_transition auto ps next_ps t2.label t2.is_epsilon t2.is_theta t2.is_recurse t2.is_conditional;
+          if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
+            worklist := (s1, t2.to_state) :: !worklist
+        ) trans2;
         List.iter (fun t1 ->
           List.iter (fun t2 ->
             let label_set = LabelSet.union t1.label t2.label in
@@ -739,14 +717,31 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         ) trans1;
 
 
+        if List.length delay_trans1 = 0 && List.length delay_trans2 > 0 then (
+          List.iter( fun t ->
+            let next_ps = get_product_state (s1, t.to_state) in
+            TypeAutomaton.add_transition auto ps next_ps t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+            if not (IntPairSet.mem (s1, t.to_state) !visited) then 
+              worklist := (s1, t.to_state) :: !worklist
+          )delay_trans2
+        )
+        else if List.length delay_trans2 = 0 && List.length delay_trans1 > 0 then (
+          List.iter( fun t ->
+            let next_ps = get_product_state (t.to_state, s2) in
+            TypeAutomaton.add_transition auto ps next_ps t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+            if not (IntPairSet.mem (t.to_state, s2) !visited) then 
+              worklist := (t.to_state, s2) :: !worklist
+          )delay_trans1
+        )
 
-        let delay_combinations = cartesian_product delay_trans1 delay_trans2 in
-        List.iter (fun (t1, t2) ->
-          let label_set = LabelSet.union t1.label t2.label in
-          TypeAutomaton.add_transition auto ps (get_product_state (t1.to_state, t2.to_state)) label_set false false false false;
-          if not (IntPairSet.mem (t1.to_state, t2.to_state) !visited) then 
-            worklist := (t1.to_state, t2.to_state) :: !worklist
-        ) delay_combinations;
+        else (
+                let delay_combinations = cartesian_product delay_trans1 delay_trans2 in
+                List.iter (fun (t1, t2) ->
+                  let label_set = LabelSet.union t1.label t2.label in
+                  TypeAutomaton.add_transition auto ps (get_product_state (t1.to_state, t2.to_state)) label_set false false false false;
+                  if not (IntPairSet.mem (t1.to_state, t2.to_state) !visited) then 
+                    worklist := (t1.to_state, t2.to_state) :: !worklist
+                ) delay_combinations;
         )
         
       end
@@ -837,7 +832,21 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           List.filter (fun t -> t.from_state = state_id) auto.transitions
         ) automata_ids in
         
-        let is_delay t = LabelSet.exists (function Delay -> true | _ -> false) t.label in
+        let actions_of_this_state exc = List.mapi (fun indx s -> 
+          if indx = exc then [] else
+          let auto, _= List.nth automata_ids indx in 
+          let st = Hashtbl.find auto.states s in 
+          st.offers
+        ) current_states in
+
+        let check_no_offers msg_list offer_list =
+          List.for_all (fun m ->
+            not (List.mem m offer_list)
+          ) msg_list
+          in
+        let is_delay i t = LabelSet.exists (function Delay -> true | OptionDelay m_list -> check_no_offers m_list (List.flatten (actions_of_this_state i)) | _ -> false) t.label in
+
+        let is_delay_con t = LabelSet.exists (function Delay -> true | OptionDelay _ -> true | _ -> false) t.label in
 
         let epsilon_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
@@ -866,14 +875,14 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         if List.for_all (fun ts -> ts = []) theta_transitions then (
         let sync_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
-            if not t.is_epsilon && not t.is_theta && not t.is_recurse && not (is_delay t) 
+            if not t.is_epsilon && not t.is_theta && not t.is_recurse && not (is_delay_con t) 
             then Some t 
             else None
           ) transition_set
         ) transitions_list in
 
-        let delay_transitions = List.map (fun transition_set ->
-          List.filter_map (fun t -> if is_delay t then Some t else None) transition_set
+        let delay_transitions = List.mapi (fun i transition_set ->
+          List.filter_map (fun t -> if is_delay i t then Some t else None) transition_set
         ) transitions_list in
 
         let all_has_delay = List.for_all (fun dt -> dt <> []) delay_transitions in
@@ -890,17 +899,16 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         ) epsilon_transitions;
 
 
-        let rec cartesian_product lists =
-            match lists with
-            | [] -> [[]]
-            | h :: t ->
-                let rest = cartesian_product t in
-                if h = [] then
-                    (* If this list is empty, use None for this position *)
-                    List.map (fun r -> None :: r) rest
-                else
-                    List.flatten (List.map (fun x -> List.map (fun r -> (Some x) :: r) rest) h)
-        in
+      let rec cartesian_product lists =
+        match lists with
+        | [] -> [[]]
+        | h :: t ->
+            let rest = cartesian_product t in
+            let choices = (List.map (fun x -> Some x) h) @ [None] in
+            
+            List.flatten (List.map (fun item -> 
+              List.map (fun r -> item :: r) rest
+            ) choices) in
 
         let rec cartesian_product2 lists =
             match lists with
@@ -963,7 +971,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                             List.mem ua actions
                           )t_actions &&
                           List.for_all( fun tna ->
-                            not (List.mem tna actions)
+                            not (List.mem tna actions_of_this_state)
                           )t_not_acts_flat
                         ), 
                         t.is_conditional,
@@ -977,7 +985,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )transition_set
           ) in 
 
-          let is_all_conditional = List.for_all (fun (_, cond,_) -> cond) is_compatible in
+          (* let is_all_conditional = List.for_all (fun (_, cond,_) -> cond) is_compatible in *)
           let is_strongly_needed = List.for_all (fun (_, _, strong) -> strong) is_compatible in
 
           (* let is_strong_compatible = List.map (fun (_, _ , strong) -> strong) is_compatible in *)
@@ -992,7 +1000,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             | Some t -> "Auto "^(string_of_int i)^": "^(string_of_transition t)
           ) transition_set)); *)
 
-            if is_compatible && (not is_all_conditional || is_strongly_needed) then (
+            if is_compatible then (
               let next_states = List.mapi (fun idx t_opt ->
                 let current_state = List.nth current_states idx in
                 match t_opt with

@@ -17,18 +17,23 @@ interface master_itfc(mst_req_ep : right ar_mast_ch,  mst_res_ep : left req_inp_
 interface spill_register_itfc(inp_ep : right req_inp_ch<T>, out_ep : left reg_out_ch<T>) = ((inp_ep.req;#1;&(inp_ep.req, out_ep.spill,*)) +  (&(inp_ep.req, out_ep.spill, *)) + (out_ep.spill;#1;&(inp_ep.req,out_ep.spill,*)));#1
 
 
-interface mux_main (
+interface mux_ar_main (
     ar_req_ep : right reg_out_ch<ar_sel_pack_t>,
     mst_req_ep : left ar_mast_ch <ar_pack_t>,
+    fifo_ep : right fifo_ch<select_t>
+) =^(
+        fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
+        mst_req_ep.rdy : ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push
+    ) ; #1 
+interface mux_r_main (
     r_sr_ep : right reg_out_ch <r_pack_t>,
     fifo_ep : right fifo_ch<select_t>,
     slv_ep1 : right slv_r_ch<r_pack_t>,
     slv_ep2 : right slv_r_ch<r_pack_t>
 ) =^(
         fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (^(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data )),
-        fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
-        * : ^ (mst_req_ep.rdy : ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push, r_sr_ep.spill : #fifo_ep.pop ; ^(slv_ep1.res : (slv_ep1.err + slv_ep1.data) , slv_ep2.res : (slv_ep2.err + slv_ep2.data) ))
-    ) ; #1 
+        r_sr_ep.spill : #fifo_ep.pop ; ^(slv_ep1.res : (slv_ep1.err + slv_ep1.data) , slv_ep2.res : (slv_ep2.err + slv_ep2.data) )
+); #1
 
 pool arbiter_slave_pool {
     slv_ep1 -- arb_ep1 : arbiter_slave_ch<ar_pack_t>,
@@ -46,11 +51,12 @@ pool arbiter_slave_pool {
 
     fifo_ep_le -- fifo_ep_ri : fifo_ch<select_t>;
     
-    i1 : slave_itfc(slv_ep1 , arb_ep1),
-    i2 : slave_itfc(slv_ep2 , arb_ep2),
-    i3 : rr_arbiter_itfc(slv_ep1,slv_ep2, arb_reg_ep),
-    i4 : spill_register_itfc(reg_arb_ep, mux_reg_ep),
-    i5 : mux_main(mux_reg_ep, mux_ep_mst, mux_ep_r,  fifo_ep_ri, mux_ep_r_1, mux_ep_r_2),
+    i1 : slave_itfc(slv_ep1 , slv_ep_r_1),
+    i2 : slave_itfc(slv_ep2 , slv_ep_r_2),
+    i3 : rr_arbiter_itfc(arb_ep1,arb_ep2, arb_reg_ep),
+    i4 : spill_register_itfc(reg_arb_ep, reg_mst_ep),
+    i51 : mux_ar_main(mux_reg_ep, mux_ep_mst, fifo_ep_ri),
+    i52 : mux_r_main(mux_ep_r,  fifo_ep_ri, mux_ep_r_1, mux_ep_r_2),
     i6 : fifo_itfc(fifo_ep_le),
     i7 : spill_register_itfc(reg_ep_r, reg_ep_slv),
     i8 : master_itfc(mst_ep_mux, mst_ep_reg)
