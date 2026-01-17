@@ -218,7 +218,6 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
   List.iter (fun t ->
     let label_str = 
       if t.is_epsilon then "ε"
-      else if t.is_theta then "θ"
       else
         String.concat "," (LabelSet.elements t.label |> List.map (function
           | Action m -> Printf.sprintf "%s" (Lang.string_of_msg_spec m)
@@ -1173,15 +1172,109 @@ let find_counterexample (auto : TypeAutomaton.t) (start_id : int) (is_winning : 
   traverse start_id 0;
   Buffer.contents buffer
 
+module StringSet = Set.Make(String)
 
-let play_game (prod_auto : TypeAutomaton.t) (_ids : identifier list ) : (bool * string) =
+let get_recurse_ids (label : LabelSet.t) : StringSet.t =
+  LabelSet.fold (fun l acc ->
+    match l with
+    | Recurse id -> StringSet.add id acc
+    | _ -> acc
+  ) label StringSet.empty
+
+let play_game (prod_auto : TypeAutomaton.t) (_ids : identifier list) : (bool * string) =
   
   let is_winning : (int, bool) Hashtbl.t = Hashtbl.create 10 in
+  let target_ids = StringSet.of_list _ids in
+
+  let index = ref 0 in
+  let stack = Stack.create () in
+  let indices = Hashtbl.create 10 in
+  let lowlinks = Hashtbl.create 10 in
+  let on_stack = Hashtbl.create 10 in
+  let sccs = ref [] in
+
+  let rec strongconnect (v : int) =
+    Hashtbl.add indices v !index;
+    Hashtbl.add lowlinks v !index;
+    Hashtbl.add on_stack v true;
+    Stack.push v stack;
+    incr index;
+
+    let v_trans = List.filter (fun t -> t.from_state = v) prod_auto.transitions in
+    List.iter (fun t ->
+      let w = t.to_state in
+      if not (Hashtbl.mem indices w) then (
+        strongconnect w;
+        let v_low = Hashtbl.find lowlinks v in
+        let w_low = Hashtbl.find lowlinks w in
+        Hashtbl.replace lowlinks v (min v_low w_low)
+      ) else if Hashtbl.mem on_stack w then (
+        let v_low = Hashtbl.find lowlinks v in
+        let w_index = Hashtbl.find indices w in
+        Hashtbl.replace lowlinks v (min v_low w_index)
+      )
+    ) v_trans;
+
+    if Hashtbl.find lowlinks v = Hashtbl.find indices v then (
+      let component = ref [] in
+      let rec pop_stack () =
+        let w = Stack.pop stack in
+        Hashtbl.remove on_stack w;
+        component := w :: !component;
+        if w <> v then pop_stack ()
+      in
+      pop_stack ();
+      sccs := !component :: !sccs
+    )
+  in
+
+  Hashtbl.iter (fun id _ ->
+    if not (Hashtbl.mem indices id) then strongconnect id
+  ) prod_auto.states;
+
 
   Hashtbl.iter (fun state_id state ->
-    if state.accepting then
-      Hashtbl.add is_winning state_id true
+    if state.accepting then Hashtbl.add is_winning state_id true
   ) prod_auto.states;
+
+
+  List.iter (fun component ->
+    let is_nontrivial = 
+      match component with
+      | [node] -> 
+          (* Check if there is a self-loop transition *)
+          List.exists (fun t -> t.from_state = node && t.to_state = node) prod_auto.transitions
+      | _ -> true 
+    in
+
+    if is_nontrivial && not (StringSet.is_empty target_ids) then (
+      let component_set = IntSet.of_list component in
+      
+      (* collect all $s *)
+      let collected_recurse_ids = List.fold_left (fun acc t ->
+        if IntSet.mem t.from_state component_set && IntSet.mem t.to_state component_set then
+          let ids = get_recurse_ids t.label in
+          StringSet.union acc ids
+        else acc
+      ) StringSet.empty prod_auto.transitions in
+      let satisfies_liveness = StringSet.subset target_ids collected_recurse_ids in
+
+      (* An SCC is winning if adversary nodes are not able to escape *)
+      let adversaries_can_escape = List.exists (fun state_id ->
+        let state = Hashtbl.find prod_auto.states state_id in
+        if state.adversary then (
+          let outgoing = List.filter (fun t -> t.from_state = state_id) prod_auto.transitions in
+          List.exists (fun t -> 
+            not (IntSet.mem t.to_state component_set) 
+          ) outgoing
+        ) else false
+      ) component in
+
+      if satisfies_liveness && not adversaries_can_escape then (
+        List.iter (fun state_id -> Hashtbl.replace is_winning state_id true) component
+      )
+    )
+  ) !sccs;
 
   let changed = ref true in
   while !changed do

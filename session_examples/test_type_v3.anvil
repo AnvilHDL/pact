@@ -26,7 +26,7 @@
 // interface t6 (ep : left ch) = ^( ep.req, ep.ack, *) 
 
 
-interface t7 (ep : left ch) = &(ep.req, ep.ack) 
+// interface t7 (ep : left ch) = &(ep.req, ep.ack) 
 
 // interface t8 (ep : left ch) = &( ep.req, ep.ack, *) 
 
