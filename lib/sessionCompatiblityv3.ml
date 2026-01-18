@@ -1346,7 +1346,7 @@ let find_path (auto : TypeAutomaton.t) (start : int) (target : int) : (transitio
   else
     []
 
-let prune_fair_loops (auto : TypeAutomaton.t) (winning_nodes : IntSet.t) : unit =
+let prune_fair_loops (auto : TypeAutomaton.t) (winning_nodes : IntSet.t) (verbose : bool) : unit =
   let fair_nodes = Hashtbl.fold (fun id st acc -> 
     if st.is_fair && st.adversary then id :: acc else acc
   ) auto.states [] in
@@ -1369,27 +1369,28 @@ let prune_fair_loops (auto : TypeAutomaton.t) (winning_nodes : IntSet.t) : unit 
         else
           edges_to_discard := (find_path auto t.to_state u)@ !edges_to_discard
     ) all_outgoing;
-    if !edges_to_discard <> [] then
+    if !edges_to_discard <> [] && verbose then
+      (
       Printf.eprintf "[Warning] Pruning %d edges from fair loop at state %d\n" (List.length !edges_to_discard) u;
+      Printf.eprintf "  Edges discarded: %s\n" (String.concat "; " (List.map string_of_transition !edges_to_discard))
+      );
+
     
     auto.transitions <- List.filter (fun t -> 
       if t.from_state = u then List.mem t !edges_to_keep
       else (
         let ts = List.mem t !edges_to_discard in
-        if ts then (
-          TypeAutomaton.remove_state auto t.from_state
-        );
         not ts
       )
     ) auto.transitions
   ) fair_nodes
 
-let play_game (prod_auto : TypeAutomaton.t) (ids : identifier list) : (bool * string) =
+let play_game (prod_auto : TypeAutomaton.t) (ids : identifier list) (verbose : bool) : (bool * string) =
   
   let winning_info = transform_winning_edges prod_auto in
   
   let all_winning_nodes = Hashtbl.fold (fun id _ acc -> IntSet.add id acc) winning_info IntSet.empty in
-  prune_fair_loops prod_auto all_winning_nodes;
+  prune_fair_loops prod_auto all_winning_nodes verbose;
 
   let maps = build_maps prod_auto in
   let all_states = maps.valid_states in
@@ -1436,7 +1437,9 @@ let play_game (prod_auto : TypeAutomaton.t) (ids : identifier list) : (bool * st
     else
       (
         t.in_winning <- false;
-        Hashtbl.find prod_auto.states t.to_state |> fun s -> s.is_winning <- false
+        if Hashtbl.mem prod_auto.states t.to_state then
+          Hashtbl.find prod_auto.states t.to_state |> fun s -> s.is_winning <- false
+        else Printf.eprintf "State %d not found in states table for transiton %s\n" t.to_state (string_of_transition t)
       )
   ) prod_auto.transitions;
 
@@ -1463,7 +1466,7 @@ let check_compatibility_multiparty
 
     let ids_list = List.map snd session_ids in
     
-    let result, err = play_game prod_auto ids_list in
+    let result, err = play_game prod_auto ids_list verbose in
     Printf.eprintf "Game Analysis Completed.\n";
 
     let out = Stdlib.open_out ("prod_auto_"^pool_id^".dot") in

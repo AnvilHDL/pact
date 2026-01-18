@@ -156,7 +156,6 @@ let automata_debug _out config =
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
       | Failure msg -> (false, msg)
-      | _ -> (false, "Unknown error")
       
 
     in
@@ -217,7 +216,6 @@ if config.verbose then
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
       | Failure msg -> (false, msg)
-      | _ -> (false, "Unknown error")
     in
     Printf.eprintf "Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
   ) pool_defs;

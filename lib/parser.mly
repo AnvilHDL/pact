@@ -379,6 +379,8 @@ session_def:
 
 
 local_session_type:
+| LEFT_PAREN; RIGHT_PAREN
+  { Lang.StyTrue }
 | SHARP; n = INT
   { Lang.StyAtom (Lang.AtomDelay n) }
 | KEYWORD_LET; id = IDENT; EQUAL; ex = local_session_type; KEYWORD_IN; body = local_session_type
