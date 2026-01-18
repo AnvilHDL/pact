@@ -147,3 +147,11 @@ pool n4 { // false
     in41 : F #ep.m1 ,
     in42 : #ep.m1 
 }
+
+pool n5 { // false
+    ep_le -- ep_ri : ch;
+    in51 : ep.m1;^(ep.m2,ep.m3),
+    in52 : ep.m1,
+    in53 : ^(ep.m2,*),
+    in54 : ^(ep.m3,*)
+}
