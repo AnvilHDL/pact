@@ -1369,6 +1369,8 @@ let prune_fair_loops (auto : TypeAutomaton.t) (winning_nodes : IntSet.t) : unit 
         else
           edges_to_discard := (find_path auto t.to_state u)@ !edges_to_discard
     ) all_outgoing;
+    if !edges_to_discard <> [] then
+      Printf.eprintf "[Warning] Pruning %d edges from fair loop at state %d\n" (List.length !edges_to_discard) u;
     
     auto.transitions <- List.filter (fun t -> 
       if t.from_state = u then List.mem t !edges_to_keep
