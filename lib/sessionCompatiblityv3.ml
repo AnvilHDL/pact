@@ -1054,7 +1054,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           )
         ) all_transition_combinations;
 
-        (* if not !found then ( *)
+        if not !found then (
           List.iteri (fun i t_set -> 
             if List.length t_set > 1 then raise (Failure "Unexpected: more than 1 recurse transition in set")
             else if List.length t_set = 1 then (
@@ -1066,7 +1066,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                  worklist := next_states :: !worklist
             ) 
           )_recurse_transitions;
-        (* ); *)
+        );
 
         if all_has_delay then
         ( 
