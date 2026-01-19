@@ -1,45 +1,47 @@
-// // Basic types for session interfaces (check automaton construction)
+// // // Basic types for session interfaces (check automaton construction)
 
-interface t1 (ep : left ch) = ep.req
+// interface t1 (ep : left ch) = ep.req
 
-interface t2 (ep : left ch) = #ep.req || #1
+// interface t2 (ep : left ch) = #ep.req || #1
 
-interface t3 (ep : left ch) = #ep.req || #ep.ack || #1 
+// interface t3 (ep : left ch) = #ep.req || #ep.ack || #1 
 
-interface t4 (ep : left ch) = #ep.req || #ep.ack 
+// interface t4 (ep : left ch) = #ep.req || #ep.ack 
 
-interface t5 (ep : left ch) = &(#ep.req, #ep.ack) 
+// interface t5 (ep : left ch) = &(#ep.req, #ep.ack) 
 
-interface t6 (ep : left ch) =  rec X . ^( #ep.req , * : #1 ; X )  
-
-
-interface t7 (ep : left ch) = #ep.req || #ep.ack  
+// interface t6 (ep : left ch) =  rec X . ^( #ep.req , * : #1 ; X )  
 
 
-
-interface t8 (ep : left ch) = #ep.req 
-
-interface t9 (ep : left ch) = ep.req + ep.ack 
-
-interface t10 (ep : left ch) = ^(ep.req, ep.ack) 
-interface t11 (ep : left ch) = ^( ep.req, ep.ack, *) 
+// interface t7 (ep : left ch) = #ep.req || #ep.ack  
 
 
-interface t12 (ep : left ch) = &(ep.req, ep.ack) 
 
-interface t13 (ep : left ch) = &( ep.req, ep.ack, *) 
+// interface t8 (ep : left ch) = #ep.req 
+
+// interface t9 (ep : left ch) = ep.req + ep.ack 
+
+// interface t10 (ep : left ch) = ^(ep.req, ep.ack) 
+// interface t11 (ep : left ch) = ^( ep.req, ep.ack, *) 
 
 
-interface t14 (ep : left ch) = rec X .  ^( #ep.req, * : X) 
+// interface t12 (ep : left ch) = &(ep.req, ep.ack) 
 
-interface t15 (ep : left ch) = (ep.req ; ep.ack) || ( ep.nack ; ep.rreq ) 
+// interface t13 (ep : left ch) = &( ep.req, ep.ack, *) 
 
-interface t16 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) 
 
-interface t17 (ep : left ch) = ep.m1 || ep.m2
+// interface t14 (ep : left ch) = rec X .  ^( #ep.req, * : X) 
 
-interface t18(ep : left ch) = ep.m1 + ()
+// interface t15 (ep : left ch) = (ep.req ; ep.ack) || ( ep.nack ; ep.rreq ) 
 
-interface t19(ep : left ch) = &(#ep.m1, #ep.m2)
+// interface t16 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq ) 
 
-interface  t20(ep : left ch) = #ep.m1 || #ep.m2
+// interface t17 (ep : left ch) = ep.m1 || ep.m2
+
+// interface t18(ep : left ch) = ep.m1 + ()
+
+// interface t19(ep : left ch) = &(#ep.m1, #ep.m2)
+
+// interface  t20(ep : left ch) = #ep.m1 || #ep.m2
+
+interface t21(ep : left ch) = ^(ep.m1, ep.m2)

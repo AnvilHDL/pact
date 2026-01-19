@@ -188,7 +188,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           let is_compatible  =  (
             List.mapi( fun i t_opt ->
                 match t_opt with
-                | None -> (true,true, true) (* Empty slot is always compatible *)
+                | None -> (true, true) (* Empty slot is always compatible *)
                 | Some t ->
                 (
                       let t_actions = List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label) in
@@ -199,11 +199,16 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                           | Some t -> List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label)
                       ) transition_set) in
 
-                      let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
+                      (* let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in *)
+                      let offers_in_future_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers_in_future) ) current_states in
 
-                      let actions_of_this_state = List.flatten actions_of_this_state in
+                      (* let actions_of_this_state = List.flatten actions_of_this_state in *)
+                      let offers_in_future_of_this_state = List.flatten offers_in_future_of_this_state in
 
                       let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
+
+                      let next_quests = List.filter_map (function Questionable m -> Some m | _ -> None) (LabelSet.elements t.label) in
+                      let next_quests = List.flatten next_quests in
                       let t_not_acts_flat = List.flatten t_not_acts in
                       (
                         (
@@ -211,26 +216,23 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                             List.mem ua actions
                           )t_actions &&
                           List.for_all( fun tna ->
-                            not (List.mem tna actions_of_this_state)
-                          )t_not_acts_flat
-                        ), 
-                        t.is_conditional,
-                        (
-                        List.for_all( fun tna ->
-                          not (List.mem tna actions_of_this_state)
-                        )t_not_acts_flat
-                        )&&t.is_conditional
+                            not (List.mem tna offers_in_future_of_this_state)
+                          )t_not_acts_flat&&
+                          List.for_all( fun nq ->
+                            List.mem nq offers_in_future_of_this_state
+                          )next_quests
+                        ),
+                        t.is_conditional
                       )
                 )
             )transition_set
           ) in 
 
-          let is_all_conditional = List.for_all (fun (_, cond,_) -> cond) is_compatible in
-          let _is_strongly_needed = List.for_all (fun (_, _, strong) -> strong) is_compatible in
+          let is_all_conditional = List.for_all (fun (_, cond) -> cond) is_compatible in
 
           (* let is_strong_compatible = List.map (fun (_, _ , strong) -> strong) is_compatible in *)
 
-          let is_compatible = List.for_all (fun (x, _,_) -> x) is_compatible in
+          let is_compatible = List.for_all (fun (x, _) -> x) is_compatible in
 
           let offer_lists = List.mapi (fun indx s -> 
             let auto, _= List.nth automata_ids indx in 
@@ -354,6 +356,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
       let state = Hashtbl.find auto.states st_id in
       state.offers
     ) states) in
+    let offers = List.sort_uniq compare_msg_spec offers in
+    let offers_in_future = List.flatten (List.mapi (fun idx st_id ->
+      let auto, _ = List.nth automata_ids idx in
+      let state = Hashtbl.find auto.states st_id in
+      state.offers_in_future
+    ) states) in
+    let offers_in_future = List.sort_uniq compare_msg_spec offers_in_future in
     let is_fair = List.exists (fun x -> x) (List.mapi (fun idx st_id ->
       let auto, _ = List.nth automata_ids idx in
       (Hashtbl.find auto.states st_id).is_fair
@@ -366,6 +375,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     let prod_state = Hashtbl.find prod_auto.states prod_state_id in
     prod_state.offers <- offers;
     prod_state.is_fair <- is_fair;
+    prod_state.offers_in_future <- offers_in_future;
     prod_state.adversary <- is_adversary
   ) state_map;
 

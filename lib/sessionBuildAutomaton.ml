@@ -22,7 +22,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           (
             (Hashtbl.find auto.states current).accepting <- false;
             (* let pseudo_next = TypeAutomaton.new_state auto false in *)
-            (* TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Negation [m])) false false false true; *)
+            (* TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Questionable [m])) false false false true; *)
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay [m])) false false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
@@ -33,7 +33,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
-            (* TypeAutomaton.add_transition auto current current (LabelSet.singleton (Negation [m])) false false false true; *)
+            (* TypeAutomaton.add_transition auto current current (LabelSet.singleton (Questionable [m])) false false false true; *)
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
             TypeAutomaton.append_offers auto current [m];
             next_s
@@ -132,10 +132,11 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           in
           let st = match o_ms.Lang.continuation with
             | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg m)), cont)
-            | None -> StyAtom (o_ms.trigger)
+            | None -> StyAtom (AtomicAct (AtomNBMsg m))
           in
+
           let branch_end = build st current in
-          TypeAutomaton.remove_all_transitions auto current current;
+
         if all_blocking then (
             let all_msg_specs = List.filter_map (fun b -> 
               match b.Lang.trigger with 
@@ -145,7 +146,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
             (* let new_state = TypeAutomaton.new_state auto false in *)
 
-            (* TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false true; *)
+            (* TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Questionable all_msg_specs)) false false false true; *)
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
           );
 
@@ -227,12 +228,50 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
         let all_permut_branch_type =  generate_permutations st [] branch_types in
 
+        let other_permuts = List.filter (fun btype ->
+          not (List.mem btype branch_types)
+        ) all_permut_branch_type in
+
+
+        List.iteri (fun i o_ms ->
+          let m = match o_ms.Lang.trigger with
+            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
+            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
+            | _ -> failwith "Should not reach here"
+          in
+          let st = match o_ms.Lang.continuation with
+            | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg m)), cont)
+            | None -> StyAtom (AtomicAct (AtomNBMsg m))
+          in
+          let other_branch_heads = List.filteri (fun j _ ->
+            j <> i
+          )all_msg_branches in
+          let other_heads = List.map (fun o_other ->
+            match o_other.Lang.trigger with
+            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
+            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
+            | _ -> failwith "Should not reach here"
+          )other_branch_heads in
+          let branch_end = build st current in
+          let t = List.find (fun t ->
+            match LabelSet.elements t.label with
+            | [Action m'] when m = m' -> true
+            | _ -> false
+          ) auto.transitions in
+          let t' = {t with label = LabelSet.add (Negation other_heads) t.label} in
+          auto.transitions <- List.filter (fun tr -> not (tr = t)) auto.transitions;
+          auto.transitions <- t' :: auto.transitions;
+          TypeAutomaton.remove_all_transitions auto current current;
+          TypeAutomaton.reroute_transitions auto branch_end end_state;
+        )all_msg_branches;
 
         List.iter (fun btype ->
           let branch_end = build btype current in
           TypeAutomaton.remove_all_transitions auto current current;
           TypeAutomaton.reroute_transitions auto branch_end end_state;
-        ) all_permut_branch_type;
+        ) other_permuts;
+
+
 
           if all_blocking then (
             let all_msg_specs = List.filter_map (fun b -> 
@@ -240,8 +279,6 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
               | _ -> None
             ) all_msg_branches in
-            (* let new_state = TypeAutomaton.new_state auto false in *)
-            (* TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Negation all_msg_specs)) false false false true; *)
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
           );
         end_state
@@ -423,7 +460,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         List.iter (fun t1 ->
           let next_ps = get_product_state (t1.to_state, s2) in
           let s2_offers = (Hashtbl.find auto2.states s2).offers in
-          let s2_label = LabelSet.singleton (Negation s2_offers) in
+          let s2_label = LabelSet.singleton (Questionable s2_offers) in
           let combined_label = LabelSet.union t1.label s2_label in
           TypeAutomaton.add_transition auto ps next_ps combined_label t1.is_epsilon t1.is_theta t1.is_recurse t1.is_conditional;
           if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
@@ -433,7 +470,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         List.iter (fun t2 ->
           let next_ps = get_product_state (s1, t2.to_state) in
           let s1_offers = (Hashtbl.find auto1.states s1).offers in
-          let s1_label = LabelSet.singleton (Negation s1_offers) in
+          let s1_label = LabelSet.singleton (Questionable s1_offers) in
           let combined_label = LabelSet.union t2.label s1_label in
           TypeAutomaton.add_transition auto ps next_ps combined_label t2.is_epsilon t2.is_theta t2.is_recurse t2.is_conditional;
           if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
@@ -484,6 +521,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       let state2 = Hashtbl.find auto2.states s2 in
       let prod_state = Hashtbl.find auto.states prod_s_id in
       prod_state.offers <- state1.offers @ state2.offers;
+      prod_state.offers_in_future <- state1.offers_in_future @ state2.offers_in_future;
       prod_state.is_fair <- state1.is_fair || state2.is_fair;
       prod_state.adversary <- state1.adversary || state2.adversary;
 
@@ -493,4 +531,5 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
   let final_state = build st auto.start_state in
   (Hashtbl.find auto.states final_state).accepting <- true;
   flush stderr;
+  collect_future_messages auto;
   auto

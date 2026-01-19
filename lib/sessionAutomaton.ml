@@ -19,6 +19,7 @@ type state = {
 type label_kind =
   | Action of message_specifier
   | Delay
+  | Questionable of message_specifier list
   | Negation of message_specifier list
   | OptionDelay of message_specifier list
   | Theta of session_type
@@ -47,15 +48,18 @@ let string_of_label_set (ls: LabelSet.t) : string =
   let str_list = List.map (function
     | Action m -> Printf.sprintf "Action(%s)" (Lang.string_of_msg_spec m)
     | Delay -> "#"
+    | Questionable ms ->
+      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+      Printf.sprintf "May([%s])" ms_str
     | Negation ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-      Printf.sprintf "Negation([%s])" ms_str
+      Printf.sprintf "Questionable([%s])" ms_str
     | Theta st -> Printf.sprintf "Theta(%s)" (Lang.string_of_protocol st)
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
     | Recurse var -> Printf.sprintf "$"^var
     | OptionDelay ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-      Printf.sprintf "(#Negation[%s])" ms_str
+      Printf.sprintf "(#Questionable[%s])" ms_str
   ) elements in
   "{" ^ (String.concat ", " str_list) ^ "}"
 
@@ -251,9 +255,12 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
           | Action m -> Printf.sprintf "%s" (Lang.string_of_msg_spec m)
           | Delay -> "#"
           | Terminal st -> Printf.sprintf "$<%d>" st
+          | Questionable ms ->
+            let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+            Printf.sprintf " ? [%s]" ms_str
           | Negation ms ->
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-            Printf.sprintf "¬[%s]" ms_str
+            Printf.sprintf " ¬[%s]" ms_str
           | Theta st -> Printf.sprintf "θ(%s)" (Lang.string_of_protocol st)
           | OptionDelay ms ->
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
@@ -274,6 +281,54 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
   Printf.fprintf out "}\n";
   flush out
 
+let compare_msg_spec (m1: Lang.message_specifier) (m2: Lang.message_specifier) : int =
+  let m1_str = Lang.string_of_msg_spec m1 in
+  let m2_str = Lang.string_of_msg_spec m2 in
+  String.compare m1_str m2_str
+let collect_future_messages (auto: TypeAutomaton.t) : unit =
+  let is_delay_label (label_set: LabelSet.t) : bool =
+    LabelSet.exists (function
+      | Delay -> true
+      | OptionDelay _ -> true
+      | _ -> false
+    ) label_set in
+  
+
+  let rec dfs_collect (visited: IntSet.t) (current_state: int) : Lang.message_specifier list =
+    if IntSet.mem current_state visited then []
+    else
+      let visited' = IntSet.add current_state visited in
+      let current_state_info = Hashtbl.find auto.states current_state in
+      let collected = ref current_state_info.offers in
+      
+      let outgoing = List.filter (fun t -> 
+        t.from_state = current_state && t.to_state <> current_state
+      ) auto.transitions in
+      
+      List.iter (fun t ->
+        if not (is_delay_label t.label) then
+          (* No delay, continue DFS *)
+          let child_offers = dfs_collect visited' t.to_state in
+          collected := !collected @ child_offers
+      ) outgoing;
+      
+      !collected
+  in
+  
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    Hashtbl.iter (fun state_id state_info ->
+      let current_offers_in_future = state_info.offers_in_future in
+      let new_offers_in_future = dfs_collect IntSet.empty state_id in
+      let unique_new_offers = List.sort_uniq compare_msg_spec new_offers_in_future in
+      if not (List.sort_uniq compare_msg_spec current_offers_in_future = unique_new_offers) then
+        begin
+          state_info.offers_in_future <- unique_new_offers;
+          changed := true
+        end
+    ) auto.states
+  done
 
 let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
   let rec first_messages (st: Lang.session_type) : Lang.message_specifier list =

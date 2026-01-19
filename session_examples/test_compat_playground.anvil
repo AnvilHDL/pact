@@ -75,12 +75,12 @@ pool p13 {
 }
 pool p14 {
     ep_le -- ep_ri : ch;
-    ip141 : ep.req || ep.ack,
-    ip142 : ep.req ; ep.ack
+    ip141 : #ep.req || #ep.ack,
+    ip142 : #ep.req ; #ep.ack
 }
 pool p15 { // false
     ep_le -- ep_ri : ch;
-    in151 : ep.m1;^(ep.m2,ep.m3),
+    in151 : ep.m1;&(ep.m2,ep.m3),
     in152 : ep.m1,
     in153 : ^(ep.m2,*),
     in154 : ^(ep.m3,*)
@@ -100,8 +100,18 @@ pool p17 { // true
     ip171 : &(ep.m1,ep.m2),
     ip172 : ep.m1
 }
+pool p18 { // false
+    ep_le -- ep_ri : ch;
+    in101 : ^(#ep.m1, #ep.m2) ,
+    in182 : #ep.m1;#ep.m2
+}
+pool p19 { // true
+    ep_le -- ep_ri : ch;
+    ip191 : &(ep.m1, ep.m2,*);#1,
+    ip192 : #2;ep.m1
+}
 
-// // Negative cases
+// Negative cases
 pool n1 { // false
     ep_le -- ep_ri : ch;
     in11 : #ep.req + #ep.ack ,
