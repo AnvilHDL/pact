@@ -728,14 +728,20 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
         List.iter (fun t1 ->
           let next_ps = get_product_state (t1.to_state, s2) in
-          TypeAutomaton.add_transition auto ps next_ps t1.label t1.is_epsilon t1.is_theta t1.is_recurse t1.is_conditional;
+          let s2_offers = (Hashtbl.find auto2.states s2).offers in
+          let s2_label = LabelSet.singleton (Negation s2_offers) in
+          let combined_label = LabelSet.union t1.label s2_label in
+          TypeAutomaton.add_transition auto ps next_ps combined_label t1.is_epsilon t1.is_theta t1.is_recurse t1.is_conditional;
           if not (IntPairSet.mem (t1.to_state, s2) !visited) then 
             worklist := (t1.to_state, s2) :: !worklist
         ) trans1;
 
         List.iter (fun t2 ->
           let next_ps = get_product_state (s1, t2.to_state) in
-          TypeAutomaton.add_transition auto ps next_ps t2.label t2.is_epsilon t2.is_theta t2.is_recurse t2.is_conditional;
+          let s1_offers = (Hashtbl.find auto1.states s1).offers in
+          let s1_label = LabelSet.singleton (Negation s1_offers) in
+          let combined_label = LabelSet.union t2.label s1_label in
+          TypeAutomaton.add_transition auto ps next_ps combined_label t2.is_epsilon t2.is_theta t2.is_recurse t2.is_conditional;
           if not (IntPairSet.mem (s1, t2.to_state) !visited) then 
             worklist := (s1, t2.to_state) :: !worklist
         ) trans2;

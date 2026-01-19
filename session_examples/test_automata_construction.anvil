@@ -1,4 +1,4 @@
-// Basic types for session interfaces (check automaton construction)
+// // Basic types for session interfaces (check automaton construction)
 
 interface t1 (ep : left ch) = ep.req
 
@@ -39,3 +39,7 @@ interface t16 (ep : left ch) = (ep.req + ep.ack) || ( ep.nack + ep.rreq )
 interface t17 (ep : left ch) = ep.m1 || ep.m2
 
 interface t18(ep : left ch) = ep.m1 + ()
+
+interface t19(ep : left ch) = &(#ep.m1, #ep.m2)
+
+interface  t20(ep : left ch) = #ep.m1 || #ep.m2

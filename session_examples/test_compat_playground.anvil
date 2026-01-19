@@ -140,3 +140,17 @@ pool n6 { // false
     in61 : &(ep.m1, ep.m2) ,
     in62 : ep.m1
 }
+
+pool n7 { // false
+    ep_le -- ep_ri : ch;
+    in71 : (#ep.m1+#ep.m2);#1,
+    in72 : #ep.m1;#1,
+    in73 : #ep.m2;#1
+}
+
+pool n8 { // false
+    ep_le -- ep_ri : ch;
+    in81 : ^(#ep.m1 : #ep.m3, #ep.m2 : #ep.m4) ,
+    in82 : #ep.m1;#ep.m3,
+    in83 : #ep.m2
+}
