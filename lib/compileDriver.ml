@@ -121,47 +121,6 @@ let rely_guarantee_debug _out config  =
 
   Printf.eprintf "\n"
 
-let automata_debug _out config =
-  let toplevel_filename = List.hd config.Config.input_filenames in
-  let cunits = ref [] in
-  (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
-    with
-      | Except.TypeError msg ->
-        (Except.Text "Type error:")::msg
-          |> raise_compile_error None
-  );
-  let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
-  let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
-    let open Lang in
-    let open SessionCompatiblity in
-    let open SessionCompatiblityv3 in
-  (* First build and print automaton for session types *)
-  List.iter (fun (sdef : session_def ast_node) ->
-    let auto = SessionCompatiblityv3.build_automaton None sdef.d.body.d sdef.d.body.span in
-    let out_channel = Printf.sprintf "automaton_%s.dot" sdef.d.name in
-    let out = open_out out_channel in
-    print_automaton_dot auto out;
-    close_out out;
-  ) session_type_defs;
-
-  List.iter (fun (pool : interface_pool_def ast_node) ->
-    Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
-    
-
-    let session_ids = SessionHelper.preprocess_pool_for_compatibility 
-        pool session_type_defs in
-    
-    let compat, err = try check_compatiblity_multiparty session_ids config.verbose pool.span with
-      | Except.TypeError msg ->
-        (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
-      | Failure msg -> (false, msg)
-      
-
-    in
-    Printf.eprintf "Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
-  ) pool_defs;
-  Printf.eprintf "\n"
 
 let generalized_type_debug _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
@@ -182,7 +141,8 @@ let generalized_type_debug _out config =
     ) session_type_defs;
     
 
-  let open SessionCompatiblityv3 in
+  let open SessionBuildAutomaton in
+  let open SessionAutomaton in
 
   if config.verbose then Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
   List.iter(
@@ -226,7 +186,7 @@ let debug_types out config =
   let open Config in
   match config.debug_choice with
   | 0 -> rely_guarantee_debug out config
-  | 1 -> automata_debug out config
+  | 1 -> ()
   | 2 -> generalized_type_debug out config
   | _ -> raise (Failure "Unknown debug choice")
       
