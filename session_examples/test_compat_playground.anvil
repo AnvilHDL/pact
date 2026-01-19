@@ -135,3 +135,8 @@ pool n5 { // true
 
 }
     
+pool n6 { // false
+    ep_le -- ep_ri : ch;
+    in61 : &(ep.m1, ep.m2) ,
+    in62 : ep.m1
+}

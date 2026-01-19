@@ -213,12 +213,37 @@ end
 
 let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
   Printf.fprintf out "digraph TypeAutomaton {\n";
-  Hashtbl.iter (fun id state ->
-    let shape = if state.accepting then "doublecircle" else if state.adversary then "square" else "circle" in
-    let color = if state.is_winning then "green" else if state.is_fair then "yellow" else "red" in
-    Printf.fprintf out "  %d [shape=%s, color=%s];\n" id shape color
-  ) auto.states;
   
+  Printf.fprintf out "  rankdir=LR;\n";
+  Printf.fprintf out "  nodesep=0.5;\n";
+  Printf.fprintf out "  ranksep=0.75;\n";
+
+  Printf.fprintf out "  __start [shape=none, label=\"\", width=0, height=0];\n";
+  Printf.fprintf out "  __start -> %d [color=grey];\n" auto.start_state;
+
+  let sorted_ids = 
+    Hashtbl.fold (fun id _ acc -> id :: acc) auto.states [] 
+    |> List.sort compare 
+  in
+
+  List.iter (fun id ->
+    let state = Hashtbl.find auto.states id in
+    let shape = if state.accepting then "doublecircle" else if state.adversary then "square" else "circle" in
+    
+    let color = if state.is_winning then "darkgreen" else if state.is_fair then "orange" else "black" in
+    
+    let style = if state.is_winning then "filled, bold" else "bold" in
+    let fillcolor = if state.is_winning then "palegreen" else "white" in 
+
+    Printf.fprintf out "  %d [shape=%s, color=%s, style=\"%s\", fillcolor=\"%s\"];\n" 
+      id shape color style fillcolor
+  ) sorted_ids;
+  
+  let sorted_transitions = List.sort (fun t1 t2 -> 
+    if t1.from_state = t2.from_state then compare t1.to_state t2.to_state
+    else compare t1.from_state t2.from_state
+  ) auto.transitions in
+
   List.iter (fun t ->
     let label_str = 
       if t.is_epsilon then "ε"
@@ -234,15 +259,21 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
           | OptionDelay ms ->
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
             Printf.sprintf "(#¬[%s])" ms_str
-          | _ -> string_of_label_set t.label
+          (* Explicitly handle Recurse if needed, or fallback *)
+          | Recurse id -> Printf.sprintf "$%s" id
+          (* | _-> string_of_label_set t.label *)
         ))
     in
-    Printf.fprintf out "  %d -> %d [label=\"%s\"];\n" t.from_state t.to_state label_str
-  ) auto.transitions;
+    
+    let constraint_attr = if t.to_state <= t.from_state then "constraint=false," else "" in
+    
+    let color_attr = if t.to_state = t.from_state then "color=blue, fontcolor=blue," else "" in
+
+    Printf.fprintf out "  %d -> %d [%s%slabel=\"%s\"];\n" t.from_state t.to_state constraint_attr color_attr label_str
+  ) sorted_transitions;
 
   Printf.fprintf out "}\n";
   flush out
-
 
 
 let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
@@ -1155,7 +1186,7 @@ let find_counterexample (auto : TypeAutomaton.t) (start : int) (winning_set : In
       Printf.bprintf buffer " -> Loop at %d" u
     else (
       Hashtbl.add visited u ();
-      Printf.bprintf buffer "\nState %d" u;
+      Printf.bprintf buffer "\nState %d [Offers : %s]" u (String.concat ", " (List.map string_of_msg_spec (Hashtbl.find auto.states u).offers));
       if IntSet.mem u winning_set then 
         Printf.bprintf buffer " (WIN)"
       else 
@@ -1174,7 +1205,7 @@ let find_counterexample (auto : TypeAutomaton.t) (start : int) (winning_set : In
       
       match next_opt with
       | Some t -> 
-         Printf.bprintf buffer " --[%s]--> " (string_of_label_set t.label);
+         Printf.bprintf buffer "\n\t --[%s]--> " (string_of_label_set t.label);
          dfs t.to_state
       | None -> Printf.bprintf buffer " -> Deadlock"
     )
