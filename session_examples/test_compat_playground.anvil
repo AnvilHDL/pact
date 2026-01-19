@@ -125,3 +125,13 @@ pool n4 { // false
     in41 : F #ep.m1 ,
     in42 : #ep.m1 
 }
+
+pool n5 { // true
+    ep_le -- ep_ri : ch;
+    p1 : () + &(#ep.m1, #ep.m2),
+    p2 :#ep.m1 ,
+    p3 : #ep.m4; #ep.m2,
+    p4 : #ep.m4
+
+}
+    

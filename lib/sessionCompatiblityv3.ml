@@ -1018,8 +1018,25 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             | None -> Printf.sprintf "Auto %d: None" i
             | Some t -> "Auto "^(string_of_int i)^": "^(string_of_transition t)
           ) transition_set)); *)
+           let no_recurse = List.for_all (fun t -> t = [])_recurse_transitions in
 
             if is_compatible then (
+              if is_all_conditional then (
+                
+                if(not no_recurse) then ()
+                else
+                List.iteri (fun i t_opt -> 
+                  match t_opt with
+                  | None -> ()
+                  | Some t -> 
+                    let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
+                    let next_prod_state = get_product_state next_states in
+                    TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+                    if not (IntListSet.mem next_states !visited) then 
+                      worklist := next_states :: !worklist
+                ) transition_set
+              )
+            else
               let next_states = List.mapi (fun idx t_opt ->
                 let current_state = List.nth current_states idx in
                 match t_opt with
@@ -1028,9 +1045,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               ) transition_set in
               let next_prod_state = get_product_state next_states in
               
-              
+              found := (!found) || (not is_all_conditional);
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_actions false false false (List.for_all (fun t_opt -> match t_opt with None -> true | Some t -> t.is_conditional) transition_set);
-              found := true;
               if not (IntListSet.mem next_states !visited) then 
                 worklist := next_states :: !worklist
 
@@ -1038,7 +1054,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           )
         ) all_transition_combinations;
 
-        if not !found then (
+        (* if not !found then ( *)
           List.iteri (fun i t_set -> 
             if List.length t_set > 1 then raise (Failure "Unexpected: more than 1 recurse transition in set")
             else if List.length t_set = 1 then (
@@ -1049,8 +1065,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               if not (IntListSet.mem next_states !visited) then 
                  worklist := next_states :: !worklist
             ) 
-          )_recurse_transitions
-        );
+          )_recurse_transitions;
+        (* ); *)
 
         if all_has_delay then
         ( 
