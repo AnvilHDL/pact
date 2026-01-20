@@ -504,4 +504,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
   (Hashtbl.find auto.states final_state).accepting <- true;
   flush stderr;
   collect_future_messages auto;
+  (* Hashtbl.iter (fun id s ->
+    Printf.eprintf "State %d: accepting=%b \n offers = %s\n future offers = %s\n" id s.accepting
+      (String.concat "," (List.map (fun m -> Lang.string_of_msg_spec m) s.offers))
+      (String.concat "," (List.map (fun m -> Lang.string_of_msg_spec m) s.offers_in_future))
+  )auto.states; *)
   auto

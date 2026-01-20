@@ -254,46 +254,22 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
           let is_all_conditional = List.for_all (fun (_, cond) -> cond) is_compatible in
 
-          (* let is_strong_compatible = List.map (fun (_, _ , strong) -> strong) is_compatible in *)
-
           let is_compatible = List.for_all (fun (x, _) -> x) is_compatible in
-
-          let offer_lists = List.mapi (fun indx s -> 
-            let auto, _= List.nth automata_ids indx in 
-            let st = Hashtbl.find auto.states s in 
-            st.offers
-          ) current_states in
-
-
-          let is_not_needed = List.mapi( fun i o ->
-            let other_offers idx =
-              List.flatten (List.mapi (fun jdx offers ->
-                if jdx = idx then [] else offers
-              )offer_lists) in
-            let other_offers = other_offers i in
-            List.exists (fun m -> List.mem m other_offers ) o
-
-          )offer_lists in
-
-          let is_not_needed = List.exists (fun x -> x) is_not_needed in
-
-          let is_compatible = if is_all_conditional then not is_not_needed else is_compatible in
-
-
 
 
             if is_compatible then (
               found := true;
               if is_all_conditional then (
-                
-                (* if(not no_recurse) then ()
-                else *)
                 List.iteri (fun i t_opt -> 
                   match t_opt with
                   | None -> ()
                   | Some t -> 
+
                     let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
                     let next_prod_state = get_product_state next_states in
+                    (* let offers_in_future_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers_in_future) ) current_states in
+                    let offers_in_future_of_this_state = List.flatten offers_in_future_of_this_state in
+                    Printf.eprintf "  Transition %s from state %d to %d with offers in future \n%s\n" (string_of_transition t) prod_state_id next_prod_state (String.concat "," (List.map Lang.string_of_msg_spec offers_in_future_of_this_state)); *)
                     TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
                     if not (IntListSet.mem next_states !visited) then 
                       worklist := next_states :: !worklist
