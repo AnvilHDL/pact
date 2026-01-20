@@ -121,56 +121,17 @@ pool p21 {
     in212 : ep1.m1;#1,
     in213 : ep2.m2;#1
 }
-// Negative cases
-pool n1 { // false
+pool p22 { 
     ep_le -- ep_ri : ch;
-    in11 : #ep.req + #ep.ack ,
-    in12 : #ep.req || #ep.ack 
+    in221 : &(ep.m1, ep.m2) ,
+    in222 : ep.m1
 }
 
-pool n2 { // false
+pool p23 { // true
     ep_le -- ep_ri : ch;
-    in21 : #ep.req  + #ep.ack ,
-    in22 : #ep.req  + #ep.ack
-}
+    p231 : () + &(#ep.m1, #ep.m2),
+    p232 :#ep.m1 ,
+    p233 : #ep.m4; #ep.m2,
+    p234 : #ep.m4
 
-pool n3 { // false
-    ep_le -- ep_ri : ch;
-    in31 : ep.m1 ; ^(#ep.m2, *),
-    in3 : #ep.m1 + #ep.m2 
-}
-
-pool n4 { // false
-    ep_le -- ep_ri : ch;
-    in41 : F #ep.m1 ,
-    in42 : #ep.m1 
-}
-
-pool n5 { // true
-    ep_le -- ep_ri : ch;
-    p1 : () + &(#ep.m1, #ep.m2),
-    p2 :#ep.m1 ,
-    p3 : #ep.m4; #ep.m2,
-    p4 : #ep.m4
-
-}
-    
-pool n6 { // false
-    ep_le -- ep_ri : ch;
-    in61 : &(ep.m1, ep.m2) ,
-    in62 : ep.m1
-}
-
-pool n7 { // false
-    ep_le -- ep_ri : ch;
-    in71 : (#ep.m1+#ep.m2);#1,
-    in72 : #ep.m1;#1,
-    in73 : #ep.m2;#1
-}
-
-pool n8 { // false
-    ep_le -- ep_ri : ch;
-    in81 : ^(#ep.m1 : #ep.m3, #ep.m2 : #ep.m4) ,
-    in82 : #ep.m1;#ep.m3,
-    in83 : #ep.m2
 }

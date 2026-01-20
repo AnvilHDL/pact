@@ -1,0 +1,39 @@
+// Negative cases
+pool n1 { // false
+    ep_le -- ep_ri : ch;
+    in11 : #ep.req + #ep.ack ,
+    in12 : #ep.req || #ep.ack 
+}
+
+pool n2 { // false
+    ep_le -- ep_ri : ch;
+    in21 : #ep.req  + #ep.ack ,
+    in22 : #ep.req  + #ep.ack
+}
+
+pool n3 { // false
+    ep_le -- ep_ri : ch;
+    in31 : ep.m1 ; ^(#ep.m2, *),
+    in3 : #ep.m1 + #ep.m2 
+}
+
+pool n4 { // false
+    ep_le -- ep_ri : ch;
+    in41 : F #ep.m1 ,
+    in42 : #ep.m1 
+}
+
+
+pool n5 { // false
+    ep_le -- ep_ri : ch;
+    in51 : (#ep.m1+#ep.m2);#1,
+    in52 : #ep.m1;#1,
+    in53 : #ep.m2;#1
+}
+
+pool n6 { // false
+    ep_le -- ep_ri : ch;
+    in61 : ^(#ep.m1 : #ep.m3, #ep.m2 : #ep.m4) ,
+    in62 : #ep.m1;#ep.m3,
+    in63 : #ep.m2
+}
