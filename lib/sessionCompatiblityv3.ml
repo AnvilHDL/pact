@@ -407,7 +407,7 @@ let check_compatibility_multiparty
 
     let ids_list = List.map snd session_ids in
     
-    let result, err = play_game prod_auto ids_list verbose in
+    let result, err = play_game prod_auto ids_list in
     Printf.eprintf "Game Analysis Completed.\n";
 
     let out = Stdlib.open_out ("prod_auto_"^pool_id^".dot") in
