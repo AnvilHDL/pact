@@ -77,6 +77,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       current
     | Lang.StyXOffer offerings ->
       (
+        TypeAutomaton.make_fair auto current;
         let is_wildcard_present = List.exists (fun (o : offering_session_type) ->
           match o.Lang.trigger with
           | Lang.AtomDelay _ -> true

@@ -1,0 +1,5 @@
+pool top{
+    ep_le -- ep_ri : ch;
+    p1 : ^(ep.m1, * :ep.m2),
+    p2 : ep.m2
+}

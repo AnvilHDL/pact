@@ -7,33 +7,50 @@ let find_counterexample (auto : TypeAutomaton.t) (start : int) (winning_set : In
   let buffer = Buffer.create 256 in
   let visited = Hashtbl.create 16 in
   
+  let is_deadlock u = 
+    not (List.exists (fun t -> t.from_state = u) auto.transitions)
+  in
+
   let rec dfs u = 
     if Hashtbl.mem visited u then 
       Printf.bprintf buffer " -> Loop at %d" u
     else (
       Hashtbl.add visited u ();
-      Printf.bprintf buffer "\nState %d\n 1. [Offers : %s]\n" u (String.concat ", " (List.map string_of_msg_spec (Hashtbl.find auto.states u).offers));
-      if IntSet.mem u winning_set then 
-        Printf.bprintf buffer " (WIN)"
-      else 
-        Printf.bprintf buffer " (LOSE)";
-
       let state = Hashtbl.find auto.states u in
+      
+      Printf.bprintf buffer "\nState %d\n 1. [Offers : %s]\n" u (String.concat ", " (List.map string_of_msg_spec state.offers));
+      
+      let is_winning = IntSet.mem u winning_set in
+      if is_winning then Printf.bprintf buffer " (WIN)" else Printf.bprintf buffer " (LOSE)";
+
       let outgoing = List.filter (fun t -> t.from_state = u) auto.transitions in
       
+         
+      let losing_transitions = 
+        if is_winning then []
+        else List.filter (fun t -> not (IntSet.mem t.to_state winning_set)) outgoing 
+      in
+
       let next_opt = 
-        if state.adversary then 
-           try Some (List.find (fun t -> not (IntSet.mem t.to_state winning_set)) outgoing)
-           with Not_found -> None
-        else 
-           match outgoing with [] -> None | h::_ -> Some h
+        match losing_transitions with
+        | [] -> 
+            None 
+        | transitions ->
+            match List.find_opt (fun t -> is_deadlock t.to_state) transitions with
+            | Some t -> Some t
+            | None ->
+                match List.find_opt (fun t -> not (Hashtbl.mem visited t.to_state)) transitions with
+                | Some t -> Some t
+                | None ->
+                    Some (List.hd transitions)
       in
       
       match next_opt with
       | Some t -> 
          Printf.bprintf buffer "\n\t --[%s]--> " (string_of_label_set t.label);
          dfs t.to_state
-      | None -> Printf.bprintf buffer " -> Deadlock"
+      | None -> 
+         Printf.bprintf buffer " -> Deadlock / End of Trace"
     )
   in
   dfs start;
