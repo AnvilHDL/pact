@@ -199,10 +199,10 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                           | Some t -> List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label)
                       ) transition_set) in
 
-                      (* let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in *)
+                      let actions_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers) ) current_states in
                       let offers_in_future_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers_in_future) ) current_states in
 
-                      (* let actions_of_this_state = List.flatten actions_of_this_state in *)
+                      let actions_of_this_state = List.flatten actions_of_this_state in
                       let offers_in_future_of_this_state = List.flatten offers_in_future_of_this_state in
 
                       let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
@@ -219,7 +219,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                             not (List.mem tna offers_in_future_of_this_state)
                           )t_not_acts_flat&&
                           List.for_all( fun nq ->
-                            List.mem nq offers_in_future_of_this_state
+                            List.mem nq offers_in_future_of_this_state && not (List.mem nq actions_of_this_state)
                           )next_quests
                         ),
                         t.is_conditional

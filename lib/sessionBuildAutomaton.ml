@@ -21,8 +21,6 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         | Lang.AtomicAct (Lang.AtomBMsg m) -> 
           (
             (Hashtbl.find auto.states current).accepting <- false;
-            (* let pseudo_next = TypeAutomaton.new_state auto false in *)
-            (* TypeAutomaton.add_transition auto current pseudo_next (LabelSet.singleton (Questionable [m])) false false false true; *)
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay [m])) false false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
@@ -33,7 +31,6 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           (
             (Hashtbl.find auto.states current).accepting <- false;
             let next_s = TypeAutomaton.new_state auto true in
-            (* TypeAutomaton.add_transition auto current current (LabelSet.singleton (Questionable [m])) false false false true; *)
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
             TypeAutomaton.append_offers auto current [m];
             next_s
@@ -143,10 +140,6 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
               | _ -> None
             ) all_msg_branches in
-
-            (* let new_state = TypeAutomaton.new_state auto false in *)
-
-            (* TypeAutomaton.add_transition auto current new_state (LabelSet.singleton (Questionable all_msg_specs)) false false false true; *)
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
           );
 
