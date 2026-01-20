@@ -12,7 +12,7 @@ let find_counterexample (auto : TypeAutomaton.t) (start : int) (winning_set : In
       Printf.bprintf buffer " -> Loop at %d" u
     else (
       Hashtbl.add visited u ();
-      Printf.bprintf buffer "\nState %d [Offers : %s]" u (String.concat ", " (List.map string_of_msg_spec (Hashtbl.find auto.states u).offers));
+      Printf.bprintf buffer "\nState %d\n 1. [Offers : %s]\n" u (String.concat ", " (List.map string_of_msg_spec (Hashtbl.find auto.states u).offers));
       if IntSet.mem u winning_set then 
         Printf.bprintf buffer " (WIN)"
       else 

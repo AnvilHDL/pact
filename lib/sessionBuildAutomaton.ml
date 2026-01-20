@@ -444,10 +444,25 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
        let delay_trans1 = List.filter is_delay trans1 in
        let delay_trans2 = List.filter is_delay trans2 in
         let trans1 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not (is_delay t) ) trans1 in
+        let cond_trans1 = List.filter (fun t -> t.is_conditional ) trans1 in
+
+        let trans1 = List.filter (fun t -> not t.is_conditional ) trans1 in
 
         let trans2 = List.filter (fun t -> not t.is_epsilon && not t.is_theta && not (is_delay t) ) trans2 in
 
+        let cond_trans2 = List.filter (fun t -> t.is_conditional ) trans2 in
 
+        let trans2 = List.filter (fun t -> not t.is_conditional ) trans2 in
+
+
+        List.iter (fun t1 ->
+          List.iter (fun t2 ->
+            let label_set = LabelSet.union t1.label t2.label in
+            TypeAutomaton.add_transition auto ps (get_product_state (t1.to_state, t2.to_state)) label_set false false false (t1.is_conditional && t2.is_conditional);
+            if not (IntPairSet.mem (t1.to_state, t2.to_state) !visited) then 
+              worklist := (t1.to_state, t2.to_state) :: !worklist
+          ) cond_trans2
+        ) cond_trans1;
 
 
         List.iter (fun t1 ->

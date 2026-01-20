@@ -50,10 +50,10 @@ let string_of_label_set (ls: LabelSet.t) : string =
     | Delay -> "#"
     | Questionable ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-      Printf.sprintf "May([%s])" ms_str
+      Printf.sprintf "UpNext([%s])" ms_str
     | Negation ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
-      Printf.sprintf "Questionable([%s])" ms_str
+      Printf.sprintf "Negation([%s])" ms_str
     | Theta st -> Printf.sprintf "Theta(%s)" (Lang.string_of_protocol st)
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
     | Recurse var -> Printf.sprintf "$"^var
@@ -158,7 +158,7 @@ module TypeAutomaton = struct
   let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) (is_theta : bool) (is_recurse: bool) (is_conditional: bool) : unit =
     let found = ref false in
     let new_transitions = List.map (fun t ->
-      if t.from_state = from_s && t.to_state = to_s && t.is_epsilon = is_epsilon && t.is_theta = is_theta then
+      if t.from_state = from_s && t.to_state = to_s && t.is_epsilon = is_epsilon && t.is_theta = is_theta && t.is_conditional = is_conditional then
         (found := true; { t with label = LabelSet.union t.label label_set })
       else t
     ) auto.transitions in

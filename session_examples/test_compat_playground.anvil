@@ -1,20 +1,20 @@
-pool p1 { // trued
-    ep_le -- ep_ri : ch;
-    ip11 : (ep.req ; ep.ack) ,
-    ip12 : (ep.req ; ep.ack)
-}
+// pool p1 { // trued
+//     ep_le -- ep_ri : ch;
+//     ip11 : (ep.req ; ep.ack) ,
+//     ip12 : (ep.req ; ep.ack)
+// }
 
-pool p2 { // true
-    ep_le -- ep_ri : ch;
-    ip21 : (#ep.req ; #ep.ack) ,
-    ip22 : (#ep.req || #ep.ack)
-}
+// pool p2 { // true
+//     ep_le -- ep_ri : ch;
+//     ip21 : (#ep.req ; #ep.ack) ,
+//     ip22 : (#ep.req || #ep.ack)
+// }
 
-pool p3 { // true
-    ep_le -- ep_ri : ch;
-    ip31 : #ep.req  + #ep.ack ,
-    ip32 : ^( #ep.req , #ep.ack) 
-}
+// pool p3 { // true
+//     ep_le -- ep_ri : ch;
+//     ip31 : #ep.req  + #ep.ack ,
+//     ip32 : ^( #ep.req , #ep.ack) 
+// }
 pool p4 { // true
     ep_le -- ep_ri : ch;
     ip41 : #ep.req  + #ep.ack ,
@@ -110,6 +110,11 @@ pool p19 { // true
     ip191 : &(ep.m1, ep.m2,*);#1,
     ip192 : #2;ep.m1
 }
+pool p20{
+    ep_le -- ep_ri : ch;
+    in201 : ^(#ep.m1, #ep.m2),
+    in202 : ^(#ep.m1, * ) || ^( #ep.m2, * )
+} 
 
 // Negative cases
 pool n1 { // false
