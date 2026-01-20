@@ -12,6 +12,10 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
     assert (List.length final_state = 1);
     TypeAutomaton.add_transition auto (List.hd final_state) auto.start_state (LabelSet.singleton (Recurse intf_id)) false false true false;
+    let final_state = List.hd final_state in
+    let final_state_state = Hashtbl.find auto.states final_state in
+    let first_state_state = Hashtbl.find auto.states auto.start_state in 
+    final_state_state.offers_in_future <- first_state_state.offers_in_future;
     (auto, intf_id)
   ) session_ids in
 
@@ -239,11 +243,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                             List.for_all(fun ps -> List.mem ps na) combined_t_possibe_acts
                           ) actions_of_this_state
                           )
-                          ) )&& (
-                            List.for_all ( fun nq ->
-                              List.mem nq offers_in_future_of_this_state
-                          )next_quests
-                          )
+                          ) )
                         ),
                         t.is_conditional
                       ) in
@@ -281,18 +281,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
 
 
-          (* Printf.eprintf "[%s] Transition Combination: %s\n" (string_of_bool is_compatible) (String.concat "; " (List.mapi (fun i t_opt ->
-            match t_opt with
-            | None -> Printf.sprintf "Auto %d: None" i
-            | Some t -> "Auto "^(string_of_int i)^": "^(string_of_transition t)
-          ) transition_set)); *)
-           let no_recurse = List.for_all (fun t -> t = [])_recurse_transitions in
 
             if is_compatible then (
+              found := true;
               if is_all_conditional then (
                 
-                if(not no_recurse) then ()
-                else
+                (* if(not no_recurse) then ()
+                else *)
                 List.iteri (fun i t_opt -> 
                   match t_opt with
                   | None -> ()
@@ -312,8 +307,6 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 | Some t -> if  (t.is_conditional&&is_all_conditional)|| (not t.is_conditional) then t.to_state else current_state
               ) transition_set in
               let next_prod_state = get_product_state next_states in
-              
-              found := (!found) || (not is_all_conditional);
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_actions false false false (List.for_all (fun t_opt -> match t_opt with None -> true | Some t -> t.is_conditional) transition_set);
               if not (IntListSet.mem next_states !visited) then 
                 worklist := next_states :: !worklist
@@ -412,12 +405,12 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
 let label_adversary_state (auto : TypeAutomaton.t) (state_id : int) =
   let state = Hashtbl.find auto.states state_id in
-  let check_if_adversary_state =
+  (* let check_if_adversary_state =
     List.exists (fun t ->
       t.is_theta
     ) (List.filter (fun t -> t.from_state = state_id) auto.transitions)
   in
-  if check_if_adversary_state then
+  if check_if_adversary_state then *)
     state.adversary <- true
 
 

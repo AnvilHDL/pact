@@ -175,7 +175,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         let end_state = TypeAutomaton.new_state auto true in
 
         (* add wildcard branch and the possible delay *)
-        if is_wildcard_present then begin
+        let wildcard_there = if is_wildcard_present then begin
           let wildcard_offer = List.find (fun (o : offering_session_type) -> 
             match o.Lang.trigger with
             | Lang.AtomDelay _ -> true
@@ -191,82 +191,46 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
+            (
             let branch_end = build cont new_wildcard_state in
-            TypeAutomaton.reroute_transitions auto branch_end end_state
-          | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state
-        end else begin
-        end;
+            TypeAutomaton.reroute_transitions auto branch_end end_state;
+            true
+            )
 
-        let branch_types = List.map (fun o_ms ->
-          let trigger_msg = match o_ms.Lang.trigger with
-            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
-            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
-            | _ -> failwith "Should not reach here"
-          in
-          match o_ms.Lang.continuation with
-          | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg trigger_msg)), cont)
-          | None -> StyAtom (AtomicAct (AtomNBMsg trigger_msg))
-        ) all_msg_branches in
+          | None ->
+            (
+            TypeAutomaton.reroute_transitions auto new_wildcard_state end_state;
+            false
+           )
+            
+        end else false in
 
+        let tranformed_type = List.fold_left( fun acc o_ms ->
+          match acc with
+          | None ->
+            Some(StyXOffer(o_ms::[{trigger = AtomDelay 0; continuation = None}]))
+          | Some ac ->
+            Some(StyParallel(StyXOffer(o_ms::[{trigger = AtomDelay 0; continuation = None}]), ac))
+        )None all_msg_branches  in
 
-        let rec generate_permutations btype acc  = function
-          | [] -> acc
-          | h::t ->
-            let new_acc = acc @ (List.map (fun existing ->
-              Lang.StyParallel (h, existing)
-            ) acc) @ [h] in
-            generate_permutations btype new_acc t
-        in
+        let transformed_type = Option.get tranformed_type in
+
+        let t_end = build transformed_type current in
+        TypeAutomaton.remove_all_transitions auto current current;
+        TypeAutomaton.reroute_transitions auto t_end end_state;
+
+       ( 
+        if wildcard_there then
+        (
+          let trans = List.filter (fun t ->
+              not (t.is_conditional && (t.from_state = current) && (t.to_state = end_state))
+          )auto.transitions in
+          auto.transitions <- trans;
           
-
-        let all_permut_branch_type =  generate_permutations st [] branch_types in
-
-        let other_permuts = List.filter (fun btype ->
-          not (List.mem btype branch_types)
-        ) all_permut_branch_type in
-
-
-        List.iteri (fun i o_ms ->
-          let m = match o_ms.Lang.trigger with
-            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
-            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
-            | _ -> failwith "Should not reach here"
-          in
-          let st = match o_ms.Lang.continuation with
-            | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg m)), cont)
-            | None -> StyAtom (AtomicAct (AtomNBMsg m))
-          in
-          let other_branch_heads = List.filteri (fun j _ ->
-            j <> i
-          )all_msg_branches in
-          let other_heads = List.map (fun o_other ->
-            match o_other.Lang.trigger with
-            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
-            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
-            | _ -> failwith "Should not reach here"
-          )other_branch_heads in
-          let branch_end = build st current in
-          let t = List.find (fun t ->
-            match LabelSet.elements t.label with
-            | [Action m'] when m = m' -> true
-            | _ -> false
-          ) auto.transitions in
-          let t' = {t with label = LabelSet.add (Negation other_heads) t.label} in
-          auto.transitions <- List.filter (fun tr -> not (tr = t)) auto.transitions;
-          auto.transitions <- t' :: auto.transitions;
-          TypeAutomaton.remove_all_transitions auto current current;
-          TypeAutomaton.reroute_transitions auto branch_end end_state;
-        )all_msg_branches;
-
-        List.iter (fun btype ->
-          let branch_end = build btype current in
-          TypeAutomaton.remove_all_transitions auto current current;
-          TypeAutomaton.reroute_transitions auto branch_end end_state;
-        ) other_permuts;
-
-
-
-          if all_blocking then (
+        )
+      )
+        ;
+        if all_blocking then (
             let all_msg_specs = List.filter_map (fun b -> 
               match b.Lang.trigger with 
               | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
