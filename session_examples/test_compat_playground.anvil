@@ -115,7 +115,12 @@ pool p20{
     in201 : ^(#ep.m1, #ep.m2),
     in202 : ^(#ep.m1, * ) || ^( #ep.m2, * )
 } 
-
+pool p21 {
+    ep_le -- ep_ri : ch;
+    in211 : (ep1.m1 + ep2.m2);#1,
+    in212 : ep1.m1;#1,
+    in213 : ep2.m2;#1
+}
 // Negative cases
 pool n1 { // false
     ep_le -- ep_ri : ch;

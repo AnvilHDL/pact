@@ -1,5 +1,6 @@
 pool top{
     ep_le -- ep_ri : ch;
-    p1 : ^(ep.m1, * :ep.m2),
-    p2 : ep.m2
+    p1 : (ep1.m1 + ep2.m2);#1,
+    p2 : ep1.m1;#1,
+    p3 : ep2.m2;#1
 }
