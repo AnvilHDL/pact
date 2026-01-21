@@ -129,12 +129,62 @@ let sanity_check (auto : TypeAutomaton.t) : int list =
   Hashtbl.fold (fun id _st acc ->
     if List.exists (fun t -> t.from_state = id) auto.transitions then acc else id :: acc
   ) auto.states []
+
+let collect_dead_ends_paths (auto : TypeAutomaton.t) (st_ids : int list) : (int * string) list =
+  List.map (fun dead_end_id ->
+    let visited = Hashtbl.create 16 in
+    let queue = Queue.create () in
+    Hashtbl.add visited auto.start_state None;
+    Queue.add auto.start_state queue;
+
+    let rec build_path u =
+      match Hashtbl.find visited u with
+      | None -> []
+      | Some (prev, t) -> build_path prev @ [t]
+    in
+
+    let found = ref false in
+    while not !found && not (Queue.is_empty queue) do
+      let u = Queue.take queue in
+      if u = dead_end_id then found := true
+      else
+        let outgoing = List.filter (fun t -> t.from_state = u) auto.transitions in
+        List.iter (fun t ->
+          if not (Hashtbl.mem visited t.to_state) then (
+            Hashtbl.add visited t.to_state (Some (u, t));
+            Queue.add t.to_state queue
+          )
+        ) outgoing
+    done;
+
+    let trace = 
+      if !found then
+        let path = build_path dead_end_id in
+        let buffer = Buffer.create 256 in
+        Printf.bprintf buffer "Trace from start state %d to dead-end state %d:\n" auto.start_state dead_end_id;
+        let current_state = ref auto.start_state in
+        List.iter (fun t ->
+          Printf.bprintf buffer "  State %d --[%s]--> State %d\n" 
+            !current_state (string_of_label_set t.label) t.to_state;
+          current_state := t.to_state
+        ) path;
+        Printf.bprintf buffer "  State %d: DEAD END (no outgoing transitions)\n" dead_end_id;
+        Buffer.contents buffer
+      else
+        Printf.sprintf "Dead-end state %d is not reachable from start state %d" dead_end_id auto.start_state
+    in
+    (dead_end_id, trace)
+  ) st_ids
+
 let play_game (auto : TypeAutomaton.t) (ids : string list) : (bool * string) =
 
   let dead_ends = sanity_check auto in
   if dead_ends <> [] then
-    let dead_ends_str = String.concat ", " (List.map string_of_int dead_ends) in
-    (false, Printf.sprintf "Error: The automaton has dead-end states: %s" dead_ends_str)
+    let dead_end_paths = collect_dead_ends_paths auto dead_ends in
+    let dead_ends_str =
+      String.concat "\n\n" (List.map (fun (_id, trace) -> trace) dead_end_paths)
+    in
+    (false, Printf.sprintf "Error: The automaton has dead-end states:\n %s" dead_ends_str)
   else
 
 
