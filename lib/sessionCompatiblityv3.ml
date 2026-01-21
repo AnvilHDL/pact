@@ -105,7 +105,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           ) transition_set
         ) epsilon_transitions in
 
-        let _recurse_transitions = List.map (fun transition_set ->
+        let recurse_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
             if t.is_recurse then Some t else None
           ) transition_set
@@ -120,9 +120,15 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         if List.for_all (fun ts -> ts = []) theta_transitions then (
         let sync_transitions = List.map (fun transition_set ->
           List.filter_map (fun t ->
-            if not t.is_epsilon && not t.is_theta && not t.is_recurse && not (is_delay_con t) 
+            if not t.is_epsilon && not t.is_theta && not t.is_recurse && not (is_delay_con t) && (not t.is_conditional) 
             then Some t 
             else None
+          ) transition_set
+        ) transitions_list in
+
+        let conditional_trans = List.map (fun transition_set ->
+          List.filter_map (fun t ->
+            if t.is_conditional  then Some t else None
           ) transition_set
         ) transitions_list in
 
@@ -193,7 +199,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           let is_compatible  =  (
             List.mapi( fun i t_opt ->
                 match t_opt with
-                | None -> (true, true,false) (* Empty slot is always compatible *)
+                | None -> (true) (* Empty slot is always compatible *)
                 | Some t ->
                 (
                       let t_actions = List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label) in
@@ -221,7 +227,6 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                         )t_set |> List.filter (fun x -> x <> []) |> List.flatten  |>  List.sort_uniq compare_msg_spec
                           
                       ) all_transition_combinations |> List.filter (fun x -> x <> [])  in
-                      let offers_of_this_state = List.flatten actions_of_this_state in
                       let offers_in_future_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers_in_future) ) current_states in
 
                       let offers_in_future_of_this_state = List.flatten offers_in_future_of_this_state in
@@ -232,9 +237,6 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                       let next_quests = List.flatten next_quests in
                       let t_not_acts_flat = List.flatten t_not_acts in
                       let combined_t_possibe_acts = t_actions @ next_quests in
-                      let weak_compat = if t.is_conditional && (List.for_all( fun tna ->
-                        not (List.mem tna offers_of_this_state)
-                      )t_not_acts_flat) then true else false in
 
                      let verdict = (
                         (
@@ -249,48 +251,23 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                           ) actions_of_this_state
                           )
                           ) )
-                        ),
-                        t.is_conditional,
-                        weak_compat
+                        )
                       ) in
                       verdict
                 )
             )transition_set
           ) in 
 
-          let is_all_conditional = List.for_all (fun (_, cond,_) -> cond) is_compatible in
-          let weak_compat = List.map (fun (_, _, wc) -> wc) is_compatible in
 
-          let is_compatible = List.for_all (fun (x, _, _) -> x) is_compatible in
-
-          let no_recurse = List.for_all (fun ts -> ts = [] ) _recurse_transitions in
-
-
+          let is_compatible = List.for_all (fun x -> x) is_compatible in
 
             if is_compatible then (
               found := true;
-              if is_all_conditional then (
-                List.iteri (fun i t_opt -> 
-                  match t_opt with
-                  | None -> ()
-                  | Some t -> 
-
-                    let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
-                    let next_prod_state = get_product_state next_states in
-                    (* let offers_in_future_of_this_state = List.mapi (fun indx s -> if i = indx then [] else (let auto, _= List.nth automata_ids indx in let st = Hashtbl.find auto.states s in st.offers_in_future) ) current_states in
-                    let offers_in_future_of_this_state = List.flatten offers_in_future_of_this_state in
-                    Printf.eprintf "  Transition %s from state %d to %d with offers in future \n%s\n" (string_of_transition t) prod_state_id next_prod_state (String.concat "," (List.map Lang.string_of_msg_spec offers_in_future_of_this_state)); *)
-                    TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-                    if not (IntListSet.mem next_states !visited) then 
-                      worklist := next_states :: !worklist
-                ) transition_set
-              )
-            else
               let next_states = List.mapi (fun idx t_opt ->
                 let current_state = List.nth current_states idx in
                 match t_opt with
                 | None -> current_state
-                | Some t -> if  (t.is_conditional&&is_all_conditional)|| (not t.is_conditional) then t.to_state else current_state
+                | Some t -> t.to_state
               ) transition_set in
               let next_prod_state = get_product_state next_states in
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_actions false false false (List.for_all (fun t_opt -> match t_opt with None -> true | Some t -> t.is_conditional) transition_set);
@@ -298,30 +275,42 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 worklist := next_states :: !worklist
 
             )
-            else if no_recurse then (
-              List.iteri (fun i res ->
-                if res then (
-                  found := true;
-                  let t = List.nth transition_set i in
-                  let next_states = List.mapi (fun idx s -> if idx = i then (match t with Some tr -> tr.to_state | None -> s) else s) current_states in
-                  let next_prod_state = get_product_state next_states in
-                  let t = Option.get t in
-                  TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-                  if not (IntListSet.mem next_states !visited) then 
-                    worklist := next_states :: !worklist
-                )
-
-
-              )weak_compat
-                
-            )
           )
         ) all_transition_combinations;
 
         if not !found then (
+          found := false;
+         List.iteri(fun id tset ->
+            let offers_in_future_of_this_state = List.mapi ( fun idx s -> 
+              if idx = id then [] else
+              let auto, _= List.nth automata_ids idx in 
+              let st = Hashtbl.find auto.states s in 
+              st.offers_in_future
+            ) current_states |> List.flatten in
+            List.iter (fun t -> 
+              let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
+              let t_not_acts_flat = List.flatten t_not_acts in
+              let is_compatible =
+                List.for_all (fun tna ->
+                  not (List.mem tna offers_in_future_of_this_state)
+                ) t_not_acts_flat in
+              if is_compatible then (
+                found := true;
+                let next_states = List.mapi (fun idx s -> if idx = id then t.to_state else s) current_states in
+                let next_prod_state = get_product_state next_states in
+                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+                if not (IntListSet.mem next_states !visited) then 
+                   worklist := next_states :: !worklist
+              )
+            )tset
+         )conditional_trans;
+
+         if not !found then (
+          found := false;
           List.iteri (fun i t_set -> 
             if List.length t_set > 1 then raise (Failure "Unexpected: more than 1 recurse transition in set")
             else if List.length t_set = 1 then (
+              found := true;
               let t = List.hd t_set in
               let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
               let next_prod_state = get_product_state next_states in
@@ -329,8 +318,35 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               if not (IntListSet.mem next_states !visited) then 
                  worklist := next_states :: !worklist
             ) 
-          )_recurse_transitions;
+          )recurse_transitions
+         );
+         if not !found then (
+          List.iteri(fun id tset ->
+            let offers_in_future_of_this_state = List.mapi ( fun idx s -> 
+              if idx = id then [] else
+              let auto, _= List.nth automata_ids idx in 
+              let st = Hashtbl.find auto.states s in 
+              st.offers
+            ) current_states |> List.flatten in
+            List.iter (fun t -> 
+              let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
+              let t_not_acts_flat = List.flatten t_not_acts in
+              let is_compatible =
+                List.for_all (fun tna ->
+                  not (List.mem tna offers_in_future_of_this_state)
+                ) t_not_acts_flat in
+              if is_compatible then (
+                let next_states = List.mapi (fun idx s -> if idx = id then t.to_state else s) current_states in
+                let next_prod_state = get_product_state next_states in
+                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+                if not (IntListSet.mem next_states !visited) then 
+                   worklist := next_states :: !worklist
+              )
+            )tset
+         )conditional_trans;
+         )
         );
+        
 
         if all_has_delay then
         ( 
