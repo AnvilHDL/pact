@@ -263,6 +263,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
           let is_compatible = List.for_all (fun (x, _, _) -> x) is_compatible in
 
+          let no_recurse = List.for_all (fun ts -> ts = [] ) _recurse_transitions in
 
 
 
@@ -297,7 +298,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 worklist := next_states :: !worklist
 
             )
-            else(
+            else if no_recurse then (
               List.iteri (fun i res ->
                 if res then (
                   found := true;
