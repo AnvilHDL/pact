@@ -1,6 +1,10 @@
-pool top{
-    ep_le -- ep_ri : ch;
-    p1 : (ep1.m1 + ep2.m2);#1,
-    p2 : ep1.m1;#1,
-    p3 : ep2.m2;#1
-}
+interface mux_r_main (
+    fifo_ep : left fifo_dequeue_ch<select_t>,
+    slv_ep : right slv_r_ch<r_pack_t>,
+    mst_ep1 : left mast_ch<r_pack_t>,
+    mst_ep2 : left mast_ch<r_pack_t>,
+    slv_ep_er : right slv_r_err_ch
+) =^(
+        fifo_ep.empty,
+        * :  ^(slv_ep.r_rdy : #fifo_ep.pop; (rec X . ^(mst_ep1.res : (#slv_ep.r_res + (#slv_ep_er.err;#1;X)),mst_ep2.res: (#slv_ep.r_res + (#slv_ep_er.err;#1;X)))), *)
+); #1

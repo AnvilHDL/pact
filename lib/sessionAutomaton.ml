@@ -193,6 +193,11 @@ module TypeAutomaton = struct
 
 
   let reroute_transitions (auto: t) (old_state: int) (new_state: int) : unit =
+    let is_recurse_state = Hashtbl.fold (fun _ state_id acc ->
+      acc || (state_id = old_state)
+    ) auto.rec_var_state_map false in
+    if is_recurse_state then ()
+    else
     let new_transitions = List.map (fun t ->
       (* replace state in terminal label *)
       let new_label = LabelSet.elements t.label |> List.map (function
