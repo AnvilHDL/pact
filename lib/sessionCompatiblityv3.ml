@@ -6,7 +6,7 @@ open SessionBuildAutomaton
 
 
 
-let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool)  =
+let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool) (_name : identifier)  =
   let automata_ids = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton (Some intf_id) st_node.d st_node.span in
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
@@ -27,6 +27,9 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
       flush stderr;
     ) automata_ids
   );
+
+  Printf.eprintf "All individual automata built. Starting product construction...\n";
+  flush stderr;
   
   let state_map : (int list, int) Hashtbl.t = Hashtbl.create 10 in
   let prod_auto = TypeAutomaton.create () in
@@ -40,10 +43,28 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     )
   in
 
+  if verbose then
+    Printf.eprintf "Information about individual automata:\n";
+    Printf.eprintf "Total automata to combine: %d\n" (List.length automata_ids);
+    flush stderr;
+    List.iteri (fun idx (auto, intf_id) ->
+      Printf.eprintf " Automaton %d (ID: %s): States = %d, Transitions = %d\n" idx intf_id (Hashtbl.length auto.states) (List.length auto.transitions);
+      flush stderr
+    ) automata_ids;
+    
 
   let worklist = ref [List.map(fun (auto, _) -> auto.start_state) automata_ids] in
   let visited = ref IntListSet.empty  in
+  let iter = ref 0 in
+  let found_epsilon = ref false in
 
+  let inc_iter () =
+    incr iter;
+    if !iter mod 10000 = 0 then (
+      Printf.eprintf "Product construction iteration %d, worklist size: %d, visited states: %d\n" !iter (List.length !worklist) (IntListSet.cardinal !visited);
+      flush stderr
+    )
+  in
   while !worklist <> [] do
     let current_states = List.hd !worklist in
     worklist := List.tl !worklist;
@@ -142,6 +163,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         List.iteri (fun i ep_set -> 
           List.iter (fun t ->
             let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
+            found_epsilon := true;
             let next_prod_state = get_product_state next_states in
             TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
             if not (IntListSet.mem next_states !visited) then 
@@ -176,6 +198,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         let found = ref false in
         
         List.iteri (fun set_i transition_set ->
+        inc_iter ();
 
           let actual_transitions = List.filter_map (fun opt -> opt) transition_set in
 
@@ -336,6 +359,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                   not (List.mem tna offers_in_future_of_this_state)
                 ) t_not_acts_flat in
               if is_compatible then (
+                found := true;
                 let next_states = List.mapi (fun idx s -> if idx = id then t.to_state else s) current_states in
                 let next_prod_state = get_product_state next_states in
                 TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
@@ -350,6 +374,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
         if all_has_delay then
         ( 
+          found := true;
         let all_delay_combinations = cartesian_product2 delay_transitions in
         List.iter( fun transition_set -> (
             if List.length transition_set < 2 then raise (Failure "Unexpected: less than 2 transitions in combination")
@@ -366,6 +391,17 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )
           )
         ) all_delay_combinations;
+        );
+
+        if not !found && not !found_epsilon then (
+          let trace = collect_dead_ends_paths prod_auto [prod_state_id] in
+          let trace = Printf.sprintf "Dead-end trace leading to product state %d:\n%s\n" prod_state_id (List.hd trace|> snd) in
+          let msg = Printf.sprintf "No compatible transitions found from product state %d corresponding to states %s\n%s" prod_state_id (String.concat "," (List.map string_of_int current_states)) trace in
+          let out_channel = open_out ("incompat_prod_auto_"^_name^".dot") in
+          print_automaton_dot prod_auto out_channel;
+          close_out out_channel;
+          flush stderr;
+          raise (Failure msg)
         )
         )
         else
@@ -440,8 +476,7 @@ let check_compatibility_multiparty
     : (bool * string) =
 
 
-    let prod_auto = create_product session_ids verbose in
-
+    let prod_auto = create_product session_ids verbose pool_id in
     Printf.eprintf "Product Construction Completed. Total States: %d\n" (Hashtbl.length prod_auto.states);
 
     Hashtbl.iter (fun state_id _ ->
