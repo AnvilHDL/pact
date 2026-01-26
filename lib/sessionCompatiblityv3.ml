@@ -313,10 +313,15 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             List.iter (fun t -> 
               let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
               let t_not_acts_flat = List.flatten t_not_acts in
+
               let is_compatible =
                 List.for_all (fun tna ->
                   not (List.mem tna offers_in_future_of_this_state)
                 ) t_not_acts_flat in
+
+              (* Printf.eprintf "[Verdict = %s] [State %d] Considering conditional transition from automaton %d with not_acts: %s\n" (string_of_bool is_compatible) prod_state_id id (String.concat "," (List.map Lang.string_of_msg_spec t_not_acts_flat));
+              Printf.eprintf "Offers in future of this state: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec offers_in_future_of_this_state));
+              Printf.eprintf "Others states: %s\n" (String.concat "," (List.map string_of_int current_states)); *)
               if is_compatible then (
                 found := true;
                 let next_states = List.mapi (fun idx s -> if idx = id then t.to_state else s) current_states in
@@ -358,6 +363,9 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 List.for_all (fun tna ->
                   not (List.mem tna offers_in_future_of_this_state)
                 ) t_not_acts_flat in
+                (* Printf.eprintf "[Verdict = %s] [State %d] Considering weaker conditional transition from automaton %d with not_acts: %s\n" (string_of_bool is_compatible) prod_state_id id (String.concat "," (List.map Lang.string_of_msg_spec t_not_acts_flat));
+              Printf.eprintf "Offers in future of this state: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec offers_in_future_of_this_state));
+              Printf.eprintf "Others states: %s\n" (String.concat "," (List.map string_of_int current_states)); *)
               if is_compatible then (
                 found := true;
                 let next_states = List.mapi (fun idx s -> if idx = id then t.to_state else s) current_states in
