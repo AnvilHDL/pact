@@ -213,7 +213,7 @@ module TypeAutomaton = struct
       auto.start_state <- new_state;
     let new_state_info = Hashtbl.find auto.states new_state in
     let old_state_info = Hashtbl.find auto.states old_state in
-    new_state_info.offers <- old_state_info.offers;
+    new_state_info.offers <- new_state_info.offers @ old_state_info.offers;
     new_state_info.is_fair <- old_state_info.is_fair;
     new_state_info.adversary <- old_state_info.adversary;
     Hashtbl.remove auto.states old_state
