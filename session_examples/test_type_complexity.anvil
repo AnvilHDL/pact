@@ -1,0 +1,657 @@
+pool p1 { // trued
+    ep_le -- ep_ri : ch;
+    ip11 : (ep.req ; ep.ack) ,
+    ip12 : (ep.req ; ep.ack)
+}
+
+pool p2 { // true
+    ep_le -- ep_ri : ch;
+    ip21 : (#ep.req ; #ep.ack) ,
+    ip22 : (#ep.req || #ep.ack)
+}
+
+pool p3 { // true
+    ep_le -- ep_ri : ch;
+    ip31 : #ep.req  + #ep.ack ,
+    ip32 : ^( #ep.req , #ep.ack) 
+}
+pool p4 { // true
+    ep_le -- ep_ri : ch;
+    ip41 : #ep.req  + #ep.ack ,
+    ip42 : &(#ep.req , #ep.ack) 
+}
+
+pool p5 { // true
+    ep_le -- ep_ri : ch;
+    ip51 : ep.m1 ,
+    ip52 : #2;ep.m1
+}
+
+pool p6 { // true
+    ep_le -- ep_ri : ch;
+    ip61 : F ep.m1 ,
+    ip62 : ep.m1
+}
+
+pool p7 { // true
+    ep_le -- ep_ri : ch;
+    ip71 : ep.m1,
+    ip72 : ep.m1;ep.m1
+}
+pool p8 { // false
+    ep_le -- ep_ri : ch;
+    ip81 : #ep.m1 + #ep.m2 ,
+    ip82 : ^( #ep.m1, * : #ep.m2 ) 
+}
+pool p9 { // true
+    ep_le -- ep_ri : ch;
+    ip91 : ep.m1 ,
+    ip92 : rec X . ^( #ep.m1 , * : #1;X ) 
+}
+
+pool p10 { // true
+    ep_le -- ep_ri : ch;
+    ip101 : #ep.m1 || #ep.m2 ,
+    ip102 : #ep.m1,
+    ip103 : #ep.m2
+}
+
+pool p11 { // true
+    ep_le -- ep_ri : ch;
+    ip111 : rec X . ^( #ep.m1 , * : #1 ; X ) ,
+    ip112 : F #ep.m1 
+}
+
+pool p12 { // false
+    ep_le -- ep_ri : ch;
+    in121 : (ep.m1;ep.m2) + (ep.m2;ep.m1),
+    in122 : ep.m1,
+    in123 : ep.m2
+}
+pool p13 {
+    ep_le -- ep_ri : ch;
+    ip131 : ep.req;#4,
+    ip132 : ep.req;#1
+}
+pool p14 {
+    ep_le -- ep_ri : ch;
+    ip141 : #ep.req || #ep.ack,
+    ip142 : #ep.req ; #ep.ack
+}
+pool p15 { // false
+    ep_le -- ep_ri : ch;
+    in151 : ep.m1;&(ep.m2,ep.m3),
+    in152 : ep.m1,
+    in153 : ^(ep.m2,*),
+    in154 : ^(ep.m3,*)
+}
+
+pool p16{
+    ep_le -- ep_ri : ch;
+    ip161 : ep.m1;^(ep.m2,ep.m3);#1,
+    ip162 : ^(ep.m1,*);#2,
+    ip163 : ^(ep.m2,*);#3,
+    ip164 : ^(ep.m3,*);#4
+
+}
+pool p17 { // true
+    ep_le -- ep_ri : ch;
+    ip171 : ep.m1;#2;ep.m2;#3,
+    ip172 : (ep.m1 ||F #ep.m3);#2,
+    ip173 : ^(ep.m2,*);#3
+}
+
+
+pool p18 { // false
+    ep_le -- ep_ri : ch;
+    in101 : ^(#ep.m1, #ep.m2) ,
+    in182 : #ep.m1;#ep.m2
+}
+pool p19 { // true
+    ep_le -- ep_ri : ch;
+    ip191 : &(ep.m1, ep.m2,*);#1,
+    ip192 : #2;ep.m1
+}
+pool p20{
+    ep_le -- ep_ri : ch;
+    in201 : ^(#ep.m1, #ep.m2),
+    in202 : ^(#ep.m1, * ) || ^( #ep.m2, * )
+} 
+pool p21 {
+    ep_le -- ep_ri : ch;
+    in211 : (ep1.m1 + ep2.m2);#1,
+    in212 : ep1.m1;#1,
+    in213 : ep2.m2;#1
+}
+pool p22 { 
+    ep_le -- ep_ri : ch;
+    in221 : &(ep.m1, ep.m2) ,
+    in222 : ep.m1
+}
+
+pool p23 { // true
+    ep_le -- ep_ri : ch;
+    p231 : () + &(#ep.m1, #ep.m2),
+    p232 :#ep.m1 ,
+    p233 : #ep.m4; #ep.m2,
+    p234 : #ep.m4
+
+}
+pool p24{
+    ep_le -- ep_ri : ch;
+    p241 : &(ep.m1, ep.m2);#1,
+    p242 : (F #ep.m1 + ());#1,
+    p243 : ((#1;(F #ep.m2)) + (#2;#ep.m2));#1
+}
+
+pool p25 { // false
+    ep_le -- ep_ri : ch;
+    p251 : &(ep.m1, ep.m2);#1,
+    p252 : ((#1) + (ep.m1 || ep.m2));#4,
+    p253 : #3
+}
+
+
+
+pool p26 {
+    ep_le -- ep_ri : ch;
+    p261 : ((#4;ep.m1) + (#5;ep2.m2)) ; #1,
+    p263 : F ep.m1 ; #1,
+    p264 : F ep2.m2 ; #1
+}
+
+pool p27 {
+    ep_le -- ep_ri : ch;
+    p271 : &(ep.m1, ep.m2) || ep.m3 ; #1,
+    p272 : ep.m2;F ep.m1 ; #1,
+    p273 : F ep.m3 ; #1
+}
+
+
+pool p28{
+    ep_le -- ep_ri : ch;
+    ep281 : (ep.m1 + ep.m2 + ep.m3) || F(ep.m4 + ep.m5);#1,
+    ep282 : F ^(ep.m1,ep.m2,ep.m3);#1,
+    ep283 : F ^(ep.m4,ep.m5);#1
+}
+
+pool p29{
+    ep_le -- ep_ri : ch;
+    p291 : ep.m1 ; (#1 + #2 + #3) ,
+    p292 : F ep.m3 ; #1 ,
+    p293 : F ep.m1 ; #2 ,
+    p294 : F ep.m2 ; #3,
+    p295 : F ep.m2;ep.m3 ; #4
+}
+
+pool p30 {
+    ep_le -- ep_ri : ch;
+    p301 : &(ep.m1, ep.m2, ep.m3) ; #1,
+    p302 : F ep.m1 ; #2,
+    p303 : F ep.m2 ; #3,
+    p304 : F ep.m3 ; #4
+}
+
+
+pool p31 {
+    ep_le -- ep_ri : ch;
+    p311 : (ep.m1 + ep.m2 + ep.m3 + ep.m4) || F(ep.m5 + ep.m6 + ep.m7 + ep.m8);#1,
+    p312 : F ^(ep.m1,ep.m2,ep.m3,ep.m4);#1,
+    p313 : F ^(ep.m5,ep.m6,ep.m7,ep.m8);#1
+}
+
+pool p32{
+    ep_le -- ep_ri : ch;
+    p321 : ep.m1 ; (#3 + #4 + #5 + #6 + #7 + #8 + #9 + #10) ,
+    p322 : F ep.m1;#1 ,
+    p323 : #5
+}
+
+pool p33 {
+    ep_le -- ep_ri : ch;
+    p331 : ^(ep.m1 : ep.m3 + ep.m2);#1,
+    p332 : &(ep.m2 , ep.m1);#1,
+    p333 : F ep.m3 ; #2
+}
+
+pool p34 {
+    ep_le -- ep_ri : ch;
+    p341 : ep.m1 ; &(ep.m2, ep.m3, * : ep.m4);#1,
+    p342 : F ep.m1 ; #2,
+    p343 : F ep.m2 ; #3,
+    p344 : F ep.m3 ; #4,
+    p345 : F ep.m4 ; #5
+}
+
+pool p35 {
+    ep_le -- ep_ri : ch;
+    p351 : &(ep.m1, * : &(ep.m2 , ep.m3, * : ep.m4));#1,
+    p352 : F ep.m1 ; #2,
+    p353 : F ep.m2 ; #3,
+    p354 : F ep.m3 ; #4,
+    p355 : F ep.m4 ; #5
+}
+
+pool p36 {
+    ep_le -- ep_ri : ch;
+    p361 : ^(ep.m1, * : ^(ep.m2 , * : ep.m3));#1,
+    p362 : F ep.m1 ; #2,
+    p363 : F ep.m2 ; #3,
+     p364 : F ep.m3 ; #4
+}
+
+pool p37 {
+    ep_le -- ep_ri : ch;
+    p371 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p372 : F ep.m1 ; #2,
+    p373 : F ep.m2 ; #3,
+    p374 : F ep.m3 ; #4
+}
+
+pool p38 {
+    ep_le -- ep_ri : ch;
+    p381 : &(ep.m1, ep.m2) ; #1,
+    p382 : F ep.m1 ; #2,
+    p383 : F ep.m2 ; #3
+}
+
+pool p39 {
+    ep_le -- ep_ri : ch;
+    p391 : ^(ep.m1, ep.m2,ep.m3) ; #1,
+    p392 : F ep.m1 ; #2,
+    p393 : F ep.m2 ; #3,
+    p394 : F ep.m3 ; #4
+}
+
+pool p40 {
+    ep_le -- ep_ri : ch;
+    p401 : &(ep.m1, ep.m2, ep.m3, ep.m4) ; #1,
+    p402 : F ep.m1 ; #2,
+    p403 : F ep.m2 ; #3,
+    p404 : F ep.m3 ; #4,
+    p405 : F ep.m4 ; #5
+}
+pool p41 {
+    ep_le -- ep_ri : ch;
+    p411 : &(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5) ; #1,
+    p412 : F ep.m1 ; #2,
+    p413 : F ep.m2 ; #3,
+    p414 : F ep.m3 ; #4,
+    p415 : (F ep.m4 || F ep.m5) ; #5
+}
+
+pool p42 {
+    ep_le -- ep_ri : ch;
+    p421 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6) ; #1,
+    p422 : F ep.m1 ; #2,
+    p423 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p424 : F ep.m5 ; #4,
+    p425 : F ep.m6 ; #5
+}
+
+pool p43 {
+    ep_le -- ep_ri : ch;
+    p431 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p432 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p433 : F ep.m1 ; #2,
+    p434 : F ep.m2 ; #3,
+    p435 : F ep.m3 ; #4,
+    p436 : F ep.m4 ; #5,
+    p437 : F ep.m5 ; #6,
+    p438 : F ep.m6 ; #7
+}
+
+pool p44 {
+    ep_le -- ep_ri : ch;
+    p441 : &(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7) ; #1,
+    p442 : F ep.m1 ; #2,
+    p443 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p444 : F ep.m5 ; #4,
+    p445 : F ep.m6 ; #5,
+    p446 : F ep.m7 ; #6
+}
+
+pool p45 {
+    ep_le -- ep_ri : ch;
+    p451 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p452 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p453 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p454 : F ep.m1 ; #2,
+    p455 : F ep.m2 ; #3,
+    p456 : F ep.m3 ; #4,
+    p457 : F ep.m4 ; #5,
+    p458 : F ep.m5 ; #6,
+    p459 : F ep.m6 ; #7,
+    p460 : F ep.m7 ; #8,
+    p461 : F ep.m8 ; #9,
+    p462 : F ep.m9 ; #10
+}
+
+pool p46 {
+    ep_le -- ep_ri : ch;
+    p461 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8) ; #1,
+    p462 : F ep.m1 ; #2,
+    p463 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p464 : F ep.m5 ; #4,
+    p465 : F ep.m6 ; #5,
+    p466 : F ep.m7 ; #6,
+    p467 : F ep.m8 ; #7
+}
+
+pool p47 {
+    ep_le -- ep_ri : ch;
+    p471 : &(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9) ; #1,
+    p472 : F ep.m1 ; #2,
+    p473 : F ^(ep.m2, ep.m3, ep.m4) ; #3,
+    p474 : F ep.m5 ; #4,
+    p475 : F ep.m6 ; #5,
+    p476 : F ep.m7 ; #6,
+    p477 : F ep.m8 ; #7,
+    p478 : F ep.m9 ; #8
+}
+
+pool p48 {
+    ep_le -- ep_ri : ch;
+    p481 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p482 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p483 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p484 : rec W . ep.m10;ep.m11;^(ep.m12, * : #1;W);#1,
+    p485 : F ep.m1 ; #2,
+    p486 : F ep.m2 ; #3,
+    p487 : F ep.m3 ; #4,
+    p488 : F ep.m4 ; #5,
+    p489 : F ep.m5 ; #6,
+    p490 : F ep.m6 ; #7,
+    p491 : F ep.m7 ; #8,
+    p492 : F ep.m8 ; #9,
+    p493 : F ep.m9 ; #10,
+    p494 : F ep.m10 ; #11,
+    p495 : F ep.m11 ; #12,
+    p496 : F ep.m12 ; #13
+}
+
+pool p49 {
+    ep_le -- ep_ri : ch;
+    p491 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9, ep.m10) ; #1,
+    p492 : F ep.m1 ; #2,
+    p493 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p494 : F ep.m5 ; #4,
+    p495 : F ep.m6 ; #5,
+    p496 : F ep.m7 ; #6,
+    p497 : F ep.m8 ; #7,
+    p498 : F ep.m9 ; #8,
+    p499 : F ep.m10 ; #9
+}
+
+
+pool p50 {
+    ep_le -- ep_ri : ch;
+    p501 : &(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9, ep.m10, ep.m11) ; #1,
+    p502 : F ep.m1 ; #2,
+    p503 : F ^(ep.m2, ep.m3, ep.m4) ; #3,
+    p504 : F ep.m5 ; #4,
+    p505 : F ep.m6 ; #5,
+    p506 : F ep.m7 ; #6,
+    p507 : F ep.m8 ; #7,
+    p508 : F ep.m9 ; #8,
+    p509 : F ep.m10 ; #9,
+    p510 : F ep.m11 ; #10
+} 
+
+pool p51 {
+    ep_le -- ep_ri : ch;
+    p511 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p512 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p513 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p514 : rec W . ep.m10;ep.m11;^(ep.m12, * : #1;W);#1,
+    p515 : rec V . ep.m13;ep.m14;^(ep.m15, * : #1;V);#1,
+    p516 : F ep.m1 ; #2,
+    p517 : F ep.m2 ; #3,
+    p518 : F ep.m3 ; #4,
+    p519 : F ep.m4 ; #5,
+    p520 : F ep.m5 ; #6,
+    p521 : F ep.m6 ; #7,
+    p522 : F ep.m7 ; #8,
+    p523 : F ep.m8 ; #9,
+    p524 : F ep.m9 ; #10,
+    p525 : F ep.m10 ; #11,
+    p526 : F ep.m11 ; #12,
+    p527 : F ep.m12 ; #13,
+    p528 : F ep.m13 ; #14,
+    p529 : F ep.m14 ; #15,
+    p530 : F ep.m15 ; #16
+}
+
+pool p52 {
+    ep_le -- ep_ri : ch;
+    p521 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9, ep.m10, ep.m11, ep.m12, ep.m13, ep.m14, ep.m15) ; #1,
+    p522 : F ep.m1 ; #2,
+    p523 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p524 : F ep.m5 ; #4,
+    p525 : F ep.m6 ; #5,
+    p526 : F ep.m7 ; #6,
+    p527 : F ep.m8 ; #7,
+    p528 : F ep.m9 ; #8,
+    p529 : F ep.m10 ; #9,
+    p530 : F ep.m11 ; #10,
+    p531 : F ep.m12 ; #11,
+    p532 : F ep.m13 ; #12,
+    p533 : F ep.m14 ; #13,
+    p534 : F ep.m15 ; #14
+}
+
+pool p53 {
+    ep_le -- ep_ri : ch;
+    p531 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p532 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p533 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p534 : rec W . ep.m10;ep.m11;^(ep.m12, * : #1;W);#1,
+    p535 : rec V . ep.m13;ep.m14;^(ep.m15, * : #1;V);#1,
+    p536 : rec U . ep.m16;ep.m17;^(ep.m18, * : #1;U);#1,
+    p537 : F ep.m1 ; #2,
+    p538 : F ep.m2 ; #3,
+    p539 : F ep.m3 ; #4,
+    p540 : F ep.m4 ; #5,
+    p541 : F ep.m5 ; #6,
+    p542 : F ep.m6 ; #7,
+    p543 : F ep.m7 ; #8,
+    p544 : F ep.m8 ; #9,
+    p545 : F ep.m9 ; #10,
+    p546 : F ep.m10 ; #11,
+    p547 : F ep.m11 ; #12,
+    p548 : F ep.m12 ; #13,
+    p549 : F ep.m13 ; #14,
+    p550 : F ep.m14 ; #15,
+    p551 : F ep.m15 ; #16,
+    p552 : F ep.m16 ; #17,
+    p553 : F ep.m17 ; #18,
+    p554 : F ep.m18 ; #19
+}
+
+
+pool p54{
+    ep_le -- ep_ri : ch;
+    p541 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9, ep.m10, ep.m11, ep.m12, ep.m13, ep.m14, ep.m15, ep.m16, ep.m17, ep.m18) ; #1,
+    p542 : F ep.m1 ; #2,
+    p543 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p544 : F ep.m5 ; #4,
+    p545 : F ep.m6 ; #5,
+    p546 : F ep.m7 ; #6,
+    p547 : F ep.m8 ; #7,
+    p548 : F ep.m9 ; #8,
+    p549 : F ep.m10 ; #9,
+    p550 : F ep.m11 ; #10,
+    p551 : F ep.m12 ; #11,
+    p552 : F ep.m13 ; #12,
+    p553 : F ep.m14 ; #13,
+    p554 : F ep.m15 ; #14,
+    p555 : F ep.m16 ; #15,
+    p556 : F ep.m17 ; #16,
+    p557 : F ep.m18 ; #17
+}
+
+pool p55{
+    ep_le -- ep_ri : ch;
+    p551 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p552 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p553 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p554 : rec W . ep.m10;ep.m11;^(ep.m12, * : #1;W);#1,
+    p555 : rec V . ep.m13;ep.m14;^(ep.m15, * : #1;V);#1,
+    p556 : rec U . ep.m16;ep.m17;^(ep.m18, * : #1;U);#1,
+    p557 : rec T . ep.m19;ep.m20;^(ep.m21, * : #1;T);#1,
+    p558 : F ep.m1 ; #2,
+    p559 : F ep.m2 ; #3,
+    p560 : F ep.m3 ; #4,
+    p561 : F ep.m4 ; #5,
+    p562 : F ep.m5 ; #6,
+    p563 : F ep.m6 ; #7,
+    p564 : F ep.m7 ; #8,
+    p565 : F ep.m8 ; #9,
+    p566 : F ep.m9 ; #10,
+    p567 : F ep.m10 ; #11,
+    p568 : F ep.m11 ; #12,
+    p569 : F ep.m12 ; #13,
+    p570 : F ep.m13 ; #14,
+    p571 : F ep.m14 ; #15,
+    p572 : F ep.m15 ; #16,
+    p573 : F ep.m16 ; #17,
+    p574 : F ep.m17 ; #18,
+    p575 : F ep.m18 ; #19,
+    p576 : F ep.m19 ; #20,
+    p577 : F ep.m20 ; #21,
+    p578 : F ep.m21 ; #22   
+}
+
+pool p56{
+    ep_le -- ep_ri : ch;
+    p561 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9, ep.m10, ep.m11, ep.m12, ep.m13, ep.m14, ep.m15, ep.m16, ep.m17, ep.m18, ep.m19, ep.m20, ep.m21) ; #1,
+    p562 : F ep.m1 ; #2,
+    p563 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p564 : F ep.m5 ; #4,
+    p565 : F ep.m6 ; #5,
+    p566 : F ep.m7 ; #6,
+    p567 : F ep.m8 ; #7,
+    p568 : F ep.m9 ; #8,
+    p569 : F ep.m10 ; #9,
+    p570 : F ep.m11 ; #10,
+    p571 : F ep.m12 ; #11,
+    p572 : F ep.m13 ; #12,
+    p573 : F ep.m14 ; #13,
+    p574 : F ep.m15 ; #14,
+    p575 : F ep.m16 ; #15,
+    p576 : F ep.m17 ; #16,
+    p577 : F ep.m18 ; #17,
+    p578 : F ep.m19 ; #18,
+    p579 : F ep.m20 ; #19,
+    p580 : F ep.m21 ; #20
+}
+
+pool p57{
+    ep_le -- ep_ri : ch;
+    p571 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p572 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p573 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p574 : rec W . ep.m10;ep.m11;^(ep.m12, * : #1;W);#1,
+    p575 : rec V . ep.m13;ep.m14;^(ep.m15, * : #1;V);#1,
+    p576 : rec U . ep.m16;ep.m17;^(ep.m18, * : #1;U);#1,
+    p577 : rec T . ep.m19;ep.m20;^(ep.m21, * : #1;T);#1,
+    p578 : rec S . ep.m22;ep.m23;^(ep.m24, * : #1;S);#1,
+    p579 : F ep.m1 ; #2,
+    p580 : F ep.m2 ; #3,
+    p581 : F ep.m3 ; #4,
+    p582 : F ep.m4 ; #5,
+    p583 : F ep.m5 ; #6,
+    p584 : F ep.m6 ; #7,
+    p585 : F ep.m7 ; #8,
+    p586 : F ep.m8 ; #9,
+    p587 : F ep.m9 ; #10,
+    p588 : F ep.m10 ; #11,
+    p589 : F ep.m11 ; #12,
+    p590 : F ep.m12 ; #13,
+    p591 : F ep.m13 ; #14,
+    p592 : F ep.m14 ; #15,
+    p593 : F ep.m15 ; #16,
+    p594 : F ep.m16 ; #17,
+    p595 : F ep.m17 ; #18,
+    p596 : F ep.m18 ; #19,
+    p597 : F ep.m19 ; #20,
+    p598 : F ep.m20 ; #21,
+    p599 : F ep.m21 ; #22,
+    p600 : F ep.m22 ; #23,
+    p601 : F ep.m23 ; #24,
+    p602 : F ep.m24 ; #25
+}
+
+pool p58{
+    ep_le -- ep_ri : ch;
+    p581 : ^(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7, ep.m8, ep.m9, ep.m10, ep.m11, ep.m12, ep.m13, ep.m14, ep.m15, ep.m16, ep.m17, ep.m18, ep.m19, ep.m20, ep.m21, ep.m22, ep.m23, ep.m24) ; #1,
+    p582 : F ep.m1 ; #2,
+    p583 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
+    p584 : F ep.m5 ; #4,
+    p585 : F ep.m6 ; #5,
+    p586 : F ep.m7 ; #6,
+    p587 : F ep.m8 ; #7,
+    p588 : F ep.m9 ; #8,
+    p589 : F ep.m10 ; #9,
+    p590 : F ep.m11 ; #10,
+    p591 : F ep.m12 ; #11,
+    p592 : F ep.m13 ; #12,
+    p593 : F ep.m14 ; #13,
+    p594 : F ep.m15 ; #14,
+    p595 : F ep.m16 ; #15,
+    p596 : F ep.m17 ; #16,
+    p597 : F ep.m18 ; #17,
+    p598 : F ep.m19 ; #18,
+    p599 : F ep.m20 ; #19,
+    p600 : F ep.m21 ; #20,
+    p601 : F ep.m22 ; #21,
+    p602 : F ep.m23 ; #22,
+    p603 : F ep.m24 ; #23
+}
+
+pool p59{
+    ep_le -- ep_ri : ch;
+    p591 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
+    p592 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
+    p593 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
+    p594 : rec W . ep.m10;ep.m11;^(ep.m12, * : #1;W);#1,
+    p595 : rec V . ep.m13;ep.m14;^(ep.m15, * : #1;V);#1,
+    p596 : rec U . ep.m16;ep.m17;^(ep.m18, * : #1;U);#1,
+    p597 : rec T . ep.m19;ep.m20;^(ep.m21, * : #1;T);#1,
+    p598 : rec S . ep.m22;ep.m23;^(ep.m24, * : #1;S);#1,
+    p599 : rec R . ep.m25;ep.m26;^(ep.m27, * : #1;R);#1,
+    p600 : F ep.m1 ; #2,
+    p601 : F ep.m2 ; #3,
+    p602 : F ep.m3 ; #4,
+    p603 : F ep.m4 ; #5,
+    p604 : F ep.m5 ; #6,
+    p605 : F ep.m6 ; #7,
+    p606 : F ep.m7 ; #8,
+    p607 : F ep.m8 ; #9,
+    p608 : F ep.m9 ; #10,
+    p609 : F ep.m10 ; #11,
+    p610 : F ep.m11 ; #12,
+    p611 : F ep.m12 ; #13,
+    p612 : F ep.m13 ; #14,
+    p613 : F ep.m14 ; #15,
+    p614 : F ep.m15 ; #16,
+    p615 : F ep.m16 ; #17,
+    p616 : F ep.m17 ; #18,
+    p617 : F ep.m18 ; #19,
+    p618 : F ep.m19 ; #20,
+    p619 : F ep.m20 ; #21,
+    p620 : F ep.m21 ; #22,
+    p621 : F ep.m22 ; #23,
+    p622 : F ep.m23 ; #24,
+    p623 : F ep.m24 ; #25,
+    p624 : F ep.m25 ; #26,
+    p625 : F ep.m26 ; #27,
+    p626 : F ep.m27 ; #28
+}
+
+pool p60{
+    ep_le -- ep_ri : ch;
+    p1 : rec X . (ep.m1  + (#1;X)) ; ep.m2 ; #1,
+    p2 : F ep.m1 ; #2,
+    p3 : F ep.m2 ; #3
+}
