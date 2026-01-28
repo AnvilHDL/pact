@@ -496,10 +496,11 @@ let check_compatibility_multiparty
     let result, err = play_game prod_auto ids_list in
     Printf.eprintf "Game Analysis Completed.\n";
 
+    if verbose then begin
     let res_prefix = if result then "compat_" else "incompat_" in
-
     let out = Stdlib.open_out (res_prefix^"prod_auto_"^pool_id^".dot") in
     print_automaton_dot prod_auto out;
     Stdlib.close_out out;
     flush stderr;
+    end;
     (result, err)

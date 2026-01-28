@@ -14,3 +14,4 @@ session_examples/*.dot
 **/*.log
 **/*.out
 **.dot
+**.csv

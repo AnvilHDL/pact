@@ -197,7 +197,9 @@ let profile_compatibility_checks _out config =
   Printf.eprintf "\n=== Profiling Compatibility Checks ===\n\n";
   
   (* CSV output *)
-  let csv_filename = "compatibility_profile.csv" in
+  let file_base_name = toplevel_filename |> Filename.basename |> Filename.remove_extension in
+
+  let csv_filename = file_base_name ^ "_compatibility_profile.csv" in
   let csv_out = open_out csv_filename in
   
 

@@ -293,21 +293,16 @@ pool p43 {
     ep_le -- ep_ri : ch;
     p431 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
     p432 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
-    p433 : F ep.m1 ; #2,
-    p434 : F ep.m2 ; #3,
-    p435 : F ep.m3 ; #4,
-    p436 : F ep.m4 ; #5,
-    p437 : F ep.m5 ; #6,
-    p438 : F ep.m6 ; #7
+    p433 : F ep.m1 ; ep.m4; #2,
+    p434 : F ep.m2 ; ep.m3;#3,
+    p437 : F ep.m5; F ep.m6 ; #7
 }
 
 pool p44 {
     ep_le -- ep_ri : ch;
     p441 : &(ep.m1, ep.m2, ep.m3, ep.m4, ep.m5, ep.m6, ep.m7) ; #1,
     p442 : F ep.m1 ; #2,
-    p443 : F ep.m2  || F ep.m3 || F ep.m4 ; #3,
-    p444 : F ep.m5 ; #4,
-    p445 : F ep.m6 ; #5,
+    p443 : F ep.m2  || F ep.m3 || F ep.m4 ; #3;ep.m5 ; #4;ep.m6 ; #5,
     p446 : F ep.m7 ; #6
 }
 
@@ -316,15 +311,9 @@ pool p45 {
     p451 : rec X . ep.m1;ep.m2;^(ep.m3, * : #1;X);#1,
     p452 : rec Y . ep.m4;ep.m5;^(ep.m6, * : #1;Y);#1,
     p453 : rec Z . ep.m7;ep.m8;^(ep.m9, * : #1;Z);#1,
-    p454 : F ep.m1 ; #2,
-    p455 : F ep.m2 ; #3,
-    p456 : F ep.m3 ; #4,
-    p457 : F ep.m4 ; #5,
-    p458 : F ep.m5 ; #6,
-    p459 : F ep.m6 ; #7,
-    p460 : F ep.m7 ; #8,
-    p461 : F ep.m8 ; #9,
-    p462 : F ep.m9 ; #10
+    p454 : F ep.m1  || ep.m2 ; #3,
+    p456 : F ep.m3  || ep.m4 ; ep.m9;#5,
+    p459 : F ep.m6 || ep.m5;ep.m7;ep.m8 ; #8
 }
 
 pool p46 {
