@@ -196,14 +196,18 @@ let profile_compatibility_checks _out config =
   
   Printf.eprintf "\n=== Profiling Compatibility Checks ===\n\n";
   
-  (* CSV output *)
+  (* CSV output - append mode to accumulate results across runs *)
   let file_base_name = toplevel_filename |> Filename.basename |> Filename.remove_extension in
-
-  let csv_filename = file_base_name ^ "_compatibility_profile.csv" in
-  let csv_out = open_out csv_filename in
+  let csv_filename = file_base_name^"_compatibility_profile.csv" in
+  let file_exists = Sys.file_exists csv_filename in
   
-
-  Printf.fprintf csv_out "pool_name,num_automata,individual_sizes,theoretical_state_space,actual_state_space,visited_states,product_transitions,state_space_ratio,construction_time_ms,game_time_ms,total_time_ms,result,error_msg\n";
+  (* Write header only if file is new/empty *)
+  if not file_exists then (
+    let csv_header = open_out csv_filename in
+    Printf.fprintf csv_header "pool_name,num_automata,individual_sizes,theoretical_state_space,actual_state_space,visited_states,product_transitions,state_space_ratio,construction_time_ms,game_time_ms,total_time_ms,result,error_msg\n";
+    close_out csv_header
+  );
+  
   
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
     Printf.eprintf "Profiling Pool %s...\n" pool.d.pool_id;
@@ -273,7 +277,9 @@ let profile_compatibility_checks _out config =
     
     let error_msg_escaped = String.map (fun c -> if c = ',' || c = '\n' then ' ' else c) err in
     
-    Printf.fprintf csv_out "%s,%d,\"%s\",%d,%d,%d,%d,%.6f,%.3f,%.3f,%.3f,%b,\"%s\"\n"
+    (* Write this pool's data to CSV file immediately (append mode) *)
+    let csv_out_append = open_out_gen [Open_wronly; Open_append] 0o644 csv_filename in
+    Printf.fprintf csv_out_append "%s,%d,\"%s\",%d,%d,%d,%d,%.6f,%.3f,%.3f,%.3f,%b,\"%s\"\n"
       pool.d.pool_id
       num_automata
       individual_sizes_str
@@ -287,12 +293,12 @@ let profile_compatibility_checks _out config =
       total_time_ms
       result
       error_msg_escaped;
+    close_out csv_out_append;
     
     Printf.eprintf "  Result: %b | Time: %.2f ms | States: %d/%d\n" result total_time_ms actual_states theoretical_space;
   ) pool_defs;
   
-  close_out csv_out;
-  Printf.eprintf "\nProfiling results written to %s\n\n" csv_filename
+  Printf.eprintf "\nProfiling results appended to %s\n\n" csv_filename
   
 
 let debug_types out config =
