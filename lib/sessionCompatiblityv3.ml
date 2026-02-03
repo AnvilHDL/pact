@@ -91,7 +91,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         let combined_label = union_labelsets combined_label in
         TypeAutomaton.add_transition prod_auto prod_state_id prod_auto.start_state combined_label false false true false;
       ) else (
-        
+
         let transitions_list = List.mapi (fun idx (auto, _) ->
           let state_id = List.nth current_states idx in
           List.filter (fun t -> t.from_state = state_id) auto.transitions
@@ -170,6 +170,35 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                worklist := next_states :: !worklist
           ) ep_set
         ) epsilon_transitions;
+
+
+      let current_state_offer_set = List.mapi (fun i s -> 
+        let auto, _= List.nth automata_ids i in 
+        let st = Hashtbl.find auto.states s in 
+        st.offers
+      ) current_states in
+
+
+      let offers_from_other_states exc = List.mapi (fun indx _s -> 
+        if indx = exc then [] else
+        List.nth current_state_offer_set indx
+      ) current_states in
+
+
+      (* set of offers for each state from other set *)
+      let offers_set = List.mapi (fun i _s -> 
+        (offers_from_other_states i ) |> List.flatten
+      ) current_states in
+
+      let _satisfiable_offers = List.mapi( fun i offer_list ->
+
+        let offers = List.nth offers_set i in
+        List.filter_map(fun c ->
+          if not (List.mem c offers) then Some c else None
+        ) offer_list
+      )current_state_offer_set in
+
+      
 
 
       let rec cartesian_product lists =

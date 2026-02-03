@@ -1351,7 +1351,7 @@ let wire_list =
 
       let cond_value_pairs = List.combine sw_cond_wires selector_indexes in
       (* take the last value out *)
-      let cond_value_pairs_filtered = cond_value_pairs |> List.take (max_len - 1) in
+      let cond_value_pairs_filtered = List.filteri (fun i _ -> i < (max_len - 1)) cond_value_pairs in
 
       let (wires, cond_w) = WireCollection.add_switch graph.thread_id ci.typedefs cond_value_pairs_filtered (List.nth selector_indexes (max_len - 1)) graph.wires in
       graph.wires <- wires;
@@ -1361,7 +1361,7 @@ let wire_list =
             msg_spec.endpoint = "*" && msg_spec.msg = "*"
       ) offer_msg_list in
     
-      let required_branch_conditions = List.take length_offering index_values in
+      let required_branch_conditions = List.filteri (fun i _ -> i < length_offering) index_values in
     let wildcard_arm =
       List.find_opt (fun (offer_arm, _) ->
         match offer_arm with

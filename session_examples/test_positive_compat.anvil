@@ -46,7 +46,7 @@ pool p8 { // false
 pool p9 { // true
     ep_le -- ep_ri : ch;
     ip91 : ep.m1 ,
-    ip92 : rec X . ^( #ep.m1 , * : X ) 
+    ip92 : rec X . ^( #ep.m1 , * : #1;X ) 
 }
 
 pool p10 { // true
