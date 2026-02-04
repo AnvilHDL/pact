@@ -79,7 +79,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         st_id = auto.start_state
       ) current_states automata_ids in
 
-      if is_all_start_state then TypeAutomaton.reroute_transitions prod_auto 0 prod_state_id;
+      if is_all_start_state then TypeAutomaton.reroute_transitions prod_auto 0 prod_state_id [] ;
 
       let is_accepting_array = List.map2 (fun st_id (auto, _) ->
         let state = Hashtbl.find auto.states st_id in

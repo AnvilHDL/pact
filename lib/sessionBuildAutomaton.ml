@@ -13,7 +13,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
   ;
   
   (* Internal recursive builder *)
-  let rec build (s_type: Lang.session_type) (current: int) : int =
+  let rec build (s_type: Lang.session_type) (current: int) (var_map : varContext list) : int =
     match s_type with
     | Lang.StyAtom at ->
       (
@@ -52,9 +52,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       )
     | Lang.StySeq (st1, st2) ->
       (Hashtbl.find auto.states current).accepting <- false;
-      let mid = build st1 current in
+      let mid = build st1 current var_map in
       (Hashtbl.find auto.states mid).accepting <- false;
-      build st2 mid
+      build st2 mid var_map
     | Lang.StyChoice (st1, st2) -> (* Internal choice m1 + m2 *)
       (Hashtbl.find auto.states current).accepting <- false;
       
@@ -66,15 +66,13 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       TypeAutomaton.add_transition auto current left_root (LabelSet.singleton (Theta st1)) false true false false;
       let right_root = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto current right_root (LabelSet.singleton (Theta st2)) false true false false;
-      let left_end = build st1 left_root in
-      let right_end = build st2 right_root in
+      let left_end = build st1 left_root var_map in
+      let right_end = build st2 right_root var_map in
       (Hashtbl.find auto.states left_end).accepting <- false;
       (Hashtbl.find auto.states right_end).accepting <- false;
       let choice_state = TypeAutomaton.new_state auto true in
-      if not (left_end = current) then
-        TypeAutomaton.reroute_transitions auto left_end choice_state;
-      if not (right_end = current) then
-        TypeAutomaton.reroute_transitions auto right_end choice_state;
+      TypeAutomaton.reroute_transitions auto left_end choice_state var_map;
+      TypeAutomaton.reroute_transitions auto right_end choice_state var_map;
       choice_state
     | Lang.StyTrue -> 
       (* StyTrue represents successful termination - just return current state as accepting *)
@@ -121,10 +119,10 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
-            let branch_end = build cont new_wildcard_state in
+            let branch_end = build cont new_wildcard_state var_map in
             (* TypeAutomaton.append_offers auto current (Hashtbl.find auto.states new_wildcard_state).offers; *)
-            if (branch_end<>current) then TypeAutomaton.reroute_transitions auto branch_end end_state
-          | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state;
+            TypeAutomaton.reroute_transitions auto branch_end end_state var_map
+          | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state var_map ;
         end;
 
         List.iter (fun o_ms ->
@@ -138,8 +136,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
             | None -> StyAtom (AtomicAct (AtomNBMsg m))
           in
 
-          let branch_end = build st current in
-
+          let branch_end = build st current var_map in
         if all_blocking then (
             let all_msg_specs = List.filter_map (fun b -> 
               match b.Lang.trigger with 
@@ -150,8 +147,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           );
 
         
-          if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state
-
+          if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state var_map
         ) all_msg_branches;
           
         end_state
@@ -198,15 +194,15 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           match wildcard_offer.Lang.continuation with
           | Some cont ->
             (
-            let branch_end = build cont new_wildcard_state in
+            let branch_end = build cont new_wildcard_state var_map in
             (* TypeAutomaton.append_offers auto current (Hashtbl.find auto.states new_wildcard_state).offers; *)
-            TypeAutomaton.reroute_transitions auto branch_end end_state;
+            TypeAutomaton.reroute_transitions auto branch_end end_state var_map;
             true
             )
 
           | None ->
             (
-            TypeAutomaton.reroute_transitions auto new_wildcard_state end_state;
+            TypeAutomaton.reroute_transitions auto new_wildcard_state end_state var_map;
             false
            )
             
@@ -222,9 +218,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
 
         let transformed_type = Option.get tranformed_type in
 
-        let t_end = build transformed_type current in
+        let t_end = build transformed_type current var_map in
         TypeAutomaton.remove_all_transitions auto current current;
-        TypeAutomaton.reroute_transitions auto t_end end_state;
+        TypeAutomaton.reroute_transitions auto t_end end_state var_map;
 
        ( 
         if wildcard_there then
@@ -260,28 +256,27 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       TypeAutomaton.add_transition auto new_pseudo current (LabelSet.singleton Delay) false false false false;
       let cont_state = TypeAutomaton.new_state auto true in
       TypeAutomaton.add_transition auto current cont_state LabelSet.empty false true false false;
-      let end_state = build st cont_state in
+      let end_state = build st cont_state var_map in
       end_state
     | Lang.StyVar var ->
       (
-        let rec_start = Hashtbl.find_opt auto.rec_var_state_map var in
+        let rec_start = List.find_opt (fun v -> v.var = var) var_map in
         match rec_start with
         | Some s_id ->
-          TypeAutomaton.reroute_transitions auto current s_id
+          TypeAutomaton.reroute_transitions auto current s_id.state_id var_map 
           ;
-          s_id
+          s_id.state_id
         | None ->
           raise (TypeError [Text ("Unbound recursion variable "^var ^ " in automaton construction"); Except.codespan_local default_span]);
       )
     | Lang.StyRec (var, body) ->
       (Hashtbl.find auto.states current).accepting <- false;
-      let exists_mapping = Hashtbl.find_opt auto.rec_var_state_map var in
-      (match exists_mapping with
-      | Some _ ->
-        raise (TypeError [Text ("Duplicate recursion variable "^var ^ " in automaton construction"); Except.codespan_local default_span]);
-      | None -> ());
-      TypeAutomaton.add_rec_var_mapping auto var current;
-      let body_end = build body current in
+      let exists_mapping = List.exists (fun v -> v.var = var) var_map in
+      if exists_mapping then (
+        raise (TypeError [Text ("Duplicate recursion variable "^var ^ " in automaton construction"); Except.codespan_local default_span])
+      );
+      let new_var_map = TypeAutomaton.add_rec_var_mapping var_map var current in
+      let body_end = build body current new_var_map in
       body_end
     | _ ->
       raise (TypeError [Text ("Unsupported session type for automaton construction "^(string_of_protocol s_type)); Except.codespan_local default_span])
@@ -507,7 +502,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
     )state_map;
     final_prod_state
   in
-  let final_state = build st auto.start_state in
+  let final_state = build st auto.start_state [] in
   (Hashtbl.find auto.states final_state).accepting <- true;
   flush stderr;
   collect_future_messages auto;

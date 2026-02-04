@@ -118,7 +118,11 @@ type typeAutomaton = {
   mutable transitions : transition list;
   mutable start_state : int;
   mutable next_state_id : int;
-  mutable rec_var_state_map : (identifier, int) Hashtbl.t;
+}
+
+type varContext = {
+  var : identifier;
+  state_id : int
 }
 
 (* --- Automaton Helper Functions --- *)
@@ -131,14 +135,12 @@ module TypeAutomaton = struct
     let start_state = 0 in
     let states = Hashtbl.create 10 in
     Hashtbl.add states start_state { id = start_state; accepting = false; adversary = false; is_winning = false; offers = []; offers_in_future = []; is_fair = false };
-    let rec_var_state_map = Hashtbl.create 10 in
     {
       name = "";
       states = states;
       transitions = [];
       start_state = start_state;
       next_state_id = 1;
-      rec_var_state_map = rec_var_state_map;
     }
   let change_name (id : identifier) (auto: t) : unit =
     auto.name <- id
@@ -177,8 +179,8 @@ module TypeAutomaton = struct
     auto.transitions <- List.filter (fun t ->
       not (t.from_state = from_s && t.to_state = to_s)
     ) auto.transitions
-  let add_rec_var_mapping (auto: t) (var: identifier) (state_id: int) : unit =
-    Hashtbl.add auto.rec_var_state_map var state_id
+  let add_rec_var_mapping (map : varContext list) (var: identifier) (state_id: int) : varContext list =
+    { var; state_id } :: map
   
   let append_offers (auto: t) (state_id: int) (offers: Lang.message_specifier list) : unit =
     let state_info = Hashtbl.find auto.states state_id in
@@ -192,10 +194,10 @@ module TypeAutomaton = struct
     state_info.adversary <- true
 
 
-  let reroute_transitions (auto: t) (old_state: int) (new_state: int) : unit =
-    let is_recurse_state = Hashtbl.fold (fun _ state_id acc ->
-      acc || (state_id = old_state)
-    ) auto.rec_var_state_map false in
+  let reroute_transitions (auto: t) (old_state: int) (new_state: int) (map : varContext list) : unit =
+    let is_recurse_state = List.exists (fun v ->
+      (v.state_id = old_state)
+    ) map in
     if is_recurse_state then ()
     else
     let new_transitions = List.map (fun t ->

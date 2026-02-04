@@ -1,2 +1,3 @@
 interface top(ep : left ch) =  (#ep.m1 || #ep.m2)
 interface top2(ep : left ch) =  (ep.m3 || ep.m4)
+interface top3(ep : left ch) =  ((rec X . ep.m1 ; #1;X) + (rec X . ep.m2 ;#1;X))
