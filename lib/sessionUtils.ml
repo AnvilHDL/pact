@@ -1,0 +1,47 @@
+open SessionAutomaton
+
+let compare_msg_spec m1 m2 =
+  String.compare (Lang.string_of_msg_spec m1) (Lang.string_of_msg_spec m2)
+
+let convert_to_order_spec msg_list = 
+  List.sort_uniq compare_msg_spec msg_list
+
+
+
+let get_ordered_transition_specifiers (t : transition) = 
+  (
+      List.filter_map (function l ->
+        match l with
+        | Action m -> Some m
+        | _ -> None
+      ) (LabelSet.elements t.label)
+  ) |> List.sort_uniq compare_msg_spec
+
+let label_subset offers l = 
+  let l_offers = get_ordered_transition_specifiers l in
+  let offers_spec = convert_to_order_spec offers in
+  List.for_all (fun o -> List.mem o offers_spec) l_offers
+
+let find_next_states transitions_list state_id offers = 
+  let transitions = List.filter (fun t -> (t.from_state = state_id)&&(label_subset offers t)) transitions_list in
+
+  let offer_state_pair = List.map (fun t ->
+    let t_offers = get_ordered_transition_specifiers t in
+    (t_offers, t.to_state)
+  ) transitions in
+
+  let compare_offer_state_pair (offers1,_state1) (offers2,_state2) = (List.length offers2) - (List.length offers1) in
+
+  let offer_state_pair_sorted = List.sort compare_offer_state_pair offer_state_pair in
+
+  let (next_states, remaining_offers) =
+    List.fold_left (fun (acc, pending_offer) (off, stid) ->
+      if pending_offer = [] then (acc, [])
+      else
+        let pending_offer_filtered = List.filter (fun o -> not (List.mem o off)) pending_offer in
+        (acc @ [stid], pending_offer_filtered)
+    ) ([], offers) offer_state_pair_sorted
+  in
+  assert (if(remaining_offers = []) then true else (Printf.eprintf "Remaining offers: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec remaining_offers)); false));
+  next_states
+

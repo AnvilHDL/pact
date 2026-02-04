@@ -122,7 +122,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           match wildcard_offer.Lang.continuation with
           | Some cont ->
             let branch_end = build cont new_wildcard_state in
-            TypeAutomaton.append_offers auto current (Hashtbl.find auto.states new_wildcard_state).offers;
+            (* TypeAutomaton.append_offers auto current (Hashtbl.find auto.states new_wildcard_state).offers; *)
             if (branch_end<>current) then TypeAutomaton.reroute_transitions auto branch_end end_state
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state;
         end;
