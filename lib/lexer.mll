@@ -35,6 +35,15 @@ rule read =
   | "interface" { KEYWORD_INTERFACE }
   | "offer"   { KEYWORD_OFFER }
   | "xoffer"  { KEYWORD_XOFFER }
+  | "forall"  { KEYWORD_FORALL }
+  | "not"     { KEYWORD_EXCEPT }
+  | "∀"      { FORALL_SYMBOL }
+  | "∑"      { SUM_SYMBOL }
+  | "∏"      { PROD_SYMBOL }
+  | "⊕"      { XOR_SYMBOL }
+  | "∧"      { AND_SYMBOL }
+  | " ̸"      { NOT_SYMBOL }
+  | "∈"      { IN_SYMBOL }
   | "$"       { DOLLAR }
   | "&&"      { DOUBLE_AND }
   | '&'       { AND }

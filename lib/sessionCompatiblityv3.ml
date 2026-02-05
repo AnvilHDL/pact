@@ -305,6 +305,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
           if all_has_delay then
           ( 
+            inc_iter;
             found := true;
               let all_delay_combinations = cartesian_product2 delay_transitions in
               List.iter( fun transition_set -> (

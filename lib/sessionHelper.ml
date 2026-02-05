@@ -151,6 +151,9 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
     | Lang.StyRec (id, s) -> Lang.StyRec (id, preprocess_sty s)
     | Lang.StyVar id -> Lang.StyVar id
     | Lang.StyLet (id, s1, s2) -> Lang.StyLet (id, preprocess_sty s1, preprocess_sty s2)
+    | Lang.StyForall (id, qty, sty_body, ex) ->
+        let preprocessed_body = preprocess_sty sty_body in
+        Lang.StyForall (id, qty, preprocessed_body, ex)
   in
   preprocess_sty sty
 

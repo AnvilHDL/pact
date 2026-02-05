@@ -114,6 +114,15 @@ and session_type =
   | StyLet of identifier * session_type * session_type (** let binding for session types **)
   | StyRec of identifier * session_type (** recursive session type **)
   | StyVar of identifier (** session type variable **)
+  | StyForall of identifier*quant_type*session_type*(quant_member option)
+
+
+and quant_type =
+  | QuantRange of int*int
+
+and quant_member =
+  | QuantSingleInt of int
+  | QuantIntList of int list
 
 
 and offering_session_type = {
@@ -956,6 +965,24 @@ let rec aux p =
       id
   | StyLet (id, p_def, p_body) ->
       "let " ^ id ^ " = " ^ aux p_def ^ " in " ^ aux p_body
+  | StyForall (id,qty,body,_ex) ->
+    let ex = string_of_quant_mem _ex in
+      "∀ ("^id^ ": "^(string_of_quantifier_type qty)^")" ^ ex ^ "( " ^ string_of_protocol_for_graph body ^ " )"
+and string_of_quantifier_type ty = 
+  match ty with
+  | QuantRange (st,ed) ->
+      "["^(string_of_int st)^","^(string_of_int ed)^"]"
+and string_of_quant_mem mem = 
+  match mem with
+  | Some mem ->
+    (
+    match mem with
+    | QuantSingleInt v ->
+      "¬"^(string_of_int v)
+    | QuantIntList lst ->
+      "¬"^"{"^(String.concat "," (List.map string_of_int lst))^"}"
+    )
+  | None -> ""
 and string_of_atomic_action atomic_action =
   match atomic_action with
   | AtomBMsg id -> string_of_msg_spec id
@@ -984,9 +1011,9 @@ let rec aux p =
   | StyChoice (p1, p2) ->
       "(" ^ aux p1 ^ "+" ^ aux p2 ^ ")"
   | StyOffer ps ->
-      "(" ^ String.concat "& " (List.map aux2 ps) ^ ")"
+      "(" ^ String.concat "∧" (List.map aux2 ps) ^ ")"
   | StyXOffer ps ->
-      "(" ^ String.concat " ^ " (List.map aux2 ps) ^ ")"
+        "(" ^ String.concat " ⊕ "   (List.map aux2 ps) ^ ")"
   | StyAtom act -> string_of_aa_with_gap act
   | StyFuture p_inner ->
       "F(" ^ aux p_inner ^ ")"
@@ -998,6 +1025,33 @@ let rec aux p =
       id
   | StyLet (id, p_def, p_body) ->
       "let " ^ id ^ " = " ^ aux p_def ^ " in " ^ aux p_body
+  | StyForall (id,qty,body,_ex) ->
+    let ex = string_of_quant_mem _ex in
+      "∀ ("^id^ ": "^(string_of_quantifier_type qty)^ex^") -> (" ^ string_of_protocol body ^ ")"
+
+and string_of_quantifier_type ty = 
+  match ty with
+  | QuantRange (st,ed) ->
+      "["^(string_of_int st)^","^(string_of_int ed)^"]"
+
+and string_of_quant_mem mem = 
+  match mem with
+  | Some mem ->
+    (
+    match mem with
+    | QuantSingleInt v ->
+    " ̸ "^(string_of_int v)
+    | QuantIntList lst ->
+      " ̸ "^"{"^(String.concat "," (List.map string_of_int lst))^"}"
+    ) 
+  | None -> ""
+  
+  
+
+
+
+
+
 and string_of_atomic_action atomic_action =
   match atomic_action with
   | AtomBMsg id -> string_of_msg_spec id

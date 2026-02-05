@@ -42,6 +42,11 @@
 %token AT                   (* @ *)
 %token TILDE                (* ~ *)
 %token PERIOD               (* . *)
+%token IN_SYMBOL            (* ∈ *)
+%token SUM_SYMBOL           (* ∑ *)
+%token PROD_SYMBOL          (* Π *)
+%token XOR_SYMBOL           (* ⊕ *)
+%token AND_SYMBOL           (* ∧ *)
 %token KEYWORD_LOOP         (* loop *)
 %token KEYWORD_PROC         (* proc *)
 %token KEYWORD_INTERFACE      (* Interface *)
@@ -51,6 +56,10 @@
 %token KEYWORD_LEFT         (* left *)
 %token KEYWORD_RIGHT        (* right *)
 %token KEYWORD_PUT          (* put *)
+%token KEYWORD_FORALL       (* forall *)
+%token FORALL_SYMBOL     (* ∀ *)
+%token NOT_SYMBOL     (* ̸ *)
+%token KEYWORD_EXCEPT       (* not  *)
 %token KEYWORD_LOGIC        (* logic *)
 %token KEYWORD_POOL        (* pool *)
 %token KEYWORD_FOREIGN      (* foreign *)
@@ -376,8 +385,7 @@ session_def:
     { name = name; body = body; params = params } : Lang.session_def
   }
 ;
-
-
+  
 local_session_type:
 | LEFT_PAREN; RIGHT_PAREN
   { Lang.StyTrue }
@@ -395,9 +403,9 @@ local_session_type:
   { Lang.StySeq (act1, act2) }
 | act1 = local_session_type ;PLUS; act2 = local_session_type
   { Lang.StyChoice (act1, act2) }
-| AND; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
+| and_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyOffer offering_list }
-| XOR; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
+| xor_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyXOffer offering_list }
 | act1 = local_session_type; DOUBLE_OR; act2 = local_session_type
   { Lang.StyParallel (act1, act2) }
@@ -405,6 +413,76 @@ local_session_type:
   { sty }
 | KEYWORD_F; sty = local_session_type %prec KEYWORD_F
   { Lang.StyFuture sty }
+| sum_symbol;LEFT_PAREN; choice_list = separated_list(COMMA, local_session_type); RIGHT_PAREN
+  { let rec unfold_sum lst =
+    match lst with
+    | [] -> Lang.StyTrue
+    | x::xs -> Lang.StyChoice (x, unfold_sum xs)
+  in
+  unfold_sum choice_list }
+| prod_sym; LEFT_PAREN; par_list = separated_list(COMMA, local_session_type); RIGHT_PAREN
+  { let rec unfold_prod lst =
+    match lst with
+    | [] -> Lang.StyTrue
+    | x::xs -> Lang.StyParallel (x, unfold_prod xs)
+  in
+  unfold_prod par_list }
+| forall; LEFT_PAREN; id = IDENT; in_sym; quant_type = quantifier_type;exc=excluded_member?; RIGHT_PAREN; LEFT_BRACE; body = local_session_type; RIGHT_BRACE
+  { Lang.StyForall (id, quant_type, body,exc)}
+
+forall:
+| KEYWORD_FORALL
+  { () }
+| FORALL_SYMBOL
+  { () }
+
+in_sym:
+| IN_SYMBOL
+  { () }
+| COLON
+  { () }
+
+xor_sym:
+| XOR
+  { () }
+| XOR_SYMBOL
+  { () }
+
+and_sym:
+| AND
+  { () }
+| AND_SYMBOL
+  { () }
+
+sum_symbol:
+| PLUS
+  { () }
+| SUM_SYMBOL
+  { () }
+
+prod_sym:
+| DOUBLE_OR
+  { () }
+| PROD_SYMBOL
+  { () }
+
+
+excluded_member:
+| KEYWORD_EXCEPT; exc = excluded_member_ty
+  { exc }
+| NOT_SYMBOL; exc = excluded_member_ty
+  { exc }
+
+// To Do : Add quantification over channel type (for input endpoints)
+quantifier_type:
+| LEFT_BRACKET; start = INT ;PERIOD;PERIOD; ed=INT;RIGHT_BRACKET
+  { Lang.QuantRange (start,ed) }
+
+excluded_member_ty:
+| single = INT
+  { Lang.QuantSingleInt single }
+| LEFT_PAREN;rng = separated_list(COMMA,INT); RIGHT_PAREN  
+  { Lang.QuantIntList rng }
 
 offering_arm: 
 | trig  = atomic_action; COLON; cont = local_session_type
@@ -715,13 +793,6 @@ expr:
   { Lang.Let ([binding], None, v) }
 | KEYWORD_LET; binding = IDENT; COLON; dtype = data_type; EQUAL; v = node(expr) %prec KEYWORD_LET
   { Lang.Let ([binding], Some(dtype), v) }
-// | KEYWORD_LET; binding = IDENT; EQUAL; v = node(expr); EQ_GT; body = node(expr)
-//   {
-//     let open Lang in
-//     LetIn ([binding], v, {d = Wait ({d = Identifier binding; span = body.span}, body); span = body.span})
-//   }
-// | KEYWORD_LET; LEFT_PAREN; bindings = separated_list(COMMA, IDENT); RIGHT_PAREN; EQUAL; v = node(expr)
-//   { Lang.Let (bindings, v) }
 | v = node(expr); SEMICOLON; body = node(expr)
   { Lang.Join (v, body) }
 | KEYWORD_SEND; send_pack = send_pack
@@ -740,16 +811,6 @@ expr:
   { e }
 | KEYWORD_CALL ; func = IDENT; LEFT_PAREN; args = separated_list(COMMA, node(expr)); RIGHT_PAREN
   { Lang.Call (func, args) }
-// | KEYWORD_TRY; KEYWORD_SEND; send_pack = send_pack; KEYWORD_THEN;
-//   succ_expr = node(expr); KEYWORD_ELSE; fail_expr = node(expr)
-//   { Lang.TrySend (send_pack, succ_expr, fail_expr) }
-// | KEYWORD_TRY; KEYWORD_RECV; recv_pack = recv_pack; KEYWORD_THEN;
-//   succ_expr = node(expr); KEYWORD_ELSE; fail_expr = node(expr)
-//   { Lang.TryRecv (recv_pack, succ_expr, fail_expr) }
-// | KEYWORD_SEND; send_pack = send_pack; KEYWORD_THEN; succ_expr = node(expr)
-//   { Lang.TrySend (send_pack, succ_expr, Lang.Tuple []) }
-// | KEYWORD_RECV; recv_pack = recv_pack; KEYWORD_THEN; succ_expr = node(expr)
-//   { Lang.TryRecv (recv_pack, succ_expr, Lang.Tuple []) }
 | KEYWORD_CYCLE; n = INT
   { Lang.Cycle n }
 | e = node(expr); LEFT_BRACKET; ind = index; RIGHT_BRACKET
