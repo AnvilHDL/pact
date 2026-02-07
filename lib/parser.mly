@@ -62,7 +62,6 @@
 %token KEYWORD_EXCEPT       (* not  *)
 %token KEYWORD_LOGIC        (* logic *)
 %token KEYWORD_POOL        (* pool *)
-%token KEYWORD_FOREIGN      (* foreign *)
 %token KEYWORD_GENERATE     (* generate *)
 %token KEYWORD_GENERATE_SEQ     (* generate *)
 %token KEYWORD_FLAT       (* flat *)
@@ -575,19 +574,7 @@ proc_def_arg:
       num_instances = None;
     } : Lang.endpoint_def
   }
-| KEYWORD_FOREIGN; ident = IDENT; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
-  {
-    {
-      name = ident;
-      channel_class = fst chan_class;
-      channel_params = snd chan_class;
-      dir = chan_dir;
-      foreign = true;
-      opp = None;
-      num_instances = None;
-    } : Lang.endpoint_def
-  }
-| ident = IDENT; LEFT_BRACKET; n = INT; RIGHT_BRACKET; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
+| ident = IDENT; n = array_dimm; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
   {
     {
       name = ident;
@@ -599,25 +586,14 @@ proc_def_arg:
       num_instances = Some n;
     } : Lang.endpoint_def
   }
-| KEYWORD_FOREIGN; ident = IDENT; LEFT_BRACKET; n = INT; RIGHT_BRACKET; COLON; chan_dir = channel_direction; chan_class = channel_class_concrete
-  {
-    {
-      name = ident;
-      channel_class = fst chan_class;
-      channel_params = snd chan_class;
-      dir = chan_dir;
-      foreign = true;
-      opp = None;
-      num_instances = Some n;
-    } : Lang.endpoint_def
-  }
-;
 
-foreign_tag:
-| KEYWORD_FOREIGN
-  { true }
-| {false}
-;
+array_dimm:
+| LEFT_BRACKET; n = int_maybe_param; RIGHT_BRACKET
+  { Lang.OneDim n }
+| LEFT_BRACKET; n = int_maybe_param; RIGHT_BRACKET; rst = array_dimm;
+  {Lang.MultiDim (n, rst) }
+
+
 
 // Specifies the dirn of comm (inp or out)
 channel_direction:
@@ -628,39 +604,29 @@ channel_direction:
 ;
 // channels are instantantiated with endpoint aquisition by native channel inside the proc
 channel_def:
-| left_foreign = foreign_tag; left_endpoint = IDENT; DOUBLE_MINUS;
-  right_foreign = foreign_tag; right_endpoint = IDENT; COLON;
+| left_endpoint = IDENT; DOUBLE_MINUS;
+  right_endpoint = IDENT; COLON;
   chan_class = channel_class_concrete
   {
-    let visibility = match left_foreign, right_foreign with
-      | true, true -> Lang.BothForeign
-      | false, true -> Lang.RightForeign
-      | _ -> Lang.LeftForeign
-    in
     {
       channel_class = fst chan_class;
       channel_params = snd chan_class;
       endpoint_left = left_endpoint;
       endpoint_right = right_endpoint;
-      visibility = visibility;
+      visibility = Lang.LeftForeign;
       n_instances = None;
     } : Lang.channel_def
   }
-| left_foreign = foreign_tag; left_endpoint = IDENT; DOUBLE_MINUS;
-  right_foreign = foreign_tag; right_endpoint = IDENT; COLON;
-  chan_class = channel_class_concrete LEFT_BRACKET; n = INT; RIGHT_BRACKET
+| left_endpoint = IDENT; DOUBLE_MINUS;
+  right_endpoint = IDENT; COLON;
+  chan_class = channel_class_concrete; n = array_dimm
   {
-    let visibility = match left_foreign, right_foreign with
-      | true, true -> Lang.BothForeign
-      | false, true -> Lang.RightForeign
-      | _ -> Lang.LeftForeign
-    in
     {
       channel_class = fst chan_class;
       channel_params = snd chan_class;
       endpoint_left = left_endpoint;
       endpoint_right = right_endpoint;
-      visibility = visibility;
+      visibility = Lang.LeftForeign;
       n_instances = Some n;
     } : Lang.channel_def
   }
@@ -727,10 +693,18 @@ ifc_inst:
 args_spawn:
 | ident = IDENT
   { Lang.SingleEp ident }
-| ident = IDENT; LEFT_BRACKET; start = INT; PLUS; COLON; size = INT; RIGHT_BRACKET
-  { Lang.RangeEp (ident, start, size) }
-| ident = IDENT; LEFT_BRACKET; index = INT; RIGHT_BRACKET;
-  { Lang.SingleEp (Printf.sprintf "%s[%d]" ident index)  }
+| ident = IDENT; idx = array_index_concrete
+  { Lang.IndexedEp (ident, idx) }
+
+array_index_concrete:
+| LEFT_BRACKET; n = INT; RIGHT_BRACKET
+  { Lang.IndexSingle n }
+| LEFT_BRACKET; start = INT; PLUS; COLON; size = INT; RIGHT_BRACKET
+  { Lang.IndexRange (start, size) }
+| LEFT_BRACKET; start = INT; PLUS; COLON; size = INT;RIGHT_BRACKET; rest = array_index_concrete
+  { Lang.IndexMultiDimRange (start, size, rest) }
+| LEFT_BRACKET; n = INT; RIGHT_BRACKET;rest = array_index_concrete
+  { Lang.IndexMultiDimSingle (n, rest) }
 
 param_value:
 | n = INT
@@ -1201,22 +1175,27 @@ message_specifier:
       msg = msg_type;
     } : Lang.message_specifier
   }
-| endpoint = IDENT; LEFT_BRACKET; index = INT; RIGHT_BRACKET; PERIOD; msg_type = IDENT
+| endpoint = IDENT;indx_str=get_array_index_string;PERIOD; msg_type = IDENT
   {
     {
-      endpoint = Printf.sprintf "%s[%d]" endpoint index;
-      msg = msg_type;
-    } : Lang.message_specifier
-  }
-| endpoint = IDENT; LEFT_BRACKET; index = IDENT; RIGHT_BRACKET; PERIOD; msg_type = IDENT
-  {
-    {
-      endpoint = Printf.sprintf "%s[%s]" endpoint index;
+      endpoint = Printf.sprintf "%s%s" endpoint indx_str;
       msg = msg_type;
     } : Lang.message_specifier
   }
 ;
 
+
+get_array_index_string:
+| LEFT_BRACKET; idx_content = int_or_id; RIGHT_BRACKET
+  { Printf.sprintf "[%s]" idx_content }
+| LEFT_BRACKET; idx_content = int_or_id; RIGHT_BRACKET; rest = get_array_index_string
+  { Printf.sprintf "[%s]%s" idx_content rest }
+
+int_or_id: 
+| n = INT
+  { string_of_int n }
+| id = IDENT
+  { id }
 shared_var_def:
   KEYWORD_SHARED; LEFT_PAREN; lifetime = lifetime_spec; RIGHT_PAREN; ident = IDENT; KEYWORD_ASSIGNED; KEYWORD_BY; thread_id = INT
   {

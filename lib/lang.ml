@@ -153,6 +153,23 @@ and param_value =
 (** Endpoint definition. A pair is
 created once a channel class
 is instantiated. *)
+type array_dimm_concrete =
+  | OneDimmension of int
+  | MultiDimmension of int * array_dimm_concrete
+
+type array_index_concrete =
+  | IndexSingle of int
+  | IndexRange of (int *int)
+  | IndexMultiDimRange of (int * int * array_index_concrete)
+  | IndexMultiDimSingle of (int*array_index_concrete)
+  
+
+
+type array_dimensions =
+  | OneDim of (int maybe_param)
+  | MultiDim of (int maybe_param)*(array_dimensions)
+
+
 type endpoint_def = {
   name: identifier;
   channel_class: identifier;
@@ -163,8 +180,10 @@ type endpoint_def = {
   used within this process? *)
   opp: identifier option; (** if the endpoint is created locally, the other endpoint associated
   with the same channel *)
-  num_instances : int option (** number of instances for arrayed channels *)
+  num_instances : array_dimensions option (** number of instances for arrayed channels *)
 }
+
+(** A macro definition. *)
 
 type macro_def = {
   id: identifier;
@@ -297,7 +316,7 @@ type channel_def = {
   endpoint_left: identifier;
   endpoint_right: identifier;
   visibility: channel_visibility;
-  n_instances : int option; (** number of instances for arrayed channels To Do: add support for parametrization *) 
+  n_instances : array_dimensions option; (** number of instances for arrayed channels To Do: add support for parametrization *) 
 }
 
 type interface_pool_def = {
@@ -533,7 +552,7 @@ and ifc_instantiation = {
 
 and args_spawn = 
   | SingleEp of identifier
-  | RangeEp of identifier *int * int  (** name, start, size*)
+  | IndexedEp of identifier * array_index_concrete
 
 (* TODO: specify the type? *)
 type shared_var_def = {
@@ -723,15 +742,30 @@ and string_of_literal (lit : literal) : string =
   | WithLength (n, v) -> "WithLength (" ^ string_of_int n ^ ", " ^ string_of_int v ^ ")"
   | NoLength v -> "NoLength " ^ string_of_int v
 
-let sub_ep_index (ep: message_specifier) (index: int) : message_specifier =
+let sub_ep_index (ep: message_specifier) (index: int) (id : identifier) : message_specifier =
   let is_array = String.contains ep.endpoint '[' && String.contains ep.endpoint ']'in
+  let sub_all_indices ep   =
+      let rec aux s acc =
+        match String.index_opt s '[' with
+        | Some start_idx ->
+            (match String.index_opt s ']' with
+            | Some end_idx when end_idx > start_idx ->
+                let before = String.sub s 0 start_idx in
+                let after = String.sub s (end_idx + 1) (String.length s - end_idx - 1) in
+                let index_str = String.sub s (start_idx + 1) (end_idx - start_idx - 1) in
+                if index_str = id then
+                  aux after (before ^ "[" ^ string_of_int index ^ "]" ^ acc)
+                else
+                  aux after (before ^ "[" ^ index_str ^ "]" ^ acc)
+            | _ -> acc ^ s)
+        | None -> acc ^ s
+      in
+      aux ep.endpoint ""
+  in
+
+        
   if is_array then
-    let base_name =
-      match String.index_opt ep.endpoint '[' with
-      | Some idx -> String.sub ep.endpoint 0 idx
-      | None -> ep.endpoint
-    in
-    { endpoint = Printf.sprintf "%s[%d]" base_name index; msg = ep.msg }
+    { endpoint = sub_all_indices ep; msg = ep.msg }
   else
     ep
 
@@ -781,7 +815,7 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
       Assign (new_lv, subst e)
   | Send {send_msg_spec; send_data} ->
       Send {
-        send_msg_spec = sub_ep_index send_msg_spec idx;
+        send_msg_spec = sub_ep_index send_msg_spec idx id;
         send_data = subst send_data
       }
   | Debug (DebugPrint (msg, exprs)) ->
@@ -806,13 +840,13 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | TryRecv (ident, recv_pack, e1, e2) ->
     TryRecv (
       ident,
-      {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx},
+      {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id},
       subst e1,
       subst e2
     )
   | TrySend (send_pack, e1, e2) ->
     TrySend (
-      {send_msg_spec = sub_ep_index send_pack.send_msg_spec idx; send_data = subst send_pack.send_data},
+      {send_msg_spec = sub_ep_index send_pack.send_msg_spec idx id; send_data = subst send_pack.send_data},
       subst e1,
       subst e2
     )
@@ -844,7 +878,7 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | Recurse | Literal _ | Cycle _
   | Identifier _ | Ready _ | Probe _-> expr.d
   | Recv recv_pack ->
-      let new_recv_pack = {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx} in
+      let new_recv_pack = {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id} in
       Recv new_recv_pack
   | Sync _ -> expr.d
   | Until (cond, body) ->
@@ -1084,13 +1118,51 @@ let string_of_atomic_action_with_gap = function
 
 
 let preprocess_ep_spawn_args (args : args_spawn list) : identifier list =
+  let rec generate_ep_indices base_string_list idx =
+    match idx with
+    | IndexSingle i ->
+      List.map(
+        fun base_str -> base_str ^ (Printf.sprintf "[%d]" i)
+      )base_string_list
+    | IndexRange (start, sz) ->
+        let end_v = start + sz - 1 in
+        let rec generate_range curr =
+          if curr > end_v then
+            []
+          else  
+            let new_base_strings = List.map(
+              fun base_str -> base_str ^ (Printf.sprintf "[%d]" curr)
+            ) base_string_list in
+            new_base_strings @ (generate_range (curr + 1))
+        in
+        generate_range start
+    | IndexMultiDimSingle (i, rest) ->
+        let new_base_strings = List.map(
+          fun base_str -> base_str ^ (Printf.sprintf "[%d]" i)
+        ) base_string_list in
+        generate_ep_indices new_base_strings rest
+    | IndexMultiDimRange (start, size, rest) ->
+        List.concat_map (fun curr ->
+          let new_base_strings = List.map(
+            fun base_str -> base_str ^ (Printf.sprintf "[%d]" curr)
+          ) base_string_list in
+          generate_ep_indices new_base_strings rest
+        ) (List.init size (fun i -> start + i))
+  in
+
   List.concat_map
     (function
       | SingleEp name -> [name]
-      | RangeEp (name, start, size) ->
-        (
-          [List.init size (fun i -> Printf.sprintf "%s[%d]" name (start + i))] |> List.concat
-
-        )
+      | IndexedEp (name, idx) ->
+        generate_ep_indices [name] idx
     ) 
     args
+
+let rec calculate_array_index_concrete_size (dimm : array_index_concrete) : int =
+  match dimm with
+  | IndexSingle _ -> 1
+  | IndexRange (_, sz) -> sz
+  | IndexMultiDimSingle (_, rest) ->
+      calculate_array_index_concrete_size rest
+  | IndexMultiDimRange (_, size, rest) ->
+      size * (calculate_array_index_concrete_size rest)

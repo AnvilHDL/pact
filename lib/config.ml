@@ -3,6 +3,7 @@ type compile_config = {
   debug_choice : int;
   verbose: bool;
   verbose_max : bool;
+  stdin: bool;
   disable_lt_checks : bool;
   disable_session_checks : bool;
   disable_compat_checks : bool;
@@ -24,6 +25,7 @@ let parse_args () : compile_config =
   let strong_typecasts = ref false in
   let opt_level = ref 2 in
   let debug_choice = ref (-1) in
+  let stdin = ref false in
   let two_round_graph = ref false in
   let json_output = ref false in
   let input_filenames = ref []
@@ -35,6 +37,7 @@ let parse_args () : compile_config =
   in
   Arg.parse
     [
+      ("-stdin", Arg.Set stdin, "Read from standard input. If a filename is provided despite this flag, it is treated as the path of standard input data.");
       ("-verbose", Arg.Set verbose, "Enable verbose output");
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-strict-dtc", Arg.Set strong_typecasts, "Restrict Abstract Typecasts");
@@ -49,12 +52,13 @@ let parse_args () : compile_config =
       ("-verbose-max", Arg.Set verbose_max, "Enable verbose output with maximum detail");
     ]
     add_input_filename
-    "anvil [-verbose] [-disable-lt-checks] [-O <opt-level>] [-two-round] <file1> [<file2>] ...";
+    "anvil [-stdin] [-verbose] [-disable-lt-checks] [-O <opt-level>] [-two-round] [-json] [-strict-dtc] <file1> [<file2>] ...";
   {
     debug_mode = (!debug_choice <> -1);
     verbose = !verbose;
     debug_choice = !debug_choice;
     verbose_max = !verbose_max;
+    stdin = !stdin;
     disable_lt_checks = !disable_lt_checks;
     disable_session_checks = !disable_session_checks;
     disable_compat_checks = !disable_compat_checks;

@@ -62,8 +62,12 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
     (* connect the wires *)
     
     let connect_endpoints = fun (arg_endpoint : endpoint_def) (param_ident : identifier) ->
-      let end_opt = (MessageCollection.lookup_endpoint g.messages param_ident) in
-      let endpoint_local =  if Option.is_some end_opt then Option.get end_opt else failwith (Printf.sprintf "Endpoint not found %s" param_ident) in
+      let endpoint_local = 
+        match MessageCollection.lookup_endpoint g.messages param_ident with
+        | Some ep -> ep
+        | None -> 
+            raise (Failure (Printf.sprintf "Could not find endpoint '%s'in parent process" param_ident))
+      in
       let endpoint_name_local = CodegenFormat.canonicalize_endpoint_name param_ident (List.hd g.threads |> fst) in
       let cc = MessageCollection.lookup_channel_class graphs.channel_classes endpoint_local.channel_class |> Option.get in
       let print_msg_con = fun (msg : message_def) ->
@@ -138,7 +142,7 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
       else print_msg_con first_msg
 
     in
-    let param_count = List.fold_left (fun acc p -> match p with Lang.SingleEp _ -> acc + 1 | Lang.RangeEp (_,_ ,sz) -> acc + sz) 0 spawn.d.params in
+    let param_count = List.fold_left (fun acc p -> match p with Lang.SingleEp _ -> acc + 1 | Lang.IndexedEp (_,idx) -> acc + (Lang.calculate_array_index_concrete_size idx)) 0 spawn.d.params in
     if List.length proc_other.messages.args <> param_count then
       raise (Failure (Printf.sprintf "Invalid number of arguments for spawn of proc %s | Expected %d"  proc_other.name param_count));
     List.iter2 connect_endpoints proc_other.messages.args (Lang.preprocess_ep_spawn_args spawn.d.params);

@@ -82,7 +82,6 @@ rule read =
   | "left"    { KEYWORD_LEFT }
   | "right"   { KEYWORD_RIGHT }
   | "logic"   { KEYWORD_LOGIC }
-  | "foreign" { KEYWORD_FOREIGN }
   | "flat"    { KEYWORD_FLAT }
   | "let"     { KEYWORD_LET }
   | "if"      { KEYWORD_IF }
