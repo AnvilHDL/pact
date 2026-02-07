@@ -278,6 +278,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       let new_var_map = TypeAutomaton.add_rec_var_mapping var_map var current in
       let body_end = build body current new_var_map in
       body_end
+    | Lang.StyForall _ ->
+      raise (TypeError [Text ("Quantifier should have been expanded before automaton construction. This is a compiler bug."); Except.codespan_local default_span])
     | _ ->
       raise (TypeError [Text ("Unsupported session type for automaton construction "^(string_of_protocol s_type)); Except.codespan_local default_span])
 

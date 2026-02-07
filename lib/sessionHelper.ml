@@ -103,7 +103,187 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
 
     ) pool_def.d.interface_members in
     session_defs
+
+
+(* === Quantifier Expansion Functions === *)
+
+(* Substitute a quantified variable with a concrete integer value in a session type *)
+(* This function respects nested quantifier scopes - inner variables shadow outer ones *)
+
+let subsitute_action (action : atomic_action_with_gap) var_name value  =
+    (
+     match action with
+     | AtomicAct (AtomNBMsg msg_spec) ->
+          let new_endpoint = Lang.sub_ep_index msg_spec value var_name in
+          AtomicAct (AtomNBMsg new_endpoint)
+     | AtomicAct (AtomBMsg msg_spec) ->
+          let new_endpoint = Lang.sub_ep_index msg_spec value var_name in
+          AtomicAct (AtomBMsg new_endpoint)
+     | _ ->  action
+     )
+
+
+let rec substitute_quantified_var (var_name : identifier) (value : int) (sty : session_type) : session_type =
+  match sty with
+  | StySeq (s1, s2) -> 
+      StySeq (substitute_quantified_var var_name value s1, 
+              substitute_quantified_var var_name value s2)
+  | StyChoice (s1, s2) -> 
+      StyChoice (substitute_quantified_var var_name value s1, 
+                 substitute_quantified_var var_name value s2)
+  | StyParallel (s1, s2) -> 
+      StyParallel (substitute_quantified_var var_name value s1, 
+                   substitute_quantified_var var_name value s2)
+  | StyFuture s -> 
+      StyFuture (substitute_quantified_var var_name value s)
+  | StyAtom action -> 
+    StyAtom (subsitute_action action var_name value)
+  | StyXOffer offerings ->
+      let subst_offering (off : offering_session_type) : offering_session_type =
+        {
+          trigger = subsitute_action off.trigger var_name value;
+          continuation = Option.map (substitute_quantified_var var_name value) off.continuation;
+        }
+      in
+      StyXOffer (List.map subst_offering offerings)
+  | StyOffer offerings ->
+      let subst_offering (off : offering_session_type) : offering_session_type =
+        {
+          trigger = subsitute_action off.trigger var_name value;
+          continuation = Option.map (substitute_quantified_var var_name value) off.continuation;
+        }
+      in
+      StyOffer (List.map subst_offering offerings)
+  | StyTrue -> StyTrue
+  | StyRec (id, s) -> 
+      StyRec (id, substitute_quantified_var var_name value s)
+  | StyVar id -> 
+      StyVar id
+  | StyLet (id, s1, s2) -> 
+      StyLet (id, 
+              substitute_quantified_var var_name value s1, 
+              substitute_quantified_var var_name value s2)
+  | StyForall (op, id, qty, body, ex) ->
+      if id = var_name then
+        StyForall (op, id, qty, body, ex)  (* Inner shadows outer - no substitution *)
+      else
+        StyForall (op, id, qty, substitute_quantified_var var_name value body, ex)
+
+
+(* Generate list of values from quantifier range, excluding specified members *)
+let generate_quantifier_values (qty : quant_type) (exclusions : quant_member option) : int list =
+  match qty with
+  | QuantRange (start, end_val) ->
+      let all_values = List.init (end_val - start + 1) (fun i -> start + i) in
+      match exclusions with
+      | None -> all_values
+      | Some (QuantSingleInt excluded) ->
+          List.filter (fun v -> v <> excluded) all_values
+      | Some (QuantIntList excluded_list) ->
+          let excluded_set = List.fold_left (fun set v -> Utils.IntSet.add v set) 
+                                           Utils.IntSet.empty excluded_list in
+          List.filter (fun v -> not (Utils.IntSet.mem v excluded_set)) all_values
+
+
+(* Expand a single quantifier, combining instances based on operator *)
+let expand_single_quantifier 
+    (op : quant_operator) 
+    (var_name : identifier) 
+    (qty : quant_type) 
+    (body : session_type) 
+    (exclusions : quant_member option) : session_type =
+  
+  let () = match qty with
+    | QuantRange (start, end_val) ->
+        if start > end_val then
+          raise (Except.TypeError [Text (Printf.sprintf 
+            "Invalid quantifier range [%d..%d]: start must be <= end" start end_val)])
+  in
+  
+  let values = generate_quantifier_values qty exclusions in
+  
+  if values = [] then
+    StyTrue
+  else
+    let instances = List.map (fun v -> substitute_quantified_var var_name v body) values in
+    
+
+    match op with
+    | QuantSum ->
+        let rec unfold_sum lst =
+          match lst with
+          | [] -> StyTrue
+          | [x] -> x
+          | x::xs -> StyChoice (x, unfold_sum xs)
+        in
+        unfold_sum instances
+    
+    | QuantProduct ->
+        let rec unfold_prod lst =
+          match lst with
+          | [] -> StyTrue
+          | [x] -> x
+          | x::xs -> StyParallel (x, unfold_prod xs)
+        in
+        unfold_prod instances
+    
+    | QuantOffer ->
+        raise (Except.TypeError [Text 
+          "Quantifier with offer operator (∧) not yet fully implemented"])
+    
+    | QuantXOffer ->
+        raise (Except.TypeError [Text 
+          "Quantifier with xoffer operator (⊕) not yet fully implemented"])
+
+
+(* Recursively expand all quantifiers in a session type *)
+let rec expand_quantifiers (sty : session_type) : session_type =
+  match sty with
+  | StySeq (s1, s2) -> 
+      StySeq (expand_quantifiers s1, expand_quantifiers s2)
+  | StyChoice (s1, s2) -> 
+      StyChoice (expand_quantifiers s1, expand_quantifiers s2)
+  | StyParallel (s1, s2) -> 
+      StyParallel (expand_quantifiers s1, expand_quantifiers s2)
+  | StyFuture s -> 
+      StyFuture (expand_quantifiers s)
+  | StyAtom _ -> 
+      sty
+  | StyXOffer offerings ->
+      let expand_offering (off : offering_session_type) : offering_session_type =
+        {
+          trigger = off.trigger;
+          continuation = Option.map expand_quantifiers off.continuation;
+        }
+      in
+      StyXOffer (List.map expand_offering offerings)
+  | StyOffer offerings ->
+      let expand_offering (off : offering_session_type) : offering_session_type =
+        {
+          trigger = off.trigger;
+          continuation = Option.map expand_quantifiers off.continuation;
+        }
+      in
+      StyOffer (List.map expand_offering offerings)
+  | StyTrue -> StyTrue
+  | StyRec (id, s) -> 
+      StyRec (id, expand_quantifiers s)
+  | StyVar id -> 
+      StyVar id
+  | StyLet (id, s1, s2) -> 
+      StyLet (id, expand_quantifiers s1, expand_quantifiers s2)
+  | StyForall (op, var_name, qty, body, exclusions) ->
+      (* First, recursively expand any nested quantifiers in the body *)
+      let expanded_body = expand_quantifiers body in
+      (* Then expand this quantifier *)
+      expand_single_quantifier op var_name qty expanded_body exclusions
+    
+
       
+(* === End Quantifier Expansion Functions === *)
+
+      
+
 (* Preprocess session types to replace interface parameters with actual endpoint names *)
 let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.session_type =
   let replace_endpoint_in_msg_spec (msg_spec : Lang.message_specifier) : Lang.message_specifier =
@@ -151,11 +331,16 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
     | Lang.StyRec (id, s) -> Lang.StyRec (id, preprocess_sty s)
     | Lang.StyVar id -> Lang.StyVar id
     | Lang.StyLet (id, s1, s2) -> Lang.StyLet (id, preprocess_sty s1, preprocess_sty s2)
-    | Lang.StyForall (id, qty, sty_body, ex) ->
+    | Lang.StyForall (op, id, qty, sty_body, ex) ->
         let preprocessed_body = preprocess_sty sty_body in
-        Lang.StyForall (id, qty, preprocessed_body, ex)
+        Lang.StyForall (op, id, qty, preprocessed_body, ex)
   in
-  preprocess_sty sty
+  let preprocessed = preprocess_sty sty in
+  (* After endpoint substitution, expand all quantifiers *)
+  expand_quantifiers preprocessed
+
+let expand_session_type_quantifiers (sty : Lang.session_type) : Lang.session_type =
+  expand_quantifiers sty
 
 
 
@@ -251,4 +436,3 @@ let preprocess_pool_for_compatibility
               Except.codespan_local intf_member.span])
         )
   ) pool_def.d.interface_members
-

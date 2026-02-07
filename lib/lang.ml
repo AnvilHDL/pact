@@ -114,8 +114,14 @@ and session_type =
   | StyLet of identifier * session_type * session_type (** let binding for session types **)
   | StyRec of identifier * session_type (** recursive session type **)
   | StyVar of identifier (** session type variable **)
-  | StyForall of identifier*quant_type*session_type*(quant_member option)
+  | StyForall of quant_operator*identifier*quant_type*session_type*(quant_member option)
 
+
+and quant_operator =
+  | QuantSum      (** ∑ - internal choice *)
+  | QuantProduct  (** ∏ - parallel composition *)
+  | QuantOffer    (** ∧ - external choice (offer) *)
+  | QuantXOffer   (** ⊕ - exclusive choice *)
 
 and quant_type =
   | QuantRange of int*int
@@ -999,9 +1005,13 @@ let rec aux p =
       id
   | StyLet (id, p_def, p_body) ->
       "let " ^ id ^ " = " ^ aux p_def ^ " in " ^ aux p_body
-  | StyForall (id,qty,body,_ex) ->
+  | StyForall (op,id,qty,body,_ex) ->
     let ex = string_of_quant_mem _ex in
-      "∀ ("^id^ ": "^(string_of_quantifier_type qty)^")" ^ ex ^ "( " ^ string_of_protocol_for_graph body ^ " )"
+    let op_str = match op with
+      | QuantSum -> "∑" | QuantProduct -> "∏"
+      | QuantOffer -> "∧" | QuantXOffer -> "⊕"
+    in
+      "∀_"^op_str^" ("^id^ " ∈ "^(string_of_quantifier_type qty)^ex^") { " ^ string_of_protocol_for_graph body ^ " }"
 and string_of_quantifier_type ty = 
   match ty with
   | QuantRange (st,ed) ->
@@ -1059,9 +1069,13 @@ let rec aux p =
       id
   | StyLet (id, p_def, p_body) ->
       "let " ^ id ^ " = " ^ aux p_def ^ " in " ^ aux p_body
-  | StyForall (id,qty,body,_ex) ->
+  | StyForall (op,id,qty,body,_ex) ->
     let ex = string_of_quant_mem _ex in
-      "∀ ("^id^ ": "^(string_of_quantifier_type qty)^ex^") -> (" ^ string_of_protocol body ^ ")"
+    let op_str = match op with
+      | QuantSum -> "∑" | QuantProduct -> "∏"
+      | QuantOffer -> "∧" | QuantXOffer -> "⊕"
+    in
+      "∀_"^op_str^" ("^id^ " ∈ "^(string_of_quantifier_type qty)^ex^") { " ^ string_of_protocol body ^ " }"
 
 and string_of_quantifier_type ty = 
   match ty with

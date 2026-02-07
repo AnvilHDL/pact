@@ -77,7 +77,8 @@ let generalized_type_debug _out config =
     if config.verbose then Printf.eprintf "\nGeneralized Types:\n\n";
   if config.verbose then
     List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
-      Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol sdef.d.body.d);
+      let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
+      Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol preprocess);
     ) session_type_defs;
     
 
