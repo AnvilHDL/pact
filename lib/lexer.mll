@@ -37,19 +37,11 @@ rule read =
   | "xoffer"  { KEYWORD_XOFFER }
   | "forall"  { KEYWORD_FORALL }
   | "not"     { KEYWORD_EXCEPT }
-  | "forall_sum"     { FORALL_SUM }
-  | "forall_prod"    { FORALL_PROD }
-  | "forall_offer"   { FORALL_OFFER }
-  | "forall_xoffer"  { FORALL_XOFFER }
-  | "∀_∑"     { FORALL_SUM }
-  | "∀_∏"     { FORALL_PROD }
-  | "∀_∧"     { FORALL_OFFER }
-  | "∀_⊕"     { FORALL_XOFFER }
   | "∀"      { FORALL_SYMBOL }
   | "∑"      { SUM_SYMBOL }
   | "∏"      { PROD_SYMBOL }
-  | "⊕"      { XOR_SYMBOL }
-  | "∧"      { AND_SYMBOL }
+  | "⨁"      { XOR_SYMBOL } 
+  | "⋀"      { AND_SYMBOL } 
   | " ̸"      { NOT_SYMBOL }
   | "∈"      { IN_SYMBOL }
   | "$"       { DOLLAR }

@@ -58,10 +58,6 @@
 %token KEYWORD_PUT          (* put *)
 %token KEYWORD_FORALL       (* forall *)
 %token FORALL_SYMBOL     (* ∀ *)
-%token FORALL_SUM        (* forall_sum or ∀_∑ *)
-%token FORALL_PROD       (* forall_prod or ∀_∏ *)
-%token FORALL_OFFER      (* forall_offer or ∀_∧ *)
-%token FORALL_XOFFER     (* forall_xoffer or ∀_⊕ *)
 %token NOT_SYMBOL     (* ̸ *)
 %token KEYWORD_EXCEPT       (* not  *)
 %token KEYWORD_LOGIC        (* logic *)
@@ -430,22 +426,18 @@ local_session_type:
     | x::xs -> Lang.StyParallel (x, unfold_prod xs)
   in
   unfold_prod par_list }
-| forall_with_op; LEFT_PAREN; id = IDENT; in_sym; quant_type = quantifier_type;exc=excluded_member?; RIGHT_PAREN; LEFT_BRACE; body = local_session_type; RIGHT_BRACE
-  { let op = $1 in Lang.StyForall (op, id, quant_type, body, exc)}
+| forall; LEFT_PAREN; id = IDENT; in_sym; quant_type = quantifier_type;exc=excluded_member?; RIGHT_PAREN; op = op_quantifier; LEFT_BRACE; body = local_session_type; RIGHT_BRACE
+  { Lang.StyForall (op, id, quant_type, body, exc)}
+| forall; LEFT_PAREN; id = IDENT; in_sym; quant_type = quantifier_type; exc=excluded_member?; RIGHT_PAREN; and_sym ; LEFT_BRACE; body = separated_list(COMMA, offering_arm); RIGHT_BRACE
+  { Lang.StyForall (Lang.QuantOffer, id, quant_type, Lang.StyOffer body, exc) }
+| forall; LEFT_PAREN; id = IDENT; in_sym; quant_type = quantifier_type; exc=excluded_member?; RIGHT_PAREN; xor_sym; LEFT_BRACE; body = separated_list(COMMA, offering_arm); RIGHT_BRACE
+  { Lang.StyForall (Lang.QuantXOffer, id, quant_type, Lang.StyXOffer body, exc) }
 
-forall_with_op:
-| KEYWORD_FORALL
-  { Lang.QuantProduct }  (* default to product *)
-| FORALL_SYMBOL
-  { Lang.QuantProduct }  (* default to product *)
-| FORALL_SUM
+op_quantifier:
+| sum_symbol
   { Lang.QuantSum }
-| FORALL_PROD
+| prod_sym
   { Lang.QuantProduct }
-| FORALL_OFFER
-  { Lang.QuantOffer }
-| FORALL_XOFFER
-  { Lang.QuantXOffer }
 
 forall:
 | KEYWORD_FORALL

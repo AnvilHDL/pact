@@ -1,5 +1,5 @@
 open Lang
-
+open Except
 
 let lookup_interface (interfaces : session_def ast_node list) (intf : identifier) : session_def ast_node option =
     List.find_opt (fun (s:session_def ast_node) -> s.d.name = intf) interfaces
@@ -185,6 +185,32 @@ let generate_quantifier_values (qty : quant_type) (exclusions : quant_member opt
           List.filter (fun v -> not (Utils.IntSet.mem v excluded_set)) all_values
 
 
+
+let has_substring (s : string) (sub : string) : bool =
+  let rec aux i j =
+    if j = String.length sub then true
+    else if i = String.length s then false
+    else if String.get s i = String.get sub j then aux (i + 1) (j + 1)
+    else aux (i + 1) 0
+  in
+  aux 0 0
+let is_quantified_action (action : atomic_action_with_gap) (var_name : identifier) : bool =
+  let var_string = "["^var_name^"]" in
+  match action with
+  | AtomicAct (AtomNBMsg msg_spec) ->
+      has_substring msg_spec.endpoint var_string
+  | AtomicAct (AtomBMsg msg_spec) ->
+      has_substring msg_spec.endpoint var_string
+  | _ -> false
+
+let is_quantified (sty : session_type option) (var_name : identifier) : bool =
+  match sty with
+  | None -> false
+  | Some sty ->
+    let string_of_sty = string_of_protocol in
+    let string_of_var = "["^var_name^"]" in
+    has_substring (string_of_sty sty) string_of_var
+
 (* Expand a single quantifier, combining instances based on operator *)
 let expand_single_quantifier 
     (op : quant_operator) 
@@ -205,7 +231,13 @@ let expand_single_quantifier
   if values = [] then
     StyTrue
   else
-    let instances = List.map (fun v -> substitute_quantified_var var_name v body) values in
+    let quantified = is_quantified (Some body) var_name in
+    let out_op = match op with
+      | QuantSum -> true
+      | QuantProduct -> true
+      | _ -> false
+    in
+    let instances = if quantified&&out_op then List.map (fun v -> substitute_quantified_var var_name v body) values else [body] in
     
 
     match op with
@@ -228,12 +260,67 @@ let expand_single_quantifier
         unfold_prod instances
     
     | QuantOffer ->
-        raise (Except.TypeError [Text 
-          "Quantifier with offer operator (∧) not yet fully implemented"])
+    (
+      match body with
+      | StyOffer offer_arms ->
+          let quantified_arms = List.filter (fun arm ->
+              (is_quantified arm.continuation var_name) || (is_quantified_action arm.trigger var_name)
+          ) offer_arms in
+          let err_msg = ([Text (Printf.sprintf "Quantifier expansion error %s in %s : No quantified arms found in offer session type body" var_name (string_of_protocol body))]) in
+          assert_with_info ((List.length quantified_arms) > 0) err_msg;
+          let unquantified_arms = List.filter (fun arm ->
+            not ((is_quantified arm.continuation var_name) || (is_quantified_action arm.trigger var_name))
+          ) offer_arms in
+          let err_msg = ([Text "Quantifier expansion error %s : Somehow unquantified arms and quantified arms do not add up to total arms"]) in
+          assert_with_info (((List.length unquantified_arms) + (List.length quantified_arms)) = (List.length offer_arms)) err_msg;
+          let quantified_expanded_arms = List.map( fun arm -> 
+            let expanded_arms = List.fold_left (fun acc v ->
+              let substituted_arm = {
+                trigger = subsitute_action arm.trigger var_name v;
+                continuation = Option.map (fun cont -> substitute_quantified_var var_name v cont) arm.continuation;
+              } in
+              acc @ [substituted_arm]
+            ) [] values in
+            expanded_arms
+          ) quantified_arms in
+          let flattened_quantified_arms = List.flatten quantified_expanded_arms in
+          StyOffer (unquantified_arms @ flattened_quantified_arms)
+      | _ -> raise (Except.TypeError [Text 
+          "Quantifier with offer operator (⊗) must have an offer session type as body"])
+    )
     
     | QuantXOffer ->
-        raise (Except.TypeError [Text 
-          "Quantifier with xoffer operator (⊕) not yet fully implemented"])
+
+    (
+          match body with
+          | StyXOffer offer_arms ->
+              let quantified_arms = List.filter (fun arm ->
+                  (is_quantified arm.continuation var_name) || (is_quantified_action arm.trigger var_name)
+              ) offer_arms in
+              let err_msg = ([Text (Printf.sprintf "Quantifier expansion error %s in %s : No quantified arms found in offer session type body" var_name (string_of_protocol body))]) in
+              assert_with_info ((List.length quantified_arms) > 0) err_msg;
+              let unquantified_arms = List.filter (fun arm ->
+                not ((is_quantified arm.continuation var_name) || (is_quantified_action arm.trigger var_name))
+              ) offer_arms in
+              let err_msg = ([Text "Quantifier expansion error %s : Somehow unquantified arms and quantified arms do not add up to total arms"]) in
+              assert_with_info (((List.length unquantified_arms) + (List.length quantified_arms)) = (List.length offer_arms)) err_msg;
+              let quantified_expanded_arms = List.map( fun arm -> 
+                let expanded_arms = List.fold_left (fun acc v ->
+                  let substituted_arm = {
+                    trigger = subsitute_action arm.trigger var_name v;
+                    continuation = Option.map (fun cont -> substitute_quantified_var var_name v cont) arm.continuation;
+                  } in
+                  acc @ [substituted_arm]
+                ) [] values in
+                expanded_arms
+              ) quantified_arms in
+              let flattened_quantified_arms = List.flatten quantified_expanded_arms in
+              StyXOffer (unquantified_arms @ flattened_quantified_arms)
+          | _ -> raise (Except.TypeError [Text 
+              "Quantifier with offer operator (⊗) must have an offer session type as body"])
+      )
+      
+      
 
 
 (* Recursively expand all quantifiers in a session type *)

@@ -19,3 +19,6 @@ exception CodegenError of error_message
 
 
 let unknown_error_default msg_text = UnknownError [Text msg_text]
+
+let assert_with_info cond err_info =
+  if not cond then raise (TypeError err_info)
