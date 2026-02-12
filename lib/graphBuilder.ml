@@ -34,13 +34,14 @@ module Typing = struct
     typing_ctx : context;
     current : event;
     shared_vars_info : (identifier, shared_var_info) Hashtbl.t;
+    rec_var_map : (identifier*int) list; (* map from recursive variable to event id of the root of the recursion *)
     lt_check_phase : bool;
   }
 
   let event_create g source =
     let event_create_inner () =
-      let parents =
-        match source with
+      let rec parents src =
+        match src with
         | `Root None -> []
         | `Seq (e, _)
         | `Root Some (e, _) -> [e]
@@ -48,11 +49,15 @@ module Typing = struct
         | `Branch (_, { branches_val; _ }) -> branches_val
         | `UntilEntry (e, info) -> [e; info.until_body_end] (* parent and body_end for recursion *)
         | `UntilExit info -> [info.until_stop_cond; info.until_body_end] (* exit depends on stop condition/as well as the body finishing *)
+        | `Recurse (src, n) -> parents src@ [List.find_opt
+            (fun ev -> ev.is_recurse && ev.id = n)
+            g.events
+            |> unwrap_or_err ("Invalid recurse event id " ^ string_of_int n) g.thread_codespan]
       in
       let new_preds = List.fold_left
         (fun preds e -> Utils.IntSet.union preds e.preds)
         Utils.IntSet.empty
-        parents
+        (parents source)
       in
       let new_preds = Utils.IntSet.add (g.last_event_id + 1) new_preds in
       let n = {actions = []; sustained_actions = []; source; id = g.last_event_id + 1;
@@ -85,7 +90,18 @@ module Typing = struct
   let cycles_data g (n : int) (current : event) =
     let live_event = event_create g (`Seq (current, `Cycles n)) in
     {w = None; lt = {live = live_event; dead = [(live_event, `Eternal)]}; reg_borrows = []; dtype = unit_dtype}
+
+  let create_recurse_td  (current : event) id = 
+    let rec_event = current.graph.events |> List.find (fun (e:event) -> e.id = id) in
+    current.source <- `Recurse (current.source, id);
+    {w = None; lt = {live = rec_event; dead = [(rec_event, `Eternal)]}; reg_borrows = []; dtype = unit_dtype}
+
+  let lookup_event g id =
+    List.find_opt (fun (e : event) -> e.id = id) g.events
+  
   let sync_data g (current : event) (td: timed_data) =
+    if current.is_recurse || (td.lt.live.is_recurse) then
+        raise (Except.TypeError [(Text "[Sync Data] Non terminating program detected : Please Check"); (Except.codespan_local g.thread_codespan)]);
     let ev = event_create g (`Later (current, td.lt.live)) in
     {td with lt = {td.lt with live = ev}}
 
@@ -138,15 +154,24 @@ module Typing = struct
       typing_ctx = context_empty;
       current = event_create g (`Root None);
       shared_vars_info = si;
+      rec_var_map = [];
       lt_check_phase;
     }
-
     let clear_bindings (ctx : t) : t =
       {ctx with typing_ctx = context_empty}
     let add_binding (ctx : t) (v : identifier) (d : timed_data) : t =
       {ctx with typing_ctx = context_add ctx.typing_ctx v d}
     let wait g (ctx : t) (other : event) : t =
+      if ctx.current.is_recurse || other.is_recurse then
+        raise (Except.TypeError [(Text "[wait] Non terminating program detected : Please Check"); (Except.codespan_local g.thread_codespan)])
+      else
       {ctx with current = event_create g (`Later (ctx.current, other))}
+
+    let add_rec_var_binding (ctx : t) (v : identifier) (n : int) : t =
+      {ctx with rec_var_map = (v,n)::ctx.rec_var_map}
+
+    let lookup_rec_var_binding (ctx : t) (v : identifier) : int option =
+      List.find_opt (fun (v', _) -> (v' = v)) ctx.rec_var_map |> Option.map snd
 
     (* returns a pair of contexts for *)
     let branch_side g (ctx : t) (bi : branch_info) (sel : int) : branch_side_info * t  =
@@ -155,6 +180,10 @@ module Typing = struct
       (br_side_info, {ctx with current = event_side_root; typing_ctx = context_clear_used ctx.typing_ctx})
 
     let branch g (ctx : t) (br_info : branch_info) : t =
+      let new_branch_ends = List.filter (fun (eid : event) -> not eid.is_recurse) br_info.branches_val in
+      let br_info = {br_info with branches_val = new_branch_ends} in
+      if List.length br_info.branches_val = 0 then
+        raise (Except.TypeError [Except.Text "All branches in a branch event cannot be recursive!"; Except.codespan_local g.thread_codespan]);
       {ctx with current = event_create g (`Branch (ctx.current, br_info))}
 
     (* merge the used state in context *)
@@ -341,6 +370,10 @@ let rec recurse_unfold expr_full_node expr_node =
           let e2n = unfold e2' in
           Binop (op, unfold e1, (`Single e2n))
       )
+    | Recursion (id, body) ->
+      Recursion (id, unfold body)
+    | Recursor id ->
+      Recursor id
     | Unop (op, expr_node') ->
       Unop (op, unfold expr_node')
     | Tuple expr_nodes ->
@@ -469,7 +502,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       (match ctx_val, macro_val with
         | Some _, Some _ ->
           raise (event_graph_error_default ("Conflicting Identifier " ^ ident ^ " declarations found") e.span)
-        | Some binding, None -> Typing.use_binding binding |> Typing.sync_data graph ctx.current
+        | Some binding, None -> Typing.use_binding binding |> Typing.sync_data  graph ctx.current
         | None, Some value ->
           let sz = Utils.int_log2 (value + 1) in
           let (wires', w) = WireCollection.add_literal graph.thread_id
@@ -1188,7 +1221,8 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       aux lst ([], [], [])
     in *)
     let (branch_ctxs, branch_tds) = List.split branch_contexts_and_tds in
-    let merged_event = List.fold_left (fun acc_event (branch_ctx:build_context) ->
+    let merged_event = List.fold_left (fun (acc_event:event) (branch_ctx:build_context) ->
+      if acc_event.is_recurse || branch_ctx.current.is_recurse then raise (Except.TypeError [Except.Text "Recursive types not supported in offer branch ends"; Except.codespan_local e.span]);
       Typing.event_create graph (`Later (acc_event, branch_ctx.current))
     ) (List.hd branch_ctxs).current (List.tl branch_ctxs) in
     
@@ -1636,6 +1670,22 @@ let wire_list =
   | Recurse ->
     ctx.current.is_recurse <- true;
     Typing.const_data graph None unit_dtype ctx.current
+  | Recursion (id, body) ->
+    let new_ctx = BuildContext.add_rec_var_binding ctx id ctx.current.id in
+    let endi = visit_expr graph ci new_ctx body in 
+    if endi.lt.live.id = ctx.current.id then
+      raise (Except.TypeError [Text "Recursion should be tail recursive!"; Except.codespan_local e.span]);
+    endi 
+  | Recursor id ->
+    let rec_event_id_opt = BuildContext.lookup_rec_var_binding ctx id in
+    if Option.is_none rec_event_id_opt then
+      raise (Except.TypeError [Text ("Undefined recursion variable " ^ id); Except.codespan_local e.span]);
+    
+    let rec_event_id = Option.get rec_event_id_opt in
+    let rec_event = Typing.lookup_event graph rec_event_id
+      |> unwrap_or_err ("Invalid recursion event id " ^ string_of_int rec_event_id) e.span in
+    ctx.current.is_recurse <- true;
+    Typing.create_recurse_td rec_event ctx.current.id
   | Until (cond, body) ->
     
     (* Start evaluating the condition - this runs in parallel *)

@@ -506,6 +506,8 @@ and expr =
   | SharedAssign of identifier * expr_node (** make ready a shared value *)
   | List of expr_node list (** array/list of expressions *)
   | Until of expr_node * expr_node (** until (cond) { body } *)
+  | Recursion of identifier * expr_node (** define a recursive block *)
+  | Recursor of identifier  (** invoke a recursive block *)
   | Recurse
 and expr_node = expr ast_node
 
@@ -871,7 +873,9 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
     )
   | Read lv ->
     Read (substitute_lvalue id value idx lv)
-  | Recurse | Literal _ | Cycle _
+  | Recursion (rec_id, body) ->
+    Recursion (rec_id, subst body)
+  | Recurse | Literal _ | Cycle _ | Recursor _ 
   | Identifier _ | Ready _ | Probe _-> expr.d
   | Recv recv_pack ->
       let new_recv_pack = {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id} in

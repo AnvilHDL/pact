@@ -1,0 +1,53 @@
+chan ch{
+    left req : (logic@#1),
+    left ack : (logic@#1)
+}
+proc foo(ep : left ch){
+    reg cyc : logic[8];
+    loop{
+        dprint "[Cycle %d] Waiting for ack or req" (*cyc) >>
+        set cyc := *cyc + 8'd1 >>
+        rec X {
+            let r = recv ep.req >>
+            try x = recv ep.ack{
+                dprint "[Cycle %d]Received ack: %d" (*cyc,x) >> 
+                cycle 1
+            }else{
+                dprint "[Cycle %d] No ack received" (*cyc) >>
+                cycle 1 >>
+                recurse X
+            }
+        }
+
+    }
+
+}
+
+
+proc test_gen_rec(){
+    chan ep_le -- ep_ri : ch;
+    spawn foo(ep_le);
+
+    reg rnd : logic;
+    reg cyc : logic[8];
+
+    loop{
+        send ep_ri.req(1'd1) >>
+        if(*rnd){
+            set rnd := ~(*rnd) ;
+            set cyc := *cyc + 8'd1
+        }
+        else{
+            send ep_ri.ack(1'd0) >>
+            set rnd := ~(*rnd);
+            set cyc := *cyc + 8'd1
+        }
+
+    }
+    loop{
+        cycle 10>>
+        dfinish >>
+        cycle 1
+    }
+
+}

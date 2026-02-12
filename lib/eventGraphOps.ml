@@ -28,7 +28,9 @@ let subreg_ranges_possibly_intersect r1 r2 =
 
 let print_graph (g: event_graph) =
   List.iter (fun ev ->
-    match ev.source with
+    let rec src_string src =
+      (
+    match src with
     | `Later (e1, e2) -> Printf.eprintf "> %d: later %d %d\n" ev.id e1.id e2.id
     | `Seq (ev', a) ->
       let c = match a with
@@ -47,6 +49,12 @@ let print_graph (g: event_graph) =
         Printf.eprintf "> %d: until-entry %d stop:%d body_end:%d\n" ev.id ev'.id info.until_stop_cond.id info.until_body_end.id
     | `UntilExit info ->
         Printf.eprintf "> %d: until-exit stop:%d\n" ev.id info.until_stop_cond.id
+    | `Recurse (source, id) ->
+        src_string source;
+        Printf.eprintf "> %d: recurse id:%d\n" ev.id id
+      )
+    in
+    src_string ev.source
   ) g.events
 
 let print_dot_graph g out =
@@ -63,7 +71,9 @@ let print_dot_graph g out =
   List.iter (fun ev ->
     if ev.is_recurse then
       Printf.fprintf out "  %s [peripheries=2];\n" @@ ev_node_name ev;
-    match ev.source with
+    let rec print_src_edge src =
+    (
+      match src with
     | `Later (e1, e2) ->
       print_edge e1 ev "L";
       print_edge e2 ev "L"
@@ -97,6 +107,12 @@ let print_dot_graph g out =
     | `UntilExit info ->
       print_edge info.until_stop_cond ev "UX";
       print_edge info.until_body_end ev "UX"
+    | `Recurse (source, id) ->
+      print_src_edge source;
+      let rec_ev = List.find (fun e -> e.id = id) g.events in
+      print_edge rec_ev ev ("ϵ")
+    ) in
+    print_src_edge ev.source
   ) g.events;
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH IN DOT FORMAT\n"
@@ -129,7 +145,9 @@ let print_graph_with_session_types g out =
   List.iter (fun ev ->
     if ev.is_recurse then
       Printf.fprintf out "  %s [peripheries=2];\n" @@ ev_node_name ev;
-    match ev.source with
+   let rec print_src_edge src =
+    (
+      match src with
     | `Later (e1, e2) ->
       print_edge e1 ev "L";
       print_edge e2 ev "L"
@@ -137,8 +155,8 @@ let print_graph_with_session_types g out =
       let label = match a with
       | `Cycles n -> Printf.sprintf "#%d" n
       | `Send _ -> "S"
-      | `Choice _ -> "IC"
       | `Recv _ -> "R"
+      | `Choice _ -> "IC"
       | `Sync _ -> "G"
       in
       print_edge ev' ev label
@@ -156,12 +174,19 @@ let print_graph_with_session_types g out =
       if Option.is_some ev_has_imm_act then
         print_edge ev' ev "Imm"
       else
-        print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+      print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
     | `UntilEntry (ev', info) ->
       print_edge ev' ev "UE";
       print_edge info.until_body_end ev "UL" (* loop back *)
     | `UntilExit info ->
-      print_edge info.until_stop_cond ev "UX"
+      print_edge info.until_stop_cond ev "UX";
+      print_edge info.until_body_end ev "UX"
+    | `Recurse (source, id) ->
+      print_src_edge source;
+      let rec_ev = List.find (fun e -> e.id = id) g.events in
+      print_edge rec_ev ev ("ϵ")
+    ) in
+    print_src_edge ev.source
   ) g.events;
   Printf.fprintf out "}\n";
   Printf.fprintf out "// END GRAPH WITH SESSION TYPES IN DOT FORMAT\n"

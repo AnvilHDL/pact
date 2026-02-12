@@ -23,7 +23,8 @@ let event_traverse (ev : event) visitor : event list =
 
 (* returns immediate predecessors *)
 let imm_preds ev =
-  match ev.source with
+  let rec get_pred src =
+  match src with
   | `Seq (e', _)
   | `Root (Some (e', _)) -> [e']
   | `Branch (_, {branches_val; _}) -> branches_val
@@ -31,6 +32,9 @@ let imm_preds ev =
   | `Root None -> []
   | `UntilEntry (e', _info) -> [e']
   | `UntilExit info -> [info.until_stop_cond]
+  | `Recurse (src, id) -> get_pred src@[List.find (fun e -> e.id = id) ev.graph.events]
+  in
+  get_pred ev.source
 
 let toposort_with_preds preds events =
   let n = List.fold_left (fun l e -> Int.max l e.id) 0 events in
@@ -68,7 +72,8 @@ let toposort = toposort_with_preds imm_preds
 
 let event_predecessors (ev : event) : event list =
   let visitor add_to_queue cur =
-    match cur.source with
+    let rec get_queue src =
+    match src with
     | `Later (e1, e2) ->
       add_to_queue e1;
       add_to_queue e2
@@ -83,7 +88,13 @@ let event_predecessors (ev : event) : event list =
       add_to_queue info.until_body_end
     | `UntilExit info ->
       add_to_queue info.until_stop_cond
+    | `Recurse (src, id) ->(
+      get_queue src;
+      let ev' = List.find (fun e -> e.id = id) cur.graph.events in
+      add_to_queue ev'
+    )
   in
+  get_queue cur.source in
   event_traverse ev visitor |> toposort
 
 let event_successors (ev : event) : event list =
@@ -132,7 +143,9 @@ let event_succ_distance non_succ_dist msg_dist_f later_dist_f either_dist_f even
   List.iter (fun ev' -> set_dist ev' 0) preds; (* predecessors must have been reached *)
   List.rev events |> List.iter (fun ev' ->
     if IntHashtbl.find_opt dist ev'.id |> Option.is_none then
-    let d = match ev'.source with
+    let d =
+      let rec get_d src = 
+      match src with
     | `Root None -> raise (Except.unknown_error_default "Unexpected root!")
     | `Later (ev1, ev2) -> later_dist_f (get_dist ev1) (get_dist ev2)
     | `Seq (ev1, ad) ->
@@ -151,9 +164,13 @@ let event_succ_distance non_succ_dist msg_dist_f later_dist_f either_dist_f even
     | `Branch (_, {branches_val = ev1::ev2::el; _}) ->
       let first_two = either_dist_f (get_dist ev1) (get_dist ev2) in
       List.fold_left (fun v e -> either_dist_f v @@ get_dist e) first_two el
-    | _ ->
-      raise (Except.unknown_error_default "Unexpected event source!")
+    | `Recurse (src, id) ->
+      let ev' = List.find (fun e -> e.id = id) ev'.graph.events in
+      get_d src |> either_dist_f (get_dist ev')
+    | _ -> raise (Except.unknown_error_default "Unexpected event source!")
     in
+    get_d ev'.source 
+  in
     set_dist ev' (min d event_distance_max)
   );
   dist
@@ -169,7 +186,8 @@ let event_min_among_succ events weights =
         res.(e'.id) <- v
     in
     let v = res.(ev'.id) in
-    match ev'.source with
+    let rec get_res src =
+    match src with
     | `Root None -> ()
     | `Later (e1, e2) ->
       update_res e1 v;
@@ -191,6 +209,12 @@ let event_min_among_succ events weights =
       update_res info.until_body_end v
     | `UntilExit info ->
       update_res info.until_stop_cond v
+    | `Recurse (src, id) ->
+      let ev' = List.find (fun e -> e.id = id) ev'.graph.events in
+      update_res ev' v;
+      get_res src
+    in
+    get_res ev'.source
   ) events;
   res
 
@@ -210,7 +234,8 @@ let events_visit_forward visitor events = List.rev events |> List.iter visitor
 let events_prepare_outs events =
   List.iter (fun ev -> ev.outs <- []) events;
   List.iter (fun ev ->
-    match ev.source with
+    let rec prep_out src = 
+    match src with
     | `Later (e1, e2) ->
       e1.outs <- ev::e1.outs;
       e2.outs <- ev::e2.outs
@@ -227,6 +252,12 @@ let events_prepare_outs events =
       info.until_body_end.outs <- ev::info.until_body_end.outs
     | `UntilExit info ->
       info.until_stop_cond.outs <- ev::info.until_stop_cond.outs
+    | `Recurse (src, id) ->
+      let ev' = List.find (fun e -> e.id = id) ev.graph.events in
+      ev'.outs <- ev::ev'.outs;
+      prep_out src
+    in
+    prep_out ev.source
   ) events
 
 let event_is_dominant e1 e2 =
@@ -239,7 +270,8 @@ let event_is_dominant e1 e2 =
       if e.id = e2.id then
         true
       else (
-        match e.source with
+        let rec get_dominant src =
+        match src with
         | `Root None -> false
         | `Later (e1, e2) ->
           is_dominated.(e1.id) || is_dominated.(e2.id)
@@ -255,6 +287,11 @@ let event_is_dominant e1 e2 =
           is_dominated.(e'.id) 
         | `UntilExit info ->
           is_dominated.(info.until_stop_cond.id)
+        | `Recurse (src, id) ->
+          let ev' = List.find (fun e -> e.id = id) e.graph.events in
+          get_dominant src && is_dominated.(ev'.id)
+        in
+        get_dominant e.source
       )
     in
     is_dominated.(e.id) <- d
@@ -339,7 +376,8 @@ let events_reachable events ev =
   |> List.iter (fun e ->
       if event_is_reachable.(e.id) then (
         let reachable =
-          match e.source with
+          let rec get_src_reachable src =
+          match src with
           | `Root None -> true
           | `Root (Some (e', _)) -> event_is_reachable.(e'.id)
           | `Later (e1, e2) -> event_is_reachable.(e1.id) && event_is_reachable.(e2.id)
@@ -351,6 +389,11 @@ let events_reachable events ev =
             event_is_reachable.(e'.id)
           | `UntilExit info ->
             event_is_reachable.(info.until_stop_cond.id)
+          | `Recurse (src, id) ->
+            let ev' = List.find (fun e -> e.id = id) e.graph.events in
+            get_src_reachable src || event_is_reachable.(ev'.id)
+          in
+          get_src_reachable e.source
         in
         event_is_reachable.(e.id) <- reachable
       )
@@ -457,7 +500,9 @@ let events_max_dist events lookup_message ev =
         else res.(e.id) <- event_distance_max;
         (
           (* propagate *)
-          match e.source with
+          let rec gen_src_max src =
+          (
+          match src with
           | `Root None -> ()
           | `Seq (e', d) -> (
             let gap = get_max_delay d in
@@ -488,6 +533,14 @@ let events_max_dist events lookup_message ev =
             update_dist e @@ Int.max res.(e'.id) res.(info.until_body_end.id)
           | `UntilExit info ->
             update_dist e res.(info.until_stop_cond.id)
+          | `Recurse (src, id) ->
+            let ev' = List.find (fun e -> e.id = id) e.graph.events in
+            gen_src_max src;
+            update_dist e @@ (Int.max (res.(e.id)) (res.(ev'.id)))
+
+        )
+          in
+          gen_src_max e.source
         )
       )
     );
@@ -535,7 +588,8 @@ let events_first_msg events ev msg =
   let reachable = events_reachable events ev in
   List.iter (fun e ->
       let v =
-        match e.source with
+        let rec get_v src =
+        match src with
         | `Root None -> false
         | `Later (e1, e2) ->
             path_has_msg.(e1.id) || path_has_msg.(e2.id)
@@ -554,6 +608,14 @@ let events_first_msg events ev msg =
             || (event_succ_masked_has_msg e') || (event_succ_masked_has_msg info.until_body_end)
         | `UntilExit info ->
           path_has_msg.(info.until_stop_cond.id) || (event_succ_masked_has_msg info.until_stop_cond)
+        | `Recurse (src, id) ->
+          let ev' = List.find (fun e -> e.id = id) e.graph.events in
+          get_v src && (if reachable.(ev'.id) then
+            path_has_msg.(ev'.id) || event_succ_masked_has_msg ev'
+          else
+            true)
+          in
+        get_v e.source
       in
       path_has_msg.(e.id) <- v
     ) succs;

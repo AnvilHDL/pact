@@ -469,7 +469,9 @@ module CombSimplPass = struct
             until_stop_cond = replace_event info.until_stop_cond;
             until_body_end = replace_event info.until_body_end;
           } in
-          let source' = match ev.source with
+          let rec create_new_src src  = 
+          (
+          match src with
           | `Root None -> `Root None
           | `Root (Some (ev', br_side_info)) ->
             `Root (Some (
@@ -487,7 +489,13 @@ module CombSimplPass = struct
             `UntilEntry (replace_event ev', replace_until_info info)
           | `UntilExit info ->
             `UntilExit (replace_until_info info)
+          | `Recurse (source, id) ->
+            let ev = List.find (fun e -> e.id = id) graph.events in
+            let replaced_event = replace_event ev in
+            `Recurse (create_new_src source, replaced_event.id)
+          )
           in
+         let source' = create_new_src ev.source  in
           ev.source <- source'
         ) else (
           assert (f != old_id);
@@ -528,9 +536,9 @@ module CombSimplPass = struct
     while !changed do
       changed := false;
       graph :=
-        optimize_pass_merge merge_pass_simpl_comb config for_lt_check ci changed !graph
-        |> optimize_pass_merge merge_pass_isomorphic config for_lt_check ci changed
-        |> optimize_pass_merge merge_pass_joint config for_lt_check ci changed
+        codegen_only 1 merge_pass_simpl_comb !graph
+        |> codegen_only 1 merge_pass_isomorphic
+        |> codegen_only 1 merge_pass_joint
         |> codegen_only 1 merge_pass_isomorphic_branch
         |> codegen_only 1 merge_pass_isomorphic
         |> codegen_only 1 merge_pass_joint

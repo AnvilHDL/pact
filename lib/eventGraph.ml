@@ -167,6 +167,7 @@ and event_source = [
   | `Branch of event * branch_info (** branching out into two branches. This event is reached when the end of either side is reached *)
   | `UntilEntry of event * until_loop_info (** entry point of an until loop - reached when parent is active AND stop condition not yet fired, OR body_end recurses back *)
   | `UntilExit of until_loop_info (** exit point of an until loop - reached when stop condition fires *)
+  | `Recurse of (event_source*int) (** reached when the recursive structure recurses back to the beginning *)
 ]
 
 (** An action that starts at an event but may last multiple cycles.

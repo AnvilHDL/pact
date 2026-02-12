@@ -20,7 +20,10 @@ let is_wildcard_present msg_list =
 let collect_reg_states g =
   let open EventGraph in
   List.concat_map (fun e ->
-    match e.source with
+    let rec get_reg_States src =
+
+      (
+    match src with
     | `Seq (_, d) -> (
       match d with
       | `Cycles n ->
@@ -66,18 +69,27 @@ let collect_reg_states g =
           )
         else
           let visited' = event.EventGraph.id :: visited in
-          match event.EventGraph.source with
+          let rec get_empty src = 
+         (
+          match src with
           | `Seq (_, (`Cycles _ | `Send _ | `Recv _ | `Sync _ | `Choice _)) | `UntilEntry _ | `UntilExit _ -> 
             false
           | `Branch (_, _) | `Root _ ->
             List.for_all (fun out_event ->
               has_only_empty_path_to_recurse out_event visited'
             ) event.EventGraph.outs
+          | `Recurse (sr , _) -> 
+            get_empty sr
           | `Later (_, _) ->
             List.for_all (fun out_event ->
               has_only_empty_path_to_recurse out_event visited'
             ) event.EventGraph.outs
+         )
       in
+      get_empty event.source 
+    
+      in
+
       let root_event = g.events |> List.find (fun (e' : EventGraph.event) -> e'.source = `Root None) in
       let event_min_distance_with_root = GraphAnalysis.event_min_distance_with_later g.events root_event root_event in
       let has_zero_delay = IntHashtbl.find event_min_distance_with_root e.id = 0 in
@@ -91,6 +103,10 @@ let collect_reg_states g =
       else
         []
     | `Root None -> []
+    | `Recurse (source, _) ->
+      get_reg_States source
+      ) in 
+      get_reg_States e.source
   ) g.events
 
 (* prints out declarations for event-related wires and registers *)
@@ -134,300 +150,292 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
   let lookup_msg_def msg = MessageCollection.lookup_message pg.messages msg graphs.channel_classes in
   let recurse_event = List.find (fun e -> let open EventGraph in e.is_recurse) g.events in
   let print_compute_next (e : EventGraph.event) =
-    let cn = EventStateFormatter.format_current g.thread_id e.id in
-    match e.source with
-    | `Seq (e', d) ->
-      (
-        let cn' = EventStateFormatter.format_current g.thread_id e'.id in
-        match d with
-        | `Cycles n when n >= 1 ->
-          if g.is_general_recursive || n = 1 then (
-            (* we need to split into individual cycles one-hot *)
-            let sn = EventStateFormatter.format_counter g.thread_id e.id in
-            Printf.sprintf "assign %s = %s_%d_q;" cn sn n |> print_line;
-            for i = 2 to n do
-              Printf.sprintf "assign %s_%d_n = %s_%d_q;" sn i sn (i - 1) |> print_line
-            done;
-            Printf.sprintf "assign %s_1_n = %s;" sn cn' |> print_line
-          ) else (
-            (* recurse at the end node *)
-            let width = Utils.int_log2 (n + 1) in
-            let sn = EventStateFormatter.format_counter g.thread_id e.id in
-            (* reached when the counter *)
-            [
-              Printf.sprintf "assign %s = %s_q == %d'd%d;" cn sn width n;
-              Printf.sprintf "assign %s_n = %s ? %d'd1 : %s ? '0 : %s_q ? (%s_q + %d'd1) : %s_q;" sn cn' width cn sn sn width sn
-            ] |> print_lines
-          )
-        | `Cycles _ ->
-          failwith "Invalid number of cycles" (* TODO: proper handling *)
-        | `Send msg ->
-          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-          let msg_def = lookup_msg_def msg |> Option.get in
-          if CodegenPort.message_has_ack_port msg_def then (
-            (* Valid-Ack: sender asserts valid and waits for ack to come back *)
-            let ack_n = CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
-            [
-              Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn ack_n;
-              Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ack_n
-            ] |> print_lines
-          ) 
-         else if CodegenPort.message_has_ready_port msg_def then (
-            (* Valid-Ready: sender waits for ready, then asserts valid *)
-            let ready_n = CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
-            [
-              Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn ready_n;
-              Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ready_n
-            ] |> print_lines
-          ) else (
-            [
-              Printf.sprintf "assign %s = %s || %s_q;" cn cn' sn;
-              Printf.sprintf "assign %s_n = 1'b0;" sn
-            ] |> print_lines
-          )
-        | `Choice msg_list ->
-          let is_wildcard_present = is_wildcard_present msg_list in
-          (*For this we want to wait till or of the valid/ready port becomes 1 *)
-          let sn_opt = if is_wildcard_present then
-            None
-          else
-            Some (EventStateFormatter.format_syncstate g.thread_id e.id) in
-          (* Collect all the handshake signals to OR together *)
-          let handshake_signals = List.filter_map (fun (msg : Lang.message_specifier) ->
-            (* Skip wildcard when collecting signals *)
-            if msg.endpoint = "*" && msg.msg = "*" then None
-            else
-              let msg_def = lookup_msg_def msg |> Option.get in
-              (* Check message direction: Out (send) or Inp (recv) *)
-              match msg_def.dir with
-              | Out -> 
-                (* Output message (Send): wait for ready port *)
-                if CodegenPort.message_has_ready_port msg_def then
-                  Some (CodegenFormat.format_msg_ready_signal_name 
-                    (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
-                else if CodegenPort.message_has_ack_port msg_def then
-                  Some (CodegenFormat.format_msg_ack_signal_name 
-                    (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
-                else None
-              | Inp ->
-                (* Input message (Recv): wait for valid port *)
-                if CodegenPort.message_has_valid_port msg_def then
-                  Some (CodegenFormat.format_msg_valid_signal_name 
-                    (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
-                else None
-          ) msg_list in
-
-          if handshake_signals <> [] && not is_wildcard_present then (
-            (* No wildcard: wait for one of the signals *)
-          if Option.is_none sn_opt then raise (Failure "Internal error: syncstate expected in Choice without wildcard");
-            let sn = Option.get sn_opt in
-            let or_condition = String.concat " || " handshake_signals in
-            [
-              Printf.sprintf "assign %s = (%s || %s_q) && (%s);" cn cn' sn or_condition;
-              Printf.sprintf "assign %s_n = (%s || %s_q) && !(%s);" sn cn' sn or_condition
-            ] |> print_lines
-          ) else if handshake_signals <> [] && is_wildcard_present then (
-            (* Wildcard present: proceed immediately without waiting *)
-            [
-              Printf.sprintf "assign %s = %s;" cn cn';
-            ] |> print_lines
-          ) else (
-            (* No handshake signals, complete immediately *)
-            [
-              Printf.sprintf "assign %s = %s;" cn cn';
-            ] |> print_lines
-          )
-          
-        | `Recv msg ->
-          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-          let msg_def = lookup_msg_def msg |> Option.get in
-          if CodegenPort.message_has_ready_port msg_def then (
-            (* Valid-Ready: assert ready and wait for valid to come back *)
-            let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
-            [
-              Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn vld_n;
-              Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
-            ] |> print_lines
-          ) else if CodegenPort.message_has_valid_port msg_def then (
-            (* Valid-Ack: wait for valid then assert ack *)
-            let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
-            [
-              Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn vld_n;
-              Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
-            ] |> print_lines
-          ) else (
-            [
-              Printf.sprintf "assign %s = %s || %s_q;" cn cn' sn;
-              Printf.sprintf "assign %s_n = 1'b0;" sn
-            ] |> print_lines
-          )
-        | `Sync s ->
-          let si = Hashtbl.find pg.shared_vars_info s in
-          let assigned_at = Option.get si.assigned_at in
-          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-          let wn = EventStateFormatter.format_current assigned_at.graph.thread_id assigned_at.id in
-          [
-            Printf.sprintf "assign %s = (%s || %s_q) && %s;" cn cn' sn wn;
-            Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn wn
-          ] |> print_lines
-      )
-    | `Branch (_e, br_info) ->
-      List.map (fun (e : EventGraph.event) ->
-        EventStateFormatter.format_current g.thread_id e.id) br_info.branches_val
-      |> String.concat " || "
-      |> Printf.sprintf "assign %s = %s;" cn
-      |> print_line
-    | `Later (e1, e2) ->
-      let cn1 = EventStateFormatter.format_current g.thread_id e1.id in
-      let cn2 = EventStateFormatter.format_current g.thread_id e2.id in
-      let sn = EventStateFormatter.format_scorer g.thread_id e.id in
-      [
-        (* {cn1, cn2} kept in state *)
-        Printf.sprintf "assign %s = (%s & %s_q[0]) | (%s & %s_q[1]) | (%s & %s);" cn cn1 sn cn2 sn cn1 cn2;
-        Printf.sprintf "assign %s_n = %s_q ^ {%s, %s} ^ {%s, %s};" sn sn cn1 cn2 cn cn
-      ] |> print_lines
-    | `Root None ->
-      [
-        Printf.sprintf "assign %s = _init_%d || %s;"
-          cn
-          g.thread_id
-          (EventStateFormatter.format_current g.thread_id recurse_event.id)
-      ] |> print_lines
-    | `Root (Some (e', br_side_info)) ->
-      let cn' = EventStateFormatter.format_current g.thread_id e'.id in
-      let w = Option.get br_side_info.owner_branch.branch_cond_v.w in
-      let wn = CodegenFormat.format_wirename w.thread_id w.id in
-      GraphAnalysis.events_prepare_outs g.events;
-      let rec has_only_empty_path_to_recurse event visited =
-        if List.mem event.EventGraph.id visited then false
-        else if event.EventGraph.is_recurse then
-          (match event.EventGraph.source with
-           | `Seq (_, `Cycles n) when n > 0 -> false
-           | _ -> true 
-          )
-        else
-          let visited' = event.EventGraph.id :: visited in
-          match event.EventGraph.source with
-          | `Seq (_, (`Cycles _)) ->
-            false
-          | _ ->
-            List.for_all (fun out_event ->
-              has_only_empty_path_to_recurse out_event visited'
-            ) event.EventGraph.outs
-      in
-
-      (* let root_event = g.events |> List.find (fun (e' : EventGraph.event) -> e'.source = `Root None) in
-
-      let event_min_distance_with_root = GraphAnalysis.event_min_distance_with_later g.events root_event root_event in
-
-
-      let has_zero_delay = IntHashtbl.find event_min_distance_with_root e.id = 0 in *)
-
-
-
-
-      let has_empty_path = List.for_all (fun out_event ->
-        has_only_empty_path_to_recurse out_event []
-      ) e.outs in
-
-      let need_to_add_delay = if has_empty_path then 
-        (Printf.eprintf "[Warning] Adding delay register to prevent combinational loop in event %d \n" e.id ; true) else false in
-
-      (
-        match br_side_info.owner_branch.branch_cond with
-        | TrueFalse ->
-          if not e'.removed then (
-            if need_to_add_delay then (
-              (* Add one cycle delay to prevent combinational loop *)
+      let cn = EventStateFormatter.format_current g.thread_id e.id in
+      let rec gen_next (src : EventGraph.event_source) trigger =
+        match src with
+        | `Seq (e', d) ->
+          (
+            let cn' = EventStateFormatter.format_current g.thread_id e'.id in
+            match d with
+            | `Cycles n when n >= 1 ->
+              if g.is_general_recursive || n = 1 then (
+                (* To Do : Need to reevaluate *)
+                (* we need to split into individual cycles one-hot *)
+                let sn = EventStateFormatter.format_counter g.thread_id e.id in
+                Printf.sprintf "assign %s = %s_%d_q %s;" cn sn n trigger |> print_line;
+                for i = 2 to n do
+                  Printf.sprintf "assign %s_%d_n = %s_%d_q;" sn i sn (i - 1) |> print_line
+                done;
+                Printf.sprintf "assign %s_1_n = %s;" sn cn' |> print_line
+              ) else (
+                (* recurse at the end node *)
+                let width = Utils.int_log2 (n + 1) in
+                let sn = EventStateFormatter.format_counter g.thread_id e.id in
+                (* current cond *)
+                Printf.sprintf "assign %s = (%s_q == %d'd%d) %s;" cn sn width n trigger |> print_line;
+                Printf.sprintf "assign %s_n = %s ? %d'd1 : %s ? '0 : %s_q ? (%s_q + %d'd1) : %s_q;" sn cn' width cn sn sn width sn |> print_line
+              )
+            | `Cycles _ ->
+              failwith "Invalid number of cycles" (* TODO: proper handling *)
+            | `Send msg ->
               let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-              let cond = if br_side_info.branch_side_sel = 0 then
-                Printf.sprintf "%s && %s" cn' wn
+              let msg_def = lookup_msg_def msg |> Option.get in
+              if CodegenPort.message_has_ack_port msg_def then (
+                (* Valid-Ack: sender asserts valid and waits for ack to come back *)
+                let ack_n = CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
+                Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn ack_n trigger |> print_line;
+                Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ack_n |> print_line
+              ) 
+            else if CodegenPort.message_has_ready_port msg_def then (
+                (* Valid-Ready: sender waits for ready, then asserts valid *)
+                let ready_n = CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
+                  Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn ready_n trigger |> print_line;
+                  Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ready_n |> print_line
+              ) else (
+                  Printf.sprintf "assign %s = %s || %s_q %s ;" cn cn' sn trigger |> print_line;
+                  Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line
+              )
+            | `Choice msg_list ->
+              let is_wildcard_present = is_wildcard_present msg_list in
+              (*For this we want to wait till or of the valid/ready port becomes 1 *)
+              let sn_opt = if is_wildcard_present then
+                None
               else
-                Printf.sprintf "%s && !%s" cn' wn
-              in
-              [
-                Printf.sprintf "assign %s = %s_q;" cn sn;
-                Printf.sprintf "assign %s_n = %s;" sn cond
-              ] |> print_lines
-            ) else (
-              print_line
-                @@
-                if br_side_info.branch_side_sel = 0 then
-                  Printf.sprintf "assign %s = %s && %s;" cn cn' wn
+                Some (EventStateFormatter.format_syncstate g.thread_id e.id) in
+              (* Collect all the handshake signals to OR together *)
+              let handshake_signals = List.filter_map (fun (msg : Lang.message_specifier) ->
+                (* Skip wildcard when collecting signals *)
+                if msg.endpoint = "*" && msg.msg = "*" then None
                 else
-                  Printf.sprintf "assign %s = %s && !%s;" cn cn' wn
-            )
+                  let msg_def = lookup_msg_def msg |> Option.get in
+                  (* Check message direction: Out (send) or Inp (recv) *)
+                  match msg_def.dir with
+                  | Out -> 
+                    (* Output message (Send): wait for ready port *)
+                    if CodegenPort.message_has_ready_port msg_def then
+                      Some (CodegenFormat.format_msg_ready_signal_name 
+                        (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+                    else if CodegenPort.message_has_ack_port msg_def then
+                      Some (CodegenFormat.format_msg_ack_signal_name 
+                        (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+                    else None
+                  | Inp ->
+                    (* Input message (Recv): wait for valid port *)
+                    if CodegenPort.message_has_valid_port msg_def then
+                      Some (CodegenFormat.format_msg_valid_signal_name 
+                        (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+                    else None
+              ) msg_list in
+
+              if handshake_signals <> [] && not is_wildcard_present then (
+                (* No wildcard: wait for one of the signals *)
+              if Option.is_none sn_opt then raise (Failure "Internal error: syncstate expected in Choice without wildcard");
+                let sn = Option.get sn_opt in
+                let or_condition = String.concat " || " handshake_signals in
+                Printf.sprintf "assign %s = ((%s || %s_q) && (%s)) %s;" cn cn' sn or_condition trigger |> print_line;
+                Printf.sprintf "assign %s_n = (%s || %s_q) && !(%s);" sn cn' sn or_condition |> print_line
+              ) else(
+                (* Wildcard present: complete immediately upon any handshake signal *)
+                  Printf.sprintf "assign %s = %s %s;" cn cn' trigger |> print_line
+              )
+              
+            | `Recv msg ->
+              let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+              let msg_def = lookup_msg_def msg |> Option.get in
+              if CodegenPort.message_has_ready_port msg_def then (
+                (* Valid-Ready: assert ready and wait for valid to come back *)
+                let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
+                [
+                  Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn vld_n trigger;
+                  Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
+                ] |> print_lines
+              ) else if CodegenPort.message_has_valid_port msg_def then (
+                (* Valid-Ack: wait for valid then assert ack *)
+                let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
+                [
+                  Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn vld_n trigger;
+                  Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
+                ] |> print_lines
+              ) else (
+                [
+                  Printf.sprintf "assign %s = ((%s || %s_q) %s;" cn cn' sn trigger;
+                  Printf.sprintf "assign %s_n = 1'b0;" sn
+                ] |> print_lines
+              )
+            | `Sync s ->
+              let si = Hashtbl.find pg.shared_vars_info s in
+              let assigned_at = Option.get si.assigned_at in
+              let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+              let wn = EventStateFormatter.format_current assigned_at.graph.thread_id assigned_at.id in
+
+              [
+                Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn wn trigger;
+                Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn wn
+              ] |> print_lines
           )
-        | MatchCases pats ->
-          let fst_valid_idx = List.find_index (fun (e : EventGraph.event) -> not e.removed) br_side_info.owner_branch.branches_to |> Option.get in
-          if br_side_info.branch_side_sel == fst_valid_idx then (
-            CodegenPrinter.print_line ~lvl_delta_post:1 printer
-              @@ Printf.sprintf "always_comb begin: _match_cases_%d_%d"
-                g.thread_id e.id;
-
-            List.iter (fun (e : EventGraph.event) ->
-              if not e.removed then
-                CodegenPrinter.print_line printer @@ Printf.sprintf "%s = '0;"
-                  @@ EventStateFormatter.format_current g.thread_id e.id
-            ) br_side_info.owner_branch.branches_to;
-
-            CodegenPrinter.print_line ~lvl_delta_post:1 printer
-              @@ Printf.sprintf "if (%s) begin" cn';
-
-            (* select cases *)
-            CodegenPrinter.print_line ~lvl_delta_post:1 printer
-              @@ Printf.sprintf "unique case (%s)" @@ CodegenFormat.format_wirename w.thread_id w.id;
-
-            (* cases: *)
-            let branches_to_no_default =
-              List.to_seq br_side_info.owner_branch.branches_to
-              |> Seq.take (br_side_info.owner_branch.branch_count - 1)
-            in
-            Seq.iter2 (fun (td_pat : EventGraph.timed_data) (br_to : EventGraph.event) ->
-              let wp = Option.get td_pat.w in
-              CodegenPrinter.print_line ~lvl_delta_post:1 printer
-                @@ Printf.sprintf "%s:" @@ CodegenFormat.format_wirename wp.thread_id wp.id;
-              if br_to.removed then
-                CodegenPrinter.print_line ~lvl_delta_post:(-1) printer ";"
-              else
-                CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
-                  @@ Printf.sprintf "%s = 1'b1;" @@ EventStateFormatter.format_current g.thread_id br_to.id
-            ) (List.to_seq pats) branches_to_no_default;
-
-            (* default case *)
-            let default_case = List.nth br_side_info.owner_branch.branches_to (br_side_info.owner_branch.branch_count - 1) in
-            CodegenPrinter.print_line ~lvl_delta_post:1 printer "default:";
-            if default_case.removed then
-              CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
-                @@ Printf.sprintf ";"
+        | `Branch (_e, br_info) ->
+          let branch_cond = List.map (fun (e : EventGraph.event) ->
+            EventStateFormatter.format_current g.thread_id e.id) br_info.branches_val |> String.concat " || " in
+          Printf.sprintf "assign %s = (%s) %s;" cn branch_cond trigger |> print_line
+        | `Later (e1, e2) ->
+          let cn1 = EventStateFormatter.format_current g.thread_id e1.id in
+          let cn2 = EventStateFormatter.format_current g.thread_id e2.id in
+          let sn = EventStateFormatter.format_scorer g.thread_id e.id in
+          [
+            (* {cn1, cn2} kept in state *)
+            Printf.sprintf "assign %s = ((%s & %s_q[0]) | (%s & %s_q[1]) | (%s & %s)) %s;" cn cn1 sn cn2 sn cn1 cn2 trigger;
+            Printf.sprintf "assign %s_n = %s_q ^ {%s, %s} ^ {%s, %s};" sn sn cn1 cn2 cn cn
+          ] |> print_lines
+        | `Root None ->
+          [
+            Printf.sprintf "assign %s = (_init_%d || %s) %s;"
+              cn
+              g.thread_id
+              (EventStateFormatter.format_current g.thread_id recurse_event.id)
+              trigger
+          ] |> print_lines
+        | `Root (Some (e', br_side_info)) ->
+          let cn' = EventStateFormatter.format_current g.thread_id e'.id in
+          let w = Option.get br_side_info.owner_branch.branch_cond_v.w in
+          let wn = CodegenFormat.format_wirename w.thread_id w.id in
+          GraphAnalysis.events_prepare_outs g.events;
+          let rec has_only_empty_path_to_recurse event visited =
+            if List.mem event.EventGraph.id visited then false
+            else if event.EventGraph.is_recurse then
+              (match event.EventGraph.source with
+              | `Seq (_, `Cycles n) when n > 0 -> false
+              | _ -> true 
+              )
             else
-              CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
-                @@ Printf.sprintf "%s = 1'b1;" @@ EventStateFormatter.format_current g.thread_id default_case.id;
+              let visited' = event.EventGraph.id :: visited in
+              match event.EventGraph.source with
+              | `Seq (_, (`Cycles _)) ->
+                false
+              | _ ->
+                List.for_all (fun out_event ->
+                  has_only_empty_path_to_recurse out_event visited'
+                ) event.EventGraph.outs
+          in
 
-            CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "endcase";
+          (* let root_event = g.events |> List.find (fun (e' : EventGraph.event) -> e'.source = `Root None) in
 
-            CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end"; (* ending if *)
-            CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end" (* ending always_comb *)
+          let event_min_distance_with_root = GraphAnalysis.event_min_distance_with_later g.events root_event root_event in
+
+
+          let has_zero_delay = IntHashtbl.find event_min_distance_with_root e.id = 0 in *)
+
+
+
+
+          let has_empty_path = List.for_all (fun out_event ->
+            has_only_empty_path_to_recurse out_event []
+          ) e.outs in
+
+          let need_to_add_delay = if has_empty_path then 
+            (Printf.eprintf "[Warning] Adding delay register to prevent combinational loop in event %d \n" e.id ; true) else false in
+
+          (
+            match br_side_info.owner_branch.branch_cond with
+            | TrueFalse ->
+              if not e'.removed then (
+                if need_to_add_delay then (
+                  (* Add one cycle delay to prevent combinational loop *)
+                  let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+                  let cond = if br_side_info.branch_side_sel = 0 then
+                    Printf.sprintf "%s && %s" cn' wn
+                  else
+                    Printf.sprintf "%s && !%s" cn' wn
+                  in
+                  [
+                    Printf.sprintf "assign %s = %s_q %s;" cn sn trigger;
+                    Printf.sprintf "assign %s_n = %s;" sn cond
+                  ] |> print_lines
+                ) else (
+                  print_line
+                    @@
+                    if br_side_info.branch_side_sel = 0 then
+                      Printf.sprintf "assign %s = (%s && %s) %s;" cn cn' wn trigger
+                    else
+                      Printf.sprintf "assign %s = (%s && !%s) %s;" cn cn' wn trigger
+                )
+              )
+            | MatchCases pats ->
+              let fst_valid_idx = List.find_index (fun (e : EventGraph.event) -> not e.removed) br_side_info.owner_branch.branches_to |> Option.get in
+              if br_side_info.branch_side_sel == fst_valid_idx then (
+                CodegenPrinter.print_line ~lvl_delta_post:1 printer
+                  @@ Printf.sprintf "always_comb begin: _match_cases_%d_%d"
+                    g.thread_id e.id;
+
+                List.iter (fun (e : EventGraph.event) ->
+                  if not e.removed then
+                    CodegenPrinter.print_line printer @@ Printf.sprintf "%s = '0;"
+                      @@ EventStateFormatter.format_current g.thread_id e.id
+                ) br_side_info.owner_branch.branches_to;
+
+                CodegenPrinter.print_line ~lvl_delta_post:1 printer
+                  @@ Printf.sprintf "if (%s) begin" cn';
+
+                (* select cases *)
+                CodegenPrinter.print_line ~lvl_delta_post:1 printer
+                  @@ Printf.sprintf "unique case (%s)" @@ CodegenFormat.format_wirename w.thread_id w.id;
+
+                (* cases: *)
+                let branches_to_no_default =
+                  List.to_seq br_side_info.owner_branch.branches_to
+                  |> Seq.take (br_side_info.owner_branch.branch_count - 1)
+                in
+                Seq.iter2 (fun (td_pat : EventGraph.timed_data) (br_to : EventGraph.event) ->
+                  let wp = Option.get td_pat.w in
+                  CodegenPrinter.print_line ~lvl_delta_post:1 printer
+                    @@ Printf.sprintf "%s:" @@ CodegenFormat.format_wirename wp.thread_id wp.id;
+                  if br_to.removed then
+                    CodegenPrinter.print_line ~lvl_delta_post:(-1) printer ";"
+                  else
+                    CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
+                      @@ Printf.sprintf "%s = 1'b1;" @@ EventStateFormatter.format_current g.thread_id br_to.id
+                ) (List.to_seq pats) branches_to_no_default;
+
+                (* default case *)
+                let default_case = List.nth br_side_info.owner_branch.branches_to (br_side_info.owner_branch.branch_count - 1) in
+                CodegenPrinter.print_line ~lvl_delta_post:1 printer "default:";
+                if default_case.removed then
+                  CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
+                    @@ Printf.sprintf ";"
+                else
+                  CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
+                    @@ Printf.sprintf "%s = 1'b1;" @@ EventStateFormatter.format_current g.thread_id default_case.id;
+
+                CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "endcase";
+
+                CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end"; (* ending if *)
+                CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end" (* ending always_comb *)
+              )
           )
-      )
-    | `UntilEntry (parent, info) ->
-      (* Until loop entry: active when (parent active AND stop_cond not fired) OR body_end loops back *)
-      (* ToDo : Note this implies if the condition is immediately true it will not run the body even once/maybe we should allow to loop at least once *)
-      let cn_parent = EventStateFormatter.format_current g.thread_id parent.id in
-      let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
-      let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
-      Printf.sprintf "assign %s = (%s && !%s) || %s;" cn cn_parent cn_stop cn_body_end
-      |> print_line
-    | `UntilExit info ->
-      (* Until loop exit: active when stop condition fires and loop body ends *)
-      let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
-      let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
-      let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-      [
-        Printf.sprintf "assign %s = %s && (%s || %s_q) ;" cn cn_body_end cn_stop sn;
-        Printf.sprintf "assign %s_n = (%s && !%s) || (!%s && %s_q) ;" sn cn_stop cn_body_end  cn_body_end sn
-      ] |> print_lines
+        | `UntilEntry (parent, info) ->
+          (* Until loop entry: active when (parent active AND stop_cond not fired) OR body_end loops back *)
+          (* ToDo : Note this implies if the condition is immediately true it will not run the body even once/maybe we should allow to loop at least once *)
+          let cn_parent = EventStateFormatter.format_current g.thread_id parent.id in
+          let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
+          let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
+          Printf.sprintf "assign %s = ((%s && !%s) || %s) %s;" cn cn_parent cn_stop cn_body_end trigger
+          |> print_line
+        | `UntilExit info ->
+          (* Until loop exit: active when stop condition fires and loop body ends *)
+          let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
+          let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
+          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
+          [
+            Printf.sprintf "assign %s = ((%s && (%s || %s_q)) %s;" cn cn_body_end cn_stop sn trigger;
+            Printf.sprintf "assign %s_n = (%s && !%s) || (!%s && %s_q) ;" sn cn_stop cn_body_end  cn_body_end sn
+          ] |> print_lines
+        | `Recurse (source, trig_id) ->
+          let cn' = EventStateFormatter.format_current g.thread_id trig_id in
+          let trigger_string = Printf.sprintf "|| %s" cn' in
+          gen_next source trigger_string
+      in
+    gen_next e.source "" 
   in
+
   List.iter print_compute_next g.events
 
 let codegen_actions printer (g : EventGraph.event_graph) =

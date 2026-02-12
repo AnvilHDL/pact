@@ -1,3 +1,13 @@
-interface top(ep : left ch) =  (#ep.m1 || #ep.m2)
-interface top2(ep : left ch) =  (ep.m3 || ep.m4)
-interface top3(ep : left ch) =  ((rec X . ep.m1 ; #1;X) + (rec X . ep.m2 ;#1;X))
+proc top(){
+    reg counter : logic[4];
+loop{
+        recursive {
+        {
+            cycle 3 >>
+            dprint "counter = %d @ %d" (*counter, *cycle_count) >>
+            set counter := *counter + 4'd1
+        };
+        cycle 2 >> recurse
+        }
+    }
+}
