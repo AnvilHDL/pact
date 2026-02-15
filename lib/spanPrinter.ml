@@ -48,3 +48,8 @@ let print_code_span ?(indent = 2) ?(trunc = 0) out filename span =
   match string_of_code_span ~indent ~trunc filename span with
   | Some s -> output_string out s
   | None -> ()
+
+let warn msg span file_name =
+  Printf.eprintf "[Warning] %s\n" msg;
+  print_code_span ~indent:2 ~trunc:(-5) stderr file_name span;
+  flush stderr

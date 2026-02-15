@@ -35,16 +35,20 @@ module CombSimplPass = struct
     let changed = ref false in
     List.rev graph.events
     |> List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src = 
+      match src with
       | `Branch (ev', {branches_val; _}) -> (
         let can_merge =
           List.for_all (fun e ->
             let e = Dynarray.get event_arr_old @@ find_ufs event_ufs e.id in
-            match e.source with
+            let rec check_src src =
+            match src with
             | `Root (Some (ep, br_side)) ->
               ep.id = ev'.id && (Option.get br_side.branch_event).id = ev.id
-                && e.actions = [] && e.sustained_actions = []
+                && e.actions = [] && e.sustained_actions = [] && (not e.is_recurse)
+            | `Recurse (src', _) -> check_src src'
             | _ -> false
+            in check_src e.source
           )
           branches_val in
         if can_merge then (
@@ -72,7 +76,11 @@ module CombSimplPass = struct
             changed := true
           )
         )
+      | `Recurse (src, _) ->
+        do_src_transform src
       | _ -> ()
+      in
+      do_src_transform ev.source
     );
     !changed
 
@@ -91,7 +99,8 @@ module CombSimplPass = struct
     in
     List.rev graph.events
     |> List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src =
+      match src with
       | `Seq (ev', `Cycles n) -> (
         match lookup_edge ev' n with
         | None -> add_edge ev' n ev
@@ -100,7 +109,10 @@ module CombSimplPass = struct
           union_ufs event_ufs ev.id ev_m_id;
           changed := true
       )
+      | `Recurse (src', _) -> do_src_transform src'
       | _ -> ()
+      in
+      do_src_transform ev.source
     );
     !changed
 
@@ -109,7 +121,8 @@ module CombSimplPass = struct
     let changed = ref false in
     List.rev graph.events
     |> List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src =
+      match src with
       | `Later (e1, e2) ->
         let e1'_id = find_ufs event_ufs e1.id
         and e2'_id = find_ufs event_ufs e2.id in
@@ -117,7 +130,10 @@ module CombSimplPass = struct
           union_ufs event_ufs ev.id e1'_id;
           changed := true
         )
-      | _ -> ()
+      | `Recurse (src', _) -> do_src_transform src'
+      | _ -> () 
+      in
+      do_src_transform ev.source
     );
     !changed
 
@@ -150,7 +166,8 @@ module CombSimplPass = struct
         let branch_count = Hashtbl.create 2 in
         let merge_queue = Queue.create () in
         let add_branch e_p =
-          match e_p.source with
+          let rec check_src src =
+          match src with
           | `Root (Some (e_root, br_side)) ->
             let fst_side = List.hd br_side.owner_branch.branches_to in
             (
@@ -163,7 +180,9 @@ module CombSimplPass = struct
               | None ->
                 Hashtbl.replace branch_count fst_side.id ((List.length br_side.owner_branch.branches_to - 1), [e_p])
             )
+          | `Recurse (src', _) -> check_src src'
           | _ -> new_branch_vals := e_p::!new_branch_vals
+            in check_src e_p.source
         in
         List.iter add_branch branches_val;
         while not @@ Queue.is_empty merge_queue do
@@ -202,20 +221,27 @@ module CombSimplPass = struct
       (* need to insert extra nodes *)
       match ev_v.source with
       | `Seq (_, `Cycles n) ->
-        if ev_v.actions = [] && ev_v.sustained_actions = [] &&
+        if ev_v.actions = [] && ev_v.sustained_actions = [] && (not ev_v.is_recurse) &&
           (* check that all are #n *)
           List.for_all (fun ev' ->
-            match ev'.source with
-            | `Seq (_, `Cycles m) -> n = m && ev'.sustained_actions = [] && ev'.actions = []
+            let rec check_src src =
+            match src with
+            | `Seq (_, `Cycles m) -> n = m && ev'.sustained_actions = [] && ev'.actions = [] && (not ev'.is_recurse)
+            | `Recurse (src', _) -> check_src src'
             | _ -> false
+            in
+            check_src ev'.source
           ) ev_l then
         (
           (* create a new event *)
           let new_ev_branches_val = List.map
             (fun e ->
-              match e.source with
+              let rec check_src src =
+              match src with
               | `Seq (e', _) -> e'
+              | `Recurse (src', _) -> check_src src'
               | _ -> failwith "Something went wrong!"
+              in check_src e.source
             )
             branches_val in
           let new_ev_br_info = {br_info with branches_val = new_ev_branches_val} in
@@ -235,10 +261,14 @@ module CombSimplPass = struct
     in
     List.rev graph.events
     |> List.iter (fun ev ->
-      match ev.source with
+      let rec check_src src =
+      match src with
       | `Branch (ev_r, br_info) ->
         merge_branch ev ev_r br_info
+      | `Recurse (src', _) -> check_src src'
       | _ -> ()
+      in
+      check_src ev.source
     );
     !changed
 
@@ -246,24 +276,33 @@ module CombSimplPass = struct
     assert (not for_lt_check); (* can only be used for codegen *)
     let changed = ref false in
     List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src =
+      match src with
       | `Branch (_, br_info) -> (
         List.iter (fun e ->
-          match e.source with
+          let rec check_src src =
+          match src with
           | `Branch _ -> (
-            if e.actions = [] && e.sustained_actions = [] then
+            if e.actions = [] && e.sustained_actions = [] && (not e.is_recurse) then
             (
               union_ufs event_ufs e.id ev.id;
               changed := true
             )
           )
+          | `Recurse (src', _) -> check_src src'
           | _ -> ()
+          in
+          check_src e.source
         ) br_info.branches_val
       )
+      | `Recurse (src', _) -> do_src_transform src'
       | _ -> ()
+      in
+      do_src_transform ev.source
     ) graph.events;
     List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src =
+      match src with
       | `Branch (_, br_info) -> (
         let f = find_ufs event_ufs ev.id in
         let new_br_val = List.filter_map (fun e ->
@@ -278,13 +317,19 @@ module CombSimplPass = struct
           br_info.branches_val <- new_br_val
         else (
           (* need to merge *)
-          match event_arr_old.!(f).source with
+          let rec check_src src =
+          match src with
           | `Branch (_, br_info') ->
             br_info'.branches_val <- new_br_val @ br_info'.branches_val
+          | `Recurse (src', _) -> check_src src'
           | _ -> failwith "Something went wrong!"
+          in  check_src event_arr_old.!(f).source;
         )
       )
+      | `Recurse (src', _) -> do_src_transform src'
       | _ -> ()
+      in
+      do_src_transform ev.source
     ) graph.events;
     !changed
 
@@ -293,7 +338,8 @@ module CombSimplPass = struct
     let changed = ref false in
     List.rev graph.events
     |> List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src =
+      match src with
       | `Later (e1, e2) ->
         let e1 = event_arr_old.!(find_ufs event_ufs e1.id) in
         let e2 = event_arr_old.!(find_ufs event_ufs e2.id) in
@@ -304,7 +350,10 @@ module CombSimplPass = struct
           union_ufs event_ufs ev.id e1.id;
           changed := true
         )
+      | `Recurse (src', _) -> do_src_transform src'
       | _ -> ()
+      in
+      do_src_transform ev.source
     );
     !changed
 
@@ -313,7 +362,8 @@ module CombSimplPass = struct
     let changed = ref false in
     List.rev graph.events
     |> List.iter (fun ev ->
-      match ev.source with
+      let rec do_src_transform src =
+      match src with
       | `Later (e1, e2) ->
         let e1 = event_arr_old.!(find_ufs event_ufs e1.id) in
         let e2 = event_arr_old.!(find_ufs event_ufs e2.id) in
@@ -331,7 +381,9 @@ module CombSimplPass = struct
             failwith "Something went wrong!"
           | _ -> ()
         )
+      | `Recurse (src', _) -> do_src_transform src'
       | _ -> ()
+      in do_src_transform ev.source
     );
     !changed
 
@@ -342,7 +394,7 @@ module CombSimplPass = struct
     let n = List.length graph.events in
     let out_deg = Array.make n 0 in
     List.iter (fun e ->
-      if out_deg.(e.id) = 0 && not e.is_recurse && e.actions = [] && e.sustained_actions = [] then (
+      if out_deg.(e.id) = 0 && not e.is_recurse && e.actions = [] && e.sustained_actions = [] && (not e.is_recurse)then (
         (* remove *)
         union_ufs event_ufs e.id (-1);
         e.removed <- true;

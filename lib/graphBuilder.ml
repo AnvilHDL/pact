@@ -179,11 +179,16 @@ module Typing = struct
       let event_side_root = event_create g (`Root (Some (ctx.current, br_side_info))) in
       (br_side_info, {ctx with current = event_side_root; typing_ctx = context_clear_used ctx.typing_ctx})
 
-    let branch g (ctx : t) (br_info : branch_info) : t =
-      let new_branch_ends = List.filter (fun (eid : event) -> not eid.is_recurse) br_info.branches_val in
+    let branch g (ctx : t) (br_info : branch_info) (file_name : identifier): t =
+      let new_branch_ends = List.filter (fun (eid : event) -> (not eid.is_recurse)&&(not (match eid.source with `Recurse _ -> true | _ -> false))) br_info.branches_val in
       let br_info = {br_info with branches_val = new_branch_ends} in
-      if List.length br_info.branches_val = 0 then
-        raise (Except.TypeError [Except.Text "All branches in a branch event cannot be recursive!"; Except.codespan_local g.thread_codespan]);
+      if List.length br_info.branches_val = 0 then(
+        SpanPrinter.warn "Branch with all branches being recursive detected: This may lead to non-termination!" g.thread_codespan file_name;
+        ctx
+      )
+      else if List.length br_info.branches_val = 1 then
+        {ctx with current = List.hd br_info.branches_val}
+      else
       {ctx with current = event_create g (`Branch (ctx.current, br_info))}
 
     (* merge the used state in context *)
@@ -690,7 +695,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
 
     BuildContext.branch_merge ctx' [ctx_true; ctx_false];
 
-    let ctx_br = BuildContext.branch graph ctx' branch_info in
+    let ctx_br = BuildContext.branch graph ctx' branch_info ci.file_name in
     br_side_true.branch_event <- Some ctx_br.current;
     br_side_false.branch_event <- Some ctx_br.current;
     let lt = {live = ctx_br.current; (* branch event is reached when either split event is reached *)
@@ -746,7 +751,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
 
     ctx_true.current.actions <- (ImmediateSend (send_pack.send_msg_spec, td_send_data) |> tag_with_span e.span)::ctx_true.current.actions;
 
-    let ctx_br = BuildContext.branch graph ctx branch_info in
+    let ctx_br = BuildContext.branch graph ctx branch_info ci.file_name in
     br_side_true.branch_event <- Some ctx_br.current;
     br_side_false.branch_event <- Some ctx_br.current;
     let lt = {live = ctx_br.current; (* branch event is reached when either split event is reached *)
@@ -808,7 +813,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
 
     ctx_true.current.actions <- (ImmediateRecv recv_pack.recv_msg_spec |> tag_with_span e.span)::ctx_true.current.actions;
 
-    let ctx_br = BuildContext.branch graph ctx branch_info in
+    let ctx_br = BuildContext.branch graph ctx branch_info ci.file_name in
     br_side_true.branch_event <- Some ctx_br.current;
     br_side_false.branch_event <- Some ctx_br.current;
     let lt = {live = ctx_br.current; (* branch event is reached when either split event is reached *)
@@ -873,7 +878,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
         branch_info.branches_val <- branches_val @ [td_default.lt.live];
 
         BuildContext.branch_merge ctx' @@ ctx_default::(List.map (fun (ctx, _, _) -> ctx) branches);
-        let ctx_br = BuildContext.branch graph ctx' branch_info in
+        let ctx_br = BuildContext.branch graph ctx' branch_info ci.file_name in
         List.iter
           (fun (_, br_side, _) ->
             br_side.branch_event <- Some ctx_br.current
@@ -1204,7 +1209,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       
       BuildContext.branch_merge ctx' [ctx_branch; ctx_false];
       
-      let ctx_br = BuildContext.branch graph ctx' branch_info in
+      let ctx_br = BuildContext.branch graph ctx' branch_info ci.file_name in
       br_side_true.branch_event <- Some ctx_br.current;
       br_side_false.branch_event <- Some ctx_br.current;
       
@@ -1250,7 +1255,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
       (* outer_branch_info.branches_to <- outer_branch_info.branches_to @ [merged_event]; *)
       outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_false.lt.live];
       BuildContext.branch_merge ctx [ctx'; ctx_wildcard];
-      let ctx_br = BuildContext.branch graph ctx' outer_branch_info in
+      let ctx_br = BuildContext.branch graph ctx' outer_branch_info ci.file_name in
       br_side_true.branch_event <- Some ctx_br.current;
       br_side_false.branch_event <- Some ctx_br.current;
       {w = td_false.w; lt = {live = ctx_br.current; dead = Utils.list_unordered_join td_false.lt.dead td_wildcard.lt.dead}; reg_borrows = Utils.list_unordered_join td_false.reg_borrows td_wildcard.reg_borrows; dtype = td_false.dtype}
@@ -1472,7 +1477,7 @@ let wire_list =
     
     BuildContext.branch_merge ctx branch_ctxs;
     
-    let ctx_br = BuildContext.branch graph ctx branch_info in
+    let ctx_br = BuildContext.branch graph ctx branch_info ci.file_name in
     List.iter (fun br_side -> br_side.branch_event <- Some ctx_br.current) branch_sides;
     
     (* Merge lifetimes and borrows from all branches *)
@@ -1674,7 +1679,7 @@ let wire_list =
     let new_ctx = BuildContext.add_rec_var_binding ctx id ctx.current.id in
     let endi = visit_expr graph ci new_ctx body in 
     if endi.lt.live.id = ctx.current.id then
-      raise (Except.TypeError [Text "Recursion should be tail recursive!"; Except.codespan_local e.span]);
+      SpanPrinter.warn "Recursion may not terminate!" e.span ci.file_name;
     endi 
   | Recursor id ->
     let rec_event_id_opt = BuildContext.lookup_rec_var_binding ctx id in

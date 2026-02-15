@@ -53,8 +53,9 @@ Below is a categorized list of the available examples, along with brief descript
 | [test_match_endpoint](test_match_endpoint.anvil)       | State machine encoding using `match` and `func`          |
 | [test_until](test_until.anvil)                         | tests `until` loops                                      |
 | [test_general_recursion](test_general_recursion.anvil) | Simple example testing general recursion               |
+| [test_nested_rec](test_nested_rec.anvil)               | Nested recursion with multiple levels of `recurse`       |
 
-> **Total:** 18 examples
+> **Total:** 19 examples
 
 ---
 
@@ -168,4 +169,4 @@ Keeping this README up to date helps maintain clarity and usability for future u
 
 ---
 
-> **Current Example Count:** 50
+> **Current Example Count:** 51

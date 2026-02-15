@@ -1,0 +1,34 @@
+proc test_nested_rec(){
+    reg r1 : logic[8];
+    reg r2 : logic[8];
+    loop{
+        cycle 1 >>
+        rec X {
+            if (*r1 == 8'd0) {
+                dprint "[Cycle %d] r1 is zero" (*r2) >>
+                set r1 := *r1 + 8'd1
+            } else {
+                dprint "[Cycle %d] r1 is non-zero" (*r2) >>
+                rec Y{
+                    if (*r1 == 8'd1) {
+                        dprint "[Cycle %d] r1 is one" (*r2) >>
+                        set r1 := *r1 + 8'd3 >>
+                        recurse X
+                    } else {    
+                        dprint "[Cycle %d] r1 is not one" (*r2) >>
+                        set r1 := *r1 + 8'd1 >>
+                        recurse Y
+                    }
+                }
+            }
+        }
+    }
+    loop{
+        set r2 := *r2 + 8'd1
+    }
+    loop{
+        cycle 400 >>
+        dfinish >>
+        cycle 1
+    }
+}
