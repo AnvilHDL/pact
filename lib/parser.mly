@@ -45,8 +45,9 @@
 %token IN_SYMBOL            (* ∈ *)
 %token SUM_SYMBOL           (* ∑ *)
 %token PROD_SYMBOL          (* Π *)
-%token XOR_SYMBOL           (* ⊕ *)
-%token AND_SYMBOL           (* ∧ *)
+%token XOR_SYMBOL           (* ⨁ *)
+%token AND_SYMBOL           (* ⋀ *)
+%token REC_SYMBOL           (* μ *)
 %token KEYWORD_LOOP         (* loop *)
 %token KEYWORD_PROC         (* proc *)
 %token KEYWORD_INTERFACE      (* Interface *)
@@ -392,7 +393,7 @@ local_session_type:
   { Lang.StyAtom (Lang.AtomDelay n) }
 | KEYWORD_LET; id = IDENT; EQUAL; ex = local_session_type; KEYWORD_IN; body = local_session_type
   { Lang.StyLet (id, ex, body) }
-| KEYWORD_REC; id = IDENT; PERIOD; body = local_session_type
+| rec_sym; id = IDENT; PERIOD; body = local_session_type
   { Lang.StyRec (id, body) }
 | id = IDENT
   { Lang.StyVar id }
@@ -455,6 +456,12 @@ xor_sym:
 | XOR
   { () }
 | XOR_SYMBOL
+  { () }
+
+rec_sym:
+| KEYWORD_REC
+  { () }
+| REC_SYMBOL
   { () }
 
 and_sym:
@@ -791,7 +798,7 @@ expr:
 | KEYWORD_GENERATE_SEQ; LEFT_PAREN; i=IDENT; COLON; start = INT; COMMA; end_v = INT; COMMA;
   offset = INT; RIGHT_PAREN; LEFT_BRACE; body = node(expr); RIGHT_BRACE
   { Lang.generate_expr_seq (i,start, end_v, offset, body) }
-| KEYWORD_REC; ident = IDENT; LEFT_BRACE; body = node(expr); RIGHT_BRACE
+| rec_sym; ident = IDENT; LEFT_BRACE; body = node(expr); RIGHT_BRACE
   { Lang.Recursion (ident, body) }
 | KEYWORD_RECURSE; stid= IDENT
   { Lang.Recursor stid }

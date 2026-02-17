@@ -15,12 +15,14 @@ type head_continuation_pair = {
   cont : session_type;
   mutable visited : bool;
   is_choice : bool;
+  recvar_map : (identifier * session_type) list;
 }
 let default_head_continuation_pair = {
   head = Atom (AtomicAct (AtomBMsg {endpoint = ""; msg = ""}));
   cont = StyTrue;
   visited = false;
   is_choice = false;
+  recvar_map = [];
 }
 
 let print_string_of_head_cont_pair hc =
@@ -167,49 +169,63 @@ let  build_choice_from_offerings (offerings : offering_session_type list) =
 
 
 
-let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) : head_continuation_pair list =
+let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (rec_var_context : (identifier*session_type) list) : head_continuation_pair list =
   match sty_node with
-  | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = StyTrue}]
-  | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = StyTrue}]
-  | StySeq (s1, s2) -> (
-    let head_conts = get_head_continuation_pair s1 sp in
+  | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = StyTrue ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StySeq (s1, s2) -> (  
+    let head_conts = get_head_continuation_pair s1 sp rec_var_context in
       List.map (fun hc ->
         {hc with cont = 
+        (
           match hc.cont with
           | StyTrue -> s2
           | _ -> StySeq (hc.cont, s2)
+        )
+          ; recvar_map = hc.recvar_map @ rec_var_context
         }
       ) head_conts
     )
   | StyParallel (s1, s2) ->
   (
     match s1, s2 with
-    | StyTrue, StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue}]
+    | StyTrue, StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue; recvar_map = rec_var_context}]
     | _ ->
      (
-      let head_conts1 = get_head_continuation_pair s1 sp in
-      let head_conts1 = List.map (fun hc -> {hc with cont = StyParallel (hc.cont, StyTrue)}) head_conts1 in
-      let head_conts2 = get_head_continuation_pair s2 sp in
-      let head_conts2 = List.map (fun hc -> {hc with cont = StyParallel (StyTrue, hc.cont)}) head_conts2 in
+      let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
+      let head_conts1 = List.map (fun hc -> {hc with cont = StyParallel (hc.cont, StyTrue); recvar_map = hc.recvar_map @ rec_var_context}) head_conts1 in
+      let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
+      let head_conts2 = List.map (fun hc -> {hc with cont = StyParallel (StyTrue, hc.cont); recvar_map = hc.recvar_map @ rec_var_context}) head_conts2 in
       head_conts1 @ head_conts2
     )
   )
   | StyChoice (s1, s2) -> (
-      let head_conts1 = get_head_continuation_pair s1 sp in
-      let head_conts2 = get_head_continuation_pair s2 sp in
-      List.map (fun hc -> {hc with is_choice = true}) (head_conts1 @ head_conts2)
+      let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
+      let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
+      List.map (fun hc -> {hc with is_choice = true; recvar_map = hc.recvar_map @ rec_var_context}) (head_conts1 @ head_conts2)
     )
   | StyFuture s -> 
-    let head_conts = get_head_continuation_pair s sp in
-    let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = StyFuture s; is_choice = true} in
+    let head_conts = get_head_continuation_pair s sp rec_var_context in
+    let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = StyFuture s; is_choice = true; recvar_map = rec_var_context} in
     possible_delay :: head_conts
   | StyXOffer offerings ->
       (* let continuation = build_choice_from_xofferings offerings in *)
-      [{default_head_continuation_pair with head = XOffers offerings; cont = StyTrue}]
+      [{default_head_continuation_pair with head = XOffers offerings; cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
       (* let continuation = build_choice_from_offerings offerings in *)
-      [{default_head_continuation_pair with head = Offers offerings; cont = StyTrue}]
-  | StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue}]
+      [{default_head_continuation_pair with head = Offers offerings; cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyRec(id,s') -> get_head_continuation_pair s' sp ((id, sty_node)::rec_var_context)
+  | StyVar id -> 
+    let sty' = List.filter_map (fun (var_id, var_sty) -> if var_id = id then Some var_sty else None) rec_var_context in
+    (
+    match sty' with
+    | [sty''] -> [{default_head_continuation_pair with head = Terminal; cont = sty''; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+    | _ -> raise (Except.TypeError [
+        Text (Printf.sprintf "Unbound or multiple bindings for recursive variable %s in head-continuation extraction" id);
+        Except.codespan_local sp
+      ])
+    )
   | _ -> raise (Except.TypeError [
       Text (Printf.sprintf "Unsupported session type %s for head-continuation extraction"
         (Lang.string_of_protocol sty_node));
@@ -239,12 +255,12 @@ let check_generalized_session
 
     (* Visit the event graph BFS *)
     let rec generalized_session_judgement
-        (next_queue : event Queue.t)
+        (next_queue : (event * ((identifier*session_type) list)) Queue.t)
         (visited : bool IntHashtbl.t) =
       if Queue.is_empty next_queue then
         ()
       else
-        let ev = Queue.pop next_queue in
+        let (ev : event), (rec_var_cont : (identifier*session_type) list) = Queue.pop next_queue in
         if IntHashtbl.mem visited ev.id || ev.is_recurse then
           (
             IntHashtbl.add visited ev.id true;
@@ -270,7 +286,7 @@ let check_generalized_session
               ev.id (Lang.string_of_protocol current_sty);
 
           let child_events = ev.outs in
-          let head_conts = get_head_continuation_pair current_sty g.thread_codespan in
+          let head_conts = get_head_continuation_pair current_sty g.thread_codespan rec_var_cont in
           if config.verbose then (
             Printf.eprintf "Extracted head-continuation pairs for event %d:\n" ev.id;
             List.iter (fun hc ->
@@ -280,336 +296,402 @@ let check_generalized_session
           let is_propogated = ref false in
 
           List.iter (fun child_ev ->
-            match child_ev.source with
-            | `Seq (_, `Choice msg_list) ->
-                let found = List.exists (fun hc ->
-                  match hc.head with
-                  | Offers offerings ->
-                      let msgs = msg_list in
-                      let matches = match_offerings_with_msgs offerings msgs in
-                      if matches then begin
-                        let co = match hc.cont with 
-                        |StyTrue -> build_choice_from_offerings offerings 
-                        | _-> StySeq (build_choice_from_offerings offerings, hc.cont) 
-                      in
-                        child_ev.session_type <- Some {protocol_node with d = co};
-                        hc.visited <- true
-                      end;
-                      matches
-                  | XOffers offerings ->
-                      let msgs = msg_list in
-                      let matches = match_offerings_with_msgs offerings msgs in
-                      if matches then begin
-                        let co = match hc.cont with 
-                        |StyTrue -> build_choice_from_xofferings offerings 
-                        | _-> StySeq (build_choice_from_xofferings offerings, hc.cont) 
-                      in
-                        child_ev.session_type <- Some {protocol_node with d = co};
-                        hc.visited <- true
-                      end;
-                      matches
-                  | _ -> false
-                ) head_conts in
-                if not found then
-                  error_handler g (Printf.sprintf "Expected Offerings at event %d | However found %s"
-                    child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                Queue.add child_ev next_queue
+            match child_ev.session_type with
+            | Some sty_node' -> 
 
-
-            | `Seq (_, `Send msg) ->
-                let found = List.exists (fun hc ->
-                  match hc.head with
-                  | Atom (AtomicAct (AtomBMsg m)) ->
-                      if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                        child_ev.session_type <- Some {protocol_node with d = hc.cont};
-                        hc.visited <- true
-                      end;
-                      m.endpoint = msg.endpoint && m.msg = msg.msg
-                  | Atom (AtomicAct (AtomNBMsg m)) ->
-                      if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                        child_ev.session_type <- Some {protocol_node with d = hc.cont};
-                        hc.visited <- true
-                      end;
-                      m.endpoint = msg.endpoint && m.msg = msg.msg                    
-                  | __ -> false
-                ) head_conts in
-
-                if not found then
-                  error_handler g (Printf.sprintf "Expected Send message (%s) at event %d | However found %s"
-                   (string_of_msg_spec msg) child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                Queue.add child_ev next_queue
-                  
-                  
-            | `Seq (_, `Recv msg) ->
-                let found = List.exists (fun hc ->
-                  match hc.head with
-                  | Atom (AtomicAct (AtomBMsg m)) ->
-                      if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                        child_ev.session_type <- Some {protocol_node with d = hc.cont};
-                        hc.visited <- true
-                      end;
-                      m.endpoint = msg.endpoint && m.msg = msg.msg
-                  | Atom (AtomicAct (AtomNBMsg m)) ->
-                      if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                        child_ev.session_type <- Some {protocol_node with d = hc.cont};
-                        hc.visited <- true
-                      end;
-                      m.endpoint = msg.endpoint && m.msg = msg.msg
-                  | __ -> false
-                ) head_conts in
-
-                if not found then
-                  error_handler g (Printf.sprintf "Expected Send message at event %d | However found %s"
-                      child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                Queue.add child_ev next_queue
-            | `Seq (_, `Cycles n) ->
               let found = List.exists (fun hc ->
                 match hc.head with
-                | Atom (AtomDelay m) ->
-                    if n <= m then begin
-                      let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
-                      let new_cont = match remaining_delay with
-                        | StyTrue -> hc.cont
-                        | _ -> StySeq (remaining_delay, hc.cont)
-                      in
-                      child_ev.session_type <- Some {protocol_node with d = new_cont};
-                      hc.visited <- true
-                    end;
-                    n <= m
-                | Terminal ->  (
-                  let cont_cont = get_head_continuation_pair hc.cont g.thread_codespan in
-                  let has_delay = List.exists (fun hcc ->
-                    match hcc.head with
-                    | Atom (AtomDelay m) ->
-                        if n <= m then begin
-                          let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
-                          let new_cont = match remaining_delay with
-                            | StyTrue -> hcc.cont
-                            | _ -> StySeq (remaining_delay, hcc.cont)
-                          in
-                          child_ev.session_type <- Some {protocol_node with d = new_cont};
-                          hc.visited <- true
-                        end;
-                        n <= m
-                    | _ -> false 
-                  ) cont_cont in
-                  has_delay
-                )
-              | _ -> false
-              ) head_conts in
-              if not found then
-                error_handler g (Printf.sprintf "Expected Delay at event %d | However found %s"
-                  child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                Queue.add child_ev next_queue
-            | `Root Some (_, branches) ->
-               if Option.is_none child_ev.session_type then begin
-                let is_empty_branch = List.for_all( fun e ->
-                  match e.source with
-                  | `Branch _ -> true
-                  | _ -> false
-                )child_ev.outs in
-                let has_immediate_actions = List.filter ( fun a ->
-                  match a.d with
-                  | ImmediateRecv _ | ImmediateSend _ -> true
-                  | _ -> false
-                ) child_ev.actions in
-                let offer_atoms = List.filter_map (fun hc ->
-                  match hc.head with
-                  | Offers _ -> Some hc
-                  | XOffers _ -> Some hc
-                  | _ -> None
-                ) head_conts in
-                if List.length has_immediate_actions > 0 then begin
-                  List.iter (fun ia ->
-                    match ia.d with
-                    | ImmediateRecv msg ->
-                        let found_hc_opt =
-                          List.find_opt (fun hc ->
-                            match hc.head with
-                            | XOffers offerings | Offers offerings ->
-                                List.for_all (fun offering ->
-                                  match offering.trigger with
-                                  | Lang.AtomicAct (Lang.AtomBMsg m) ->
-                                      m.endpoint = msg.endpoint && m.msg = msg.msg
-                                  | Lang.AtomicAct (Lang.AtomNBMsg m) ->
-                                      m.endpoint = msg.endpoint && m.msg = msg.msg
-                                  | Lang.AtomDelay _ -> true
-                                  | _ -> false
-                                ) offerings
-                            | _ -> false
-                          ) offer_atoms
-                        in
-                        if Option.is_none found_hc_opt then
-                          error_handler g (Printf.sprintf "Expected Offerings for ImmediateRecv at event %d | However found %s"
-                            child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
-                        else
-                          let hc = Option.get found_hc_opt in
-                          (* Printf.eprintf "Found matching head-continuation for ImmediateRecv at event %d: %s\n"
-                            child_ev.id (print_string_of_head_cont_pair hc); *)
-                          List.iter (fun h ->
-                            if h = hc then h.visited <- true
-                          ) head_conts;
-                          let cont = match hc.head with
-                            | Offers offerings -> offerings
-                            | XOffers offerings -> offerings
-                            | _ -> []
-                          in
-                          if List.length cont > 2 then
-                            error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
-                              child_ev.id) g.thread_codespan module_name
-                          else
-                            let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
-                              || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
-                                (List.nth cont 0, List.nth cont 1)
-                              else
-                                (List.nth cont 1, List.nth cont 0)
-                      
-                            in
-                            let own_contin = match own_cont.continuation, hc.cont with
-                              | None , StyTrue -> StyTrue
-                              | Some st, StyTrue -> st
-                              | Some st, st' -> StySeq (st, st')
-                              | None, st' -> st' 
-                            in
-                            let other_contin = match other_cont.continuation, hc.cont with
-                              | None , StyTrue -> StyTrue
-                              | Some st, StyTrue -> st
-                              | Some st, st' -> StySeq (st, st')
-                              | None, st' -> st' 
-                            in
-
-
-                            child_ev.session_type <- Some {protocol_node with d = own_contin};
-                            
-                            let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
-                            if List.length child_other_branch = 1 then
-                              let other_ev = List.hd child_other_branch in
-                              (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
-                                (Lang.string_of_protocol other_contin) other_ev.id; *)
-                              other_ev.session_type <- Some {protocol_node with d = other_contin};
-                              Queue.add child_ev next_queue;
-                              Queue.add other_ev next_queue
-
-                    | ImmediateSend (msg,_) -> (
-                        let found_hc_opt =
-                          List.find_opt (fun hc ->
-                            match hc.head with
-                            | XOffers offerings | Offers offerings ->
-                                List.for_all (fun offering ->
-                                  match offering.trigger with
-                                  | Lang.AtomicAct (Lang.AtomBMsg m) -> m.endpoint = msg.endpoint && m.msg = msg.msg
-                                  | Lang.AtomicAct (Lang.AtomNBMsg m) ->m.endpoint = msg.endpoint && m.msg = msg.msg
-                                  | Lang.AtomDelay _ -> true
-                                  | _ -> false
-                                ) offerings
-                            | _ -> false
-                          ) offer_atoms
-                        in
-                        if Option.is_none found_hc_opt then
-                          error_handler g (Printf.sprintf "Expected Offerings for ImmediateRecv at event %d | However found %s"
-                            child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
-                        else
-                          let hc = Option.get found_hc_opt in
-                          (* Printf.eprintf "Found matching head-continuation for ImmediateSend at event %d: %s\n"
-                            child_ev.id (print_string_of_head_cont_pair hc); *)
-                          List.iter (fun h ->
-                            if h = hc then h.visited <- true
-                          ) head_conts;
-                          let cont = match hc.head with
-                            | XOffers offerings | Offers offerings -> offerings
-                            | _ -> []
-                          in
-                          if List.length cont > 2 then
-                            error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
-                              child_ev.id) g.thread_codespan module_name
-                          else
-                            let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
-                              || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
-                                (List.nth cont 0, List.nth cont 1)
-                              else
-                                (List.nth cont 1, List.nth cont 0)
-                              in
-                             let own_contin = match own_cont.continuation, hc.cont with
-                              | None , StyTrue -> StyTrue
-                              | Some st, StyTrue -> st
-                              | Some st, st' -> StySeq (st, st')
-                              | None, st -> st
-                            in
-                            let other_contin = match other_cont.continuation, hc.cont with
-                              | Some st, StyTrue -> st
-                              | Some st, st' -> StySeq (st, st')
-                              | None, st -> st
-                            in
-                            
-                            child_ev.session_type <- Some {protocol_node with d = own_contin};
-                            let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
-
-                            if List.length child_other_branch = 1 then
-                              let other_ev = List.hd child_other_branch in
-                              (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
-                                (Lang.string_of_protocol other_contin) other_ev.id; *)
-                              other_ev.session_type <- Some {protocol_node with d = other_contin};
-                              Queue.add child_ev next_queue;
-                              Queue.add other_ev next_queue
-
-                    )
-
-                    | _ -> ()
-                  ) has_immediate_actions
-                end
-                else if not is_empty_branch then
-                  (
-                  child_ev.session_type <- Some {protocol_node with d = current_sty} ;
-                  Queue.add child_ev next_queue
-                  )
-                else begin
-                  let found = List.exists (fun hc ->
-                    match hc.head with
-                    | Terminal ->
-                        if  not hc.visited then begin
-                          (* Printf.eprintf "Assigning Terminal continuation = %s to empty branch event %d\n" *)
-                            (* (Lang.string_of_protocol hc.cont) child_ev.id; *)
-                          child_ev.session_type <- Some {protocol_node with d = hc.cont};                              
-                          hc.visited <- true;
-                          let other_side_remaining_type = remove_type_choice current_sty hc.cont in
-                          let other_child_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
-                          List.iter (fun ob ->
-                              (* Printf.eprintf "Assigning remaining choice continuation = %s to other branch event %d\n" *)
-                              (* (Lang.string_of_protocol other_side_remaining_type) ob.id; *)
-                            ob.session_type <- Some {protocol_node with d = other_side_remaining_type};
-                            (* Printf.eprintf "Adding other branch event %d to queue | for empty branch %d\n" ob.id child_ev.id; *)
-                            Queue.add ob next_queue
-                          ) other_child_branch;           
-                          true
-                        end
-                        else begin
-                          false
-                        end
-                    | _ -> false
-                  ) head_conts in
-                  if not found then
-                    error_handler g (Printf.sprintf "Expected Terminal at event %d | However found %s"
-                      child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name      
-                    ;
-                  Queue.add child_ev next_queue
-              end;
-
-            end;    
-                
-            | `Later (ev_a, ev_b) ->
-              let all_parents_reached = match ev_a.session_type, ev_b.session_type with
-                | Some _, Some _ -> true
+                | Terminal ->
+                    if not hc.visited then begin
+                      let cont = hc.cont in
+                      if sty_node'.d = cont then(
+                        hc.visited <- true;
+                        true
+                      )
+                      else false
+                    end
+                    else false
                 | _ -> false
-              in
-              if not all_parents_reached then begin
-                ()
-              end
-              else
-                (
-                  (match ev_a.session_type, ev_b.session_type with
+              )head_conts in
+              if not found then
+                error_handler g (Printf.sprintf "Expected Terminal head-continuation for already assigned child event %d | However found %s"
+                  child_ev.id (Lang.string_of_protocol sty_node'.d)) g.thread_codespan module_name;
+            | _ ->
+              let rec assign_session_type src = 
+              match src with
+              | `Seq (_, `Choice msg_list) ->
+                  
+                  let found = List.fold_left (fun acc hc ->
+                    match hc.head with
+                    | Offers offerings ->
+                        let msgs = msg_list in
+                        let matches = match_offerings_with_msgs offerings msgs in
+                        if matches then begin
+                          let co = match hc.cont with 
+                          |StyTrue -> build_choice_from_offerings offerings 
+                          | _-> StySeq (build_choice_from_offerings offerings, hc.cont) 
+                        in
+                        let next_sty = match child_ev.session_type with
+                        | Some sty' ->
+                            StyChoice (sty'.d,co)
+                        | None -> co
+                        in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc@hc.recvar_map
+                        end
+                        else acc
+                        
+                    | XOffers offerings ->
+                        let msgs = msg_list in
+                        let matches = match_offerings_with_msgs offerings msgs in
+                        if matches then begin
+                          let co = match hc.cont with 
+                          |StyTrue -> build_choice_from_xofferings offerings 
+                          | _-> StySeq (build_choice_from_xofferings offerings, hc.cont) 
+                        in
+                          let next_sty = match child_ev.session_type with
+                          | Some sty' ->
+                              StyChoice (sty'.d,co)
+                          | None -> co
+                          in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc@hc.recvar_map
+                        end
+                        else acc
+                    | _ -> acc
+                  ) [] head_conts in 
+                  if child_ev.session_type = None then
+                    error_handler g (Printf.sprintf "Expected Offerings at event %d | However found %s"
+                      child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
+                  if not (IntHashtbl.mem visited child_ev.id) then
+                    Queue.add (child_ev, found) next_queue
+
+
+              | `Seq (_, `Send msg) ->
+                  let found = List.fold_left (fun acc hc ->
+                    match hc.head with
+                    | Atom (AtomicAct (AtomBMsg m)) ->
+                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
+                          let next_sty = match child_ev.session_type with
+                          | Some sty' ->
+                              StyChoice (sty'.d, hc.cont)
+                          | None -> hc.cont
+                          in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc @ hc.recvar_map
+                        end
+                        else acc
+                    | Atom (AtomicAct (AtomNBMsg m)) ->
+                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
+                          let next_sty = match child_ev.session_type with
+                          | Some sty' ->
+                              StyChoice (sty'.d, hc.cont)
+                          | None -> hc.cont
+                            in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc @ hc.recvar_map
+                        end
+                        else acc                    
+                    | __ -> acc
+                  ) [] head_conts in
+
+                  if child_ev.session_type = None then
+                    error_handler g (Printf.sprintf "Expected Send message (%s) at event %d | However found %s"
+                    (string_of_msg_spec msg) child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
+                  if not (IntHashtbl.mem visited child_ev.id) then
+                    Queue.add (child_ev, found) next_queue
+                    
+                    
+              | `Seq (_, `Recv msg) ->
+                  let found = List.fold_left (fun acc hc ->
+                    match hc.head with
+                    | Atom (AtomicAct (AtomBMsg m)) ->
+                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
+                          let next_sty = match child_ev.session_type with
+                          | Some sty' ->
+                              StyChoice (sty'.d, hc.cont)
+                          | None -> hc.cont
+                            in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc @ hc.recvar_map
+                        end
+                        else acc
+                    | Atom (AtomicAct (AtomNBMsg m)) ->
+                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
+                          let next_sty = match child_ev.session_type with
+                          | Some sty' ->
+                              StyChoice (sty'.d, hc.cont)
+                          | None -> hc.cont
+                            in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc @ hc.recvar_map
+                        end
+                        else acc
+                    | __ -> acc
+                  ) [] head_conts in
+
+                  if child_ev.session_type = None then
+                    error_handler g (Printf.sprintf "Expected Recv message at event %d | However found %s"
+                        child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
+                  if not (IntHashtbl.mem visited child_ev.id) then
+                    Queue.add (child_ev, found) next_queue
+              | `Seq (_, `Cycles n) ->
+                let found = List.fold_left (fun acc hc ->
+                  match hc.head with
+                  | Atom (AtomDelay m) ->
+                      if n <= m then begin
+                        let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
+                        let new_cont = match remaining_delay with
+                          | StyTrue -> hc.cont
+                          | _ -> StySeq (remaining_delay, hc.cont)
+                        in
+                      let next_sty = match child_ev.session_type with
+                        | Some sty' ->
+                            StyChoice (sty'.d,new_cont)
+                        | None -> new_cont
+                      in
+                        child_ev.session_type <- Some {protocol_node with d = next_sty};
+                        hc.visited <- true;
+                        acc @ hc.recvar_map
+                      end
+                      else acc
+                  | Terminal ->  (
+                    let cont_cont = get_head_continuation_pair hc.cont g.thread_codespan hc.recvar_map in
+                    let has_delay_map = List.fold_left (fun acc2 hcc ->
+                      match hcc.head with
+                      | Atom (AtomDelay m) ->
+                          if n <= m then begin
+                            let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
+                            let new_cont = match remaining_delay with
+                              | StyTrue -> hcc.cont
+                              | _ -> StySeq (remaining_delay, hcc.cont)
+                            in
+                          let next_sty = match child_ev.session_type with
+                            | Some sty' ->
+                                StyChoice (sty'.d,new_cont)
+                            | None -> new_cont
+                          in
+                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                          hc.visited <- true;
+                          acc2 @ hcc.recvar_map
+                          end
+                          else acc2
+                      | _ -> acc2 
+                    ) acc cont_cont in
+                    has_delay_map
+                  )
+                | _ -> acc
+                ) [] head_conts in
+                if child_ev.session_type = None then 
+                  error_handler g (Printf.sprintf "Expected Delay at event %d | However found %s"
+                    child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
+                if not (IntHashtbl.mem visited child_ev.id) then
+                  Queue.add (child_ev, found) next_queue
+              | `Root Some (_, branches) ->
+                if Option.is_none child_ev.session_type then begin
+                  let is_empty_branch = List.for_all( fun e ->
+                    match e.source with
+                    | `Branch _ -> true
+                    | _ -> false
+                  )child_ev.outs in
+                  let has_immediate_actions = List.filter ( fun a ->
+                    match a.d with
+                    | ImmediateRecv _ | ImmediateSend _ -> true
+                    | _ -> false
+                  ) child_ev.actions in
+                  let offer_atoms = List.filter_map (fun hc ->
+                    match hc.head with
+                    | Offers _ -> Some hc
+                    | XOffers _ -> Some hc
+                    | _ -> None
+                  ) head_conts in
+                  if List.length has_immediate_actions > 0 then begin
+                    List.iter (fun ia ->
+                      match ia.d with
+                      | ImmediateRecv msg ->
+                          let found_hc_opt =
+                            List.find_opt (fun hc ->
+                              match hc.head with
+                              | XOffers offerings | Offers offerings ->
+                                  List.for_all (fun offering ->
+                                    match offering.trigger with
+                                    | Lang.AtomicAct (Lang.AtomBMsg m) ->
+                                        m.endpoint = msg.endpoint && m.msg = msg.msg
+                                    | Lang.AtomicAct (Lang.AtomNBMsg m) ->
+                                        m.endpoint = msg.endpoint && m.msg = msg.msg
+                                    | Lang.AtomDelay _ -> true
+                                    | _ -> false
+                                  ) offerings
+                              | _ -> false
+                            ) offer_atoms
+                          in
+                          if Option.is_none found_hc_opt then
+                            error_handler g (Printf.sprintf "Expected Offerings for ImmediateRecv at event %d | However found %s"
+                              child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
+                          else
+                            let hc = Option.get found_hc_opt in
+                            (* Printf.eprintf "Found matching head-continuation for ImmediateRecv at event %d: %s\n"
+                              child_ev.id (print_string_of_head_cont_pair hc); *)
+                            List.iter (fun h ->
+                              if h = hc then h.visited <- true
+                            ) head_conts;
+                            let cont = match hc.head with
+                              | Offers offerings -> offerings
+                              | XOffers offerings -> offerings
+                              | _ -> []
+                            in
+                            if List.length cont > 2 then
+                              error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
+                                child_ev.id) g.thread_codespan module_name
+                            else
+                              let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
+                                || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
+                                  (List.nth cont 0, List.nth cont 1)
+                                else
+                                  (List.nth cont 1, List.nth cont 0)
+                        
+                              in
+                              let own_contin = match own_cont.continuation, hc.cont with
+                                | None , StyTrue -> StyTrue
+                                | Some st, StyTrue -> st
+                                | Some st, st' -> StySeq (st, st')
+                                | None, st' -> st' 
+                              in
+                              let other_contin = match other_cont.continuation, hc.cont with
+                                | None , StyTrue -> StyTrue
+                                | Some st, StyTrue -> st
+                                | Some st, st' -> StySeq (st, st')
+                                | None, st' -> st' 
+                              in
+
+
+                              child_ev.session_type <- Some {protocol_node with d = own_contin};
+                              
+                              let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
+                              if List.length child_other_branch = 1 then
+                                let other_ev = List.hd child_other_branch in
+                                (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
+                                  (Lang.string_of_protocol other_contin) other_ev.id; *)
+                                other_ev.session_type <- Some {protocol_node with d = other_contin};
+                                Queue.add (child_ev, hc.recvar_map) next_queue;
+                                Queue.add (other_ev, hc.recvar_map) next_queue
+
+                      | ImmediateSend (msg,_) -> (
+                          let found_hc_opt =
+                            List.find_opt (fun hc ->
+                              match hc.head with
+                              | XOffers offerings | Offers offerings ->
+                                  List.for_all (fun offering ->
+                                    match offering.trigger with
+                                    | Lang.AtomicAct (Lang.AtomBMsg m) -> m.endpoint = msg.endpoint && m.msg = msg.msg
+                                    | Lang.AtomicAct (Lang.AtomNBMsg m) ->m.endpoint = msg.endpoint && m.msg = msg.msg
+                                    | Lang.AtomDelay _ -> true
+                                    | _ -> false
+                                  ) offerings
+                              | _ -> false
+                            ) offer_atoms
+                          in
+                          if Option.is_none found_hc_opt then
+                            error_handler g (Printf.sprintf "Expected Offerings for ImmediateRecv at event %d | However found %s"
+                              child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
+                          else
+                            let hc = Option.get found_hc_opt in
+                            (* Printf.eprintf "Found matching head-continuation for ImmediateSend at event %d: %s\n"
+                              child_ev.id (print_string_of_head_cont_pair hc); *)
+                            List.iter (fun h ->
+                              if h = hc then h.visited <- true
+                            ) head_conts;
+                            let cont = match hc.head with
+                              | XOffers offerings | Offers offerings -> offerings
+                              | _ -> []
+                            in
+                            if List.length cont > 2 then
+                              error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
+                                child_ev.id) g.thread_codespan module_name
+                            else
+                              let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
+                                || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
+                                  (List.nth cont 0, List.nth cont 1)
+                                else
+                                  (List.nth cont 1, List.nth cont 0)
+                                in
+                              let own_contin = match own_cont.continuation, hc.cont with
+                                | None , StyTrue -> StyTrue
+                                | Some st, StyTrue -> st
+                                | Some st, st' -> StySeq (st, st')
+                                | None, st -> st
+                              in
+                              let other_contin = match other_cont.continuation, hc.cont with
+                                | Some st, StyTrue -> st
+                                | Some st, st' -> StySeq (st, st')
+                                | None, st -> st
+                              in
+                              
+                              child_ev.session_type <- Some {protocol_node with d = own_contin};
+                              let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
+
+                              if List.length child_other_branch = 1 then
+                                let other_ev = List.hd child_other_branch in
+                                (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
+                                  (Lang.string_of_protocol other_contin) other_ev.id; *)
+                                other_ev.session_type <- Some {protocol_node with d = other_contin};
+                                Queue.add (child_ev, hc.recvar_map) next_queue;
+                                Queue.add (other_ev, hc.recvar_map) next_queue
+
+                      )
+
+                      | _ -> ()
+                    ) has_immediate_actions
+                  end
+                  else if not is_empty_branch then
+                    (
+                    child_ev.session_type <- Some {protocol_node with d = current_sty} ;
+                    Queue.add (child_ev, rec_var_cont) next_queue
+                    )
+                  else begin
+                    let found = List.fold_left (fun acc hc ->
+                      match hc.head with
+                      | Terminal ->
+                          if  not hc.visited then begin
+                            (* Printf.eprintf "Assigning Terminal continuation = %s to empty branch event %d\n" *)
+                              (* (Lang.string_of_protocol hc.cont) child_ev.id; *)
+                            child_ev.session_type <- Some {protocol_node with d = hc.cont};                              
+                            hc.visited <- true;
+                            let other_side_remaining_type = remove_type_choice current_sty hc.cont in
+                            let other_child_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
+                            List.iter (fun ob ->
+                                (* Printf.eprintf "Assigning remaining choice continuation = %s to other branch event %d\n" *)
+                                (* (Lang.string_of_protocol other_side_remaining_type) ob.id; *)
+                              ob.session_type <- Some {protocol_node with d = other_side_remaining_type};
+                              (* Printf.eprintf "Adding other branch event %d to queue | for empty branch %d\n" ob.id child_ev.id; *)
+                              Queue.add (ob, hc.recvar_map) next_queue
+                            ) other_child_branch;           
+                            acc @ hc.recvar_map
+                          end
+                          else acc
+                      | _ -> acc
+                    ) [] head_conts in
+                    if child_ev.session_type = None then
+                      error_handler g (Printf.sprintf "Expected Terminal at event %d | However found %s"
+                        child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name      
+                      ;
+                    if not (IntHashtbl.mem visited child_ev.id) then
+                      Queue.add (child_ev, found) next_queue
+                end;
+
+              end;    
+                  
+              | `Later (ev_a, ev_b) ->
+                (match ev_a.session_type, ev_b.session_type with
                   | Some sty_a_node, Some sty_b_node ->
-                    let hd_cont_a = get_head_continuation_pair sty_a_node.d g.thread_codespan in
-                    let hd_cont_b = get_head_continuation_pair sty_b_node.d g.thread_codespan in
+                    let hd_cont_a = get_head_continuation_pair sty_a_node.d g.thread_codespan [] in
+                    let hd_cont_b = get_head_continuation_pair sty_b_node.d g.thread_codespan [] in
                     let cont_a = List.find_opt (
                       fun hc -> match hc.head with
                         | Terminal -> true
@@ -620,11 +702,9 @@ let check_generalized_session
                         | Terminal -> true
                         | _ -> false
                     ) hd_cont_b in
-                    (
-                      
+                    
                       let match_cont_later sty1 sty2 = 
                         if sty1 = sty2 then begin
-
                           sty1
                         end
                         else begin
@@ -636,73 +716,68 @@ let check_generalized_session
                               child_ev.id (Lang.string_of_protocol sty1) (Lang.string_of_protocol sty2)) g.thread_codespan module_name;
                         end in
 
-                      match cont_a, cont_b with
+                      (match cont_a, cont_b with
                       | Some hc_a, Some hc_b ->
                         let new_cont = match_cont_later hc_a.cont hc_b.cont in
-                          (* if hc_a.cont <> hc_b.cont then
-                            error_handler g (Printf.sprintf "Mismatched session types at later event %d | Types: %s vs %s"
-                              child_ev.id (Lang.string_of_protocol hc_a.cont) (Lang.string_of_protocol hc_b.cont)) g.thread_codespan module_name; *)
-                            child_ev.session_type <- Some {protocol_node with d = new_cont};
+                        let merged_recvar_map = hc_a.recvar_map @ hc_b.recvar_map in
+                          child_ev.session_type <- Some {protocol_node with d = new_cont};
+                          Queue.add (child_ev, merged_recvar_map) next_queue
                       | _ ->
                         raise (Except.TypeError [
                           Text (Printf.sprintf "No terminal head-continuation found at later event %d | hc = \n%s"
                             child_ev.id (String.concat "\n" (List.map print_string_of_head_cont_pair head_conts)));
                           Except.codespan_local g.thread_codespan
                         ])
-                    )
-                    | _ ->
-                      raise (Except.TypeError [
-                        Text (Printf.sprintf "Unexpected missing session type at later event %d"
-                          child_ev.id);
-                        Except.codespan_local g.thread_codespan
-                      ])
-                );
-
-                Queue.add child_ev next_queue
-              )
-            | `Branch(_, branch) ->
-              let all_branches_reached = List.for_all (fun b ->
-                match b.session_type with
-                | Some _ -> true
-                | None -> false
-              ) branch.branches_val in
-              if not all_branches_reached then begin
-                is_propogated := true;
-              end
-              else
-                let true_cont_opt = List.find_opt(fun br ->
-                  match br.session_type with
+                      )
+                  | _ -> ()  (* Wait for both parent events to be processed *)
+                )
+              | `Branch(_, branch) ->
+                let all_branches_reached = List.for_all (fun b ->
+                  match b.session_type with
                   | Some _ -> true
                   | None -> false
-                )branch.branches_val in
+                ) branch.branches_val in
+                if not all_branches_reached then begin
+                  is_propogated := true;
+                end
+                else
+                  let true_cont_opt = List.find_opt(fun br ->
+                    match br.session_type with
+                    | Some _ -> true
+                    | None -> false
+                  )branch.branches_val in
 
-                let true_cont_node = match true_cont_opt with
-                  | Some ev -> Option.get ev.session_type
-                  | None ->
-                      error_handler g (Printf.sprintf "No session types found in branches at event %d"
-                        child_ev.id) g.thread_codespan module_name
-                in
-                let true_node = match true_cont_node.d with
-                | StySeq(StyTrue, cont) -> cont
-                | _ -> true_cont_node.d
-                in
-                List.iter (fun b ->
-                  match b.session_type with
-                  | Some sty ->
-                      if sty.d <> true_node && (sty.d <> StySeq(StyTrue, true_node)) then
-                        error_handler g (Printf.sprintf "Mismatched session types in branch event %d"
+                  let true_cont_node = match true_cont_opt with
+                    | Some ev -> Option.get ev.session_type
+                    | None ->
+                        error_handler g (Printf.sprintf "No session types found in branches at event %d"
                           child_ev.id) g.thread_codespan module_name
-                  | None ->
-                      error_handler g (Printf.sprintf "Missing session type in branch event %d"
-                        b.id) g.thread_codespan module_name
-                ) branch.branches_val;
-                is_propogated := true;
-                child_ev.session_type <- Some true_cont_node;
-                if not (IntHashtbl.mem visited child_ev.id)then
-                  Queue.add child_ev next_queue
-                
-            | _ ->
-                error_handler g (Printf.sprintf "Unsupported child event source at event %d during generalized session type\n  check" child_ev.id) g.thread_codespan module_name
+                  in
+                  let true_node = match true_cont_node.d with
+                  | StySeq(StyTrue, cont) -> cont
+                  | _ -> true_cont_node.d
+                  in
+                  List.iter (fun b ->
+                    match b.session_type with
+                    | Some sty ->
+                        if sty.d <> true_node && (sty.d <> StySeq(StyTrue, true_node)) then
+                          error_handler g (Printf.sprintf "Mismatched session types in branch event %d"
+                            child_ev.id) g.thread_codespan module_name
+                    | None ->
+                        error_handler g (Printf.sprintf "Missing session type in branch event %d"
+                          b.id) g.thread_codespan module_name
+                  ) branch.branches_val;
+                  is_propogated := true;
+                  child_ev.session_type <- Some true_cont_node;
+                  if not (IntHashtbl.mem visited child_ev.id)then
+                    Queue.add (child_ev, rec_var_cont) next_queue
+              | `Recurse(src',_) ->
+                assign_session_type src';
+              | _ ->
+                  error_handler g (Printf.sprintf "Unsupported child event source at event %d during generalized session type\n  check" child_ev.id) g.thread_codespan module_name
+
+              in 
+              assign_session_type child_ev.source
           ) child_events;
 
           List.iter (fun hc ->
@@ -721,7 +796,7 @@ let check_generalized_session
     let root_ev = List.find (fun e -> e.source = `Root None) g.events in
 
     root_ev.session_type <- Some protocol_node;
-    Queue.add root_ev q;
+Queue.add (root_ev, []) q;
     
     generalized_session_judgement q visited_tbl;
     let file_name = Printf.sprintf "%sgraph.dot" module_name in

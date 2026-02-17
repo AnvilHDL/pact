@@ -44,6 +44,7 @@ rule read =
   | "⋀"      { AND_SYMBOL } 
   | " ̸"      { NOT_SYMBOL }
   | "∈"      { IN_SYMBOL }
+  | "μ"       { REC_SYMBOL }
   | "$"       { DOLLAR }
   | "&&"      { DOUBLE_AND }
   | '&'       { AND }

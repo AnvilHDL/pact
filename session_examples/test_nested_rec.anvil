@@ -1,0 +1,21 @@
+chan ch{
+    right req : (logic@#1),
+    right ack : (logic@#1)
+}
+interface i1(ep : left ch) = #1; μ X . (ep.req +  (#1;X)) ; #1
+proc test_nested_rec (i1){
+    reg cyc : logic[8];
+    loop{
+        cycle 1 >>
+        μ X{
+            if(1'd1){
+                send ep.req(1'd1)
+            }
+            else{
+                cycle 1 >>
+                recurse X
+            }
+        } >>
+        cycle 1
+    }
+}
