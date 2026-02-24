@@ -64,12 +64,13 @@ Below is a categorized list of the available examples, along with brief descript
 | Example                              | Features                                        |
 | ------------------------------------ | ----------------------------------------------- |
 | [enum_test](enum_test.anvil)         | `enum` types, `const` declarations              |
+| [test_enum](test_enum.anvil)         | `enum` with value assignment, data type declarations |
 | [record](record.anvil)               | `struct` definitions and field initialization   |
 | [record_update](record_update.anvil) | Struct update syntax `{v with field = value}`   |
 | [list](list.anvil)                   | Array literals, register arrays, tuple creation |
 | [assign_repeat](assign_repeat.anvil) | Record construction and repeated assignment     |
 
-> **Total:** 5 examples
+> **Total:** 6 examples
 
 ---
 
@@ -149,7 +150,6 @@ Below is a categorized list of the available examples, along with brief descript
 ## Example Subdirectories
 
 * `edge_cases/` — Regression tests for bug fixes and corner cases
-* `pipeline/` — Reusable pipeline component library
 * `should_fail/` — Examples expected to fail type or borrow checking
 * `should_pass/` — Examples expected to pass type and borrow checking
 
@@ -169,4 +169,4 @@ Keeping this README up to date helps maintain clarity and usability for future u
 
 ---
 
-> **Current Example Count:** 51
+> **Current Example Count:** 52
