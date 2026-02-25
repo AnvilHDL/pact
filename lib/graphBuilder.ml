@@ -589,7 +589,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     Typing.derived_data (Some w) td
   | Tuple [] -> Typing.const_data graph None (unit_dtype) ctx.current
   | Let (_idents, _, e) ->
-    raise (Except.TypeError [Text "Let expressions cannot be unused!"; Except.codespan_local e.span])
+    raise (Except.TypeError [Text ("Let expressions cannot be unused! | %s"^(string_of_expr e.d)); Except.codespan_local e.span])
   | Join (e1, e2) ->
     (
       match e1.d with
@@ -646,6 +646,7 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
         let ctx' = BuildContext.wait graph ctx td1.lt.live in
         visit_expr graph ci ctx' e2
       | Let ([ident], dtype, inner_e) ->
+        Printf.eprintf "Processing let binding for %s in wait expression\n" ident;
         let td1 = visit_expr graph ci ctx inner_e in
         let err_string = DTypeCheck.fmt_let_binding ident dtype td1.dtype in
         check_dtype err_string dtype td1.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
