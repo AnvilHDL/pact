@@ -698,9 +698,97 @@ let rec string_of_expr (e : expr) : string =
   match e with
   | Literal lit -> "Literal " ^ string_of_literal lit
   | Identifier id -> "Identifier " ^ id
-  | Let (ids,_, e) -> "Let (" ^ String.concat ", " ids ^ ", " ^ string_of_expr e.d ^ ")"
+  | Let (ids, dtype_opt, e) ->
+      let ty_str = match dtype_opt with Some dt -> ": " ^ string_of_data_type dt | None -> "" in
+      "Let (" ^ String.concat ", " ids ^ ty_str ^ " = " ^ string_of_expr e.d ^ ")"
   | Assign (lv, n) -> "Assign (" ^ string_of_lvalue lv ^ ", " ^ string_of_expr n.d ^ ")"
-  | _ -> "..."
+  | Call (f, args) ->
+      "Call " ^ f ^ "(" ^ String.concat ", " (List.map (fun a -> string_of_expr a.d) args) ^ ")"
+  | Binop (op, e1, e2_sol) ->
+      let rhs = match e2_sol with
+        | `Single e2 -> string_of_expr e2.d
+        | `List es -> "[" ^ String.concat "; " (List.map (fun e -> string_of_expr e.d) es) ^ "]"
+      in
+      "Binop (" ^ string_of_binop op ^ ", " ^ string_of_expr e1.d ^ ", " ^ rhs ^ ")"
+  | Unop (op, e) -> "Unop (" ^ string_of_unop op ^ ", " ^ string_of_expr e.d ^ ")"
+  | Tuple es ->
+      (match es with
+       | [] -> "Unit"
+       | _ -> "Tuple (" ^ String.concat ", " (List.map (fun e -> string_of_expr e.d) es) ^ ")")
+  | Join (e1, e2) -> "Join (" ^ string_of_expr e1.d ^ "; " ^ string_of_expr e2.d ^ ")"
+  | Wait (e1, e2) -> "Wait (" ^ string_of_expr e1.d ^ " => " ^ string_of_expr e2.d ^ ")"
+  | Cycle n -> "Cycle " ^ string_of_int n
+  | Sync id -> "Sync " ^ id
+  | IfExpr (cond, then_e, else_e) ->
+      "If (" ^ string_of_expr cond.d ^ ") { " ^ string_of_expr then_e.d ^ " } else { " ^ string_of_expr else_e.d ^ " }"
+  | TryRecv (id, rp, ok_e, fail_e) ->
+      "TryRecv " ^ id ^ " <- " ^ string_of_msg_spec rp.recv_msg_spec ^
+      " { ok: " ^ string_of_expr ok_e.d ^ ", fail: " ^ string_of_expr fail_e.d ^ " }"
+  | TrySend (sp, ok_e, fail_e) ->
+      "TrySend " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")" ^
+      " { ok: " ^ string_of_expr ok_e.d ^ ", fail: " ^ string_of_expr fail_e.d ^ " }"
+  | Send sp ->
+      "Send " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
+  | Recv rp ->
+      "Recv " ^ string_of_msg_spec rp.recv_msg_spec
+  | Construct (spec, e_opt) ->
+      let payload = match e_opt with Some e -> "(" ^ string_of_expr e.d ^ ")" | None -> "" in
+      "Construct " ^ spec.variant_ty_name ^ "::" ^ spec.variant ^ payload
+  | Record (name, fields, base_opt) ->
+      let fields_str = String.concat ", " (List.map (fun (f, e) -> f ^ " = " ^ string_of_expr e.d) fields) in
+      let base_str = match base_opt with Some b -> " | " ^ string_of_expr b.d | None -> "" in
+      "Record " ^ name ^ " { " ^ fields_str ^ base_str ^ " }"
+  | Index (arr, idx) ->
+      "Index (" ^ string_of_expr arr.d ^ ", " ^ string_of_index idx ^ ")"
+  | Indirect (e, field) ->
+      "Indirect (" ^ string_of_expr e.d ^ ", " ^ field ^ ")"
+  | Concat (es, is_flat) ->
+      "Concat" ^ (if is_flat then "[flat]" else "") ^
+      " {" ^ String.concat ", " (List.map (fun e -> string_of_expr e.d) es) ^ "}"
+  | Cast (e, dt) ->
+      "Cast (" ^ string_of_expr e.d ^ " as " ^ string_of_data_type dt ^ ")"
+  | Ready msg_spec -> "Ready (" ^ string_of_msg_spec msg_spec ^ ")"
+  | Probe msg_spec -> "Probe (" ^ string_of_msg_spec msg_spec ^ ")"
+  | Read lv -> "Read (" ^ string_of_lvalue lv ^ ")"
+  | SharedAssign (id, e) -> "SharedAssign (" ^ id ^ ", " ^ string_of_expr e.d ^ ")"
+  | List es ->
+      "List [" ^ String.concat "; " (List.map (fun e -> string_of_expr e.d) es) ^ "]"
+  | Until (cond, body) ->
+      "Until (" ^ string_of_expr cond.d ^ ") { " ^ string_of_expr body.d ^ " }"
+  | Recursion (id, body) ->
+      "Recursion " ^ id ^ " { " ^ string_of_expr body.d ^ " }"
+  | Recursor id -> "Recursor " ^ id
+  | Recurse -> "Recurse"
+  | Match (e, arms) ->
+      let arm_str (pat, body_opt) =
+        string_of_expr pat.d ^ (match body_opt with Some b -> " -> " ^ string_of_expr b.d | None -> "")
+      in
+      "Match (" ^ string_of_expr e.d ^ ") { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
+  | Debug dbg ->
+      (match dbg with
+       | DebugPrint (fmt, args) ->
+           "Debug:print(\"" ^ fmt ^ "\"" ^
+           (if args = [] then "" else ", " ^ String.concat ", " (List.map (fun a -> string_of_expr a.d) args)) ^ ")"
+       | DebugFinish -> "Debug:finish")
+  | XOffer (arms, sel_opt) ->
+      let arm_str (arm_ty, body) =
+        string_of_offer_arm_type arm_ty ^ " -> " ^ string_of_expr body.d
+      in
+      let sel_str = match sel_opt with Some s -> " sel=" ^ s | None -> "" in
+      "XOffer" ^ sel_str ^ " { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
+  | Offer arms ->
+      let arm_str (arm_ty, body) =
+        string_of_offer_arm_type arm_ty ^ " -> " ^ string_of_expr body.d
+      in
+      "Offer { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
+
+and string_of_offer_arm_type (arm : offer_arm_type) : string =
+  match arm with
+  | OfferSend sp ->
+      "Send " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
+  | OfferRecv (id, rp) ->
+      "Recv " ^ id ^ " <- " ^ string_of_msg_spec rp.recv_msg_spec
+  | OfferWildcard -> "_"
 
 and string_of_lvalue (lv : lvalue) : string =
   match lv with
