@@ -33,4 +33,10 @@ proc test_comb_loop(){
         dprint "Recieved %d" (x) >>
         cycle 1
     }
+
+    loop{
+        cycle 20 >>
+        dfinish >>
+        cycle 1
+    }
 }

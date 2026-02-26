@@ -260,6 +260,44 @@ let events_prepare_outs events =
     prep_out ev.source
   ) events
 
+(** True iff every path from event forward to a recurse event passes through
+    zero delaying steps.*)
+let rec has_only_empty_path_to_recurse (event : EventGraph.event) visited =
+  let open EventGraph in
+  if List.mem event.id visited then false
+  else if event.is_recurse then
+    (* At the recurse node itself: only Cycles n > 0 is a guaranteed delay *)
+    (match event.source with
+     | `Seq (_, `Cycles n) when n > 0 -> false
+     | _ -> true)
+  else
+    let visited' = event.id :: visited in
+    let rec get_empty src =
+      match src with
+      | `Seq (_, `Cycles n) when n > 0 -> false
+      | `UntilEntry _ | `UntilExit _ -> false (* To Do : verify *)
+      | `Seq _ | `Branch _ | `Root _ ->
+        List.for_all (fun out -> has_only_empty_path_to_recurse out visited') event.outs
+      | `Recurse (sr, _) -> get_empty sr
+      | `Later _ ->
+        List.for_all (fun out -> has_only_empty_path_to_recurse out visited') event.outs
+    in
+    get_empty event.source
+
+(** performs one-time setup and returns a predicate that checks
+    whether a event needs a delay register to prevent
+    a combinational loop after an all-empty-path parallel branch. *)
+let make_branch_root_delay_checker events =
+  events_prepare_outs events;
+  let root_event = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in
+  let dist = event_min_distance_with_later events root_event root_event in
+  fun (e : EventGraph.event) ->
+    let has_zero_delay = IntHashtbl.find dist e.id = 0 in
+    let has_empty_path =
+      List.for_all (fun out -> has_only_empty_path_to_recurse out []) e.outs
+    in
+    has_zero_delay && has_empty_path
+
 let event_is_dominant e1 e2 =
   let preds = (event_predecessors e1) @ [e1] in
   (* max id + 1 *)

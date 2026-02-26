@@ -68,6 +68,15 @@ val events_visit_forward : (EventGraph.event -> unit) -> EventGraph.event list -
 
 val events_prepare_outs : EventGraph.event list -> unit
 
+(** True iff every path from forward to a recurse event passes through
+    zero delaying steps. *)
+val has_only_empty_path_to_recurse : EventGraph.event -> int list -> bool
+
+(**performs one-time setup and returns a predicate that checks
+    whether a branch root event needs a delay register to prevent
+    a combinational loop after an all-empty-path parallel branch. *)
+val make_branch_root_delay_checker : EventGraph.event list -> EventGraph.event -> bool
+
 (** [event_is_dominant e e'] checks if event [e'] is dominant over [e]: [e']
 - appears in all traces with [e], and
 - is reached {i no later than} [e].
