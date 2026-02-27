@@ -808,7 +808,8 @@ and string_of_data_type (dtype : data_type) : string =
   | `Array (d,n) ->
     let n' = match n with
       | ParamEnv.Concrete n -> string_of_int n
-      | ParamEnv.Param _ -> "Param"
+      | ParamEnv.Param s   -> "Param(" ^ s ^ ")"
+      | ParamEnv.Expr _    -> "Expr(...)"
     in
     "Array[" ^ n' ^ "] (" ^ string_of_data_type d ^ ")"
   | `Variant (_, (id_opt_list)) ->
