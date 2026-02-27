@@ -112,8 +112,8 @@
 %left EXCL_EQ DOUBLE_EQ
 %left XOR AND OR PLUS MINUS
 %left DOUBLE_LEFT_ABRACK DOUBLE_RIGHT_ABRACK
-%left ASTERISK
 %left PERIOD
+%left ASTERISK
 %left LEFT_BRACKET
 %nonassoc TILDE UMINUS UAND UOR KEYWORD_IN
 %nonassoc KEYWORD_F
@@ -1131,11 +1131,34 @@ sig_type_chan_local:
   }
 ;
 
+(* A compile-time integer arithmetic expression for use in array sizes.
+   Supports integer literals, named params/macros, and +, -, *, with parentheses. *)
+param_arith_expr:
+| n = INT
+  { ParamEnv.PE_Int n }
+| id = IDENT
+  { ParamEnv.PE_Id id }
+| LEFT_PAREN; e = param_arith_expr; RIGHT_PAREN
+  { e }
+| e1 = param_arith_expr; PLUS;     e2 = param_arith_expr
+  { ParamEnv.PE_Add (e1, e2) }
+| e1 = param_arith_expr; MINUS;    e2 = param_arith_expr
+  { ParamEnv.PE_Sub (e1, e2) }
+| e1 = param_arith_expr; ASTERISK; e2 = param_arith_expr
+  { ParamEnv.PE_Mul (e1, e2) }
+;
+
 int_maybe_param:
 | n = INT
   { ParamEnv.Concrete n }
 | ident = IDENT
   { ParamEnv.Param ident }
+| e1 = param_arith_expr; PLUS;     e2 = param_arith_expr
+  { ParamEnv.Expr (ParamEnv.PE_Add (e1, e2)) }
+| e1 = param_arith_expr; MINUS;    e2 = param_arith_expr
+  { ParamEnv.Expr (ParamEnv.PE_Sub (e1, e2)) }
+| e1 = param_arith_expr; ASTERISK; e2 = param_arith_expr
+  { ParamEnv.Expr (ParamEnv.PE_Mul (e1, e2)) }
 ;
 
 data_type_no_array:
