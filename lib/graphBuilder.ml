@@ -937,10 +937,12 @@ and visit_expr (graph : event_graph) (ci : cunit_info)
     let (wires', w) = WireCollection.add_concat graph.thread_id ci.typedefs ci.macro_defs ws graph.wires in
     graph.wires <- wires';
     let tdtype = List.map (fun ((_, td): expr_node * timed_data) -> td.dtype) tds in
-    if not (List.for_all (fun d -> d = List.hd tdtype) tdtype) && (not is_flat) then
+    let is_flat_logic = List.for_all (fun d -> match d with | `Logic | `Array (`Logic, _) -> true | _ -> false) tdtype in
+    let eff_is_flat = is_flat || is_flat_logic in
+    if not (List.for_all (fun d -> d = List.hd tdtype) tdtype) && (not eff_is_flat) then
       raise (Except.TypeError [Text ("In concat: Incompatible types: " ^ (String.concat ", " (List.map string_of_data_type tdtype))); Except.codespan_local e.span]);
     let new_dtype = ( 
-      match is_flat with 
+      match eff_is_flat with 
       | false -> `Array (List.hd tdtype, ParamEnv.Concrete (List.length es))
       | _ -> `Array (`Logic, ParamEnv.Concrete (w.size))
     ) in
