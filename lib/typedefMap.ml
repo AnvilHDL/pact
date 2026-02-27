@@ -14,6 +14,18 @@ let data_type_name_resolve (type_defs : t) (dtype : data_type) : data_type optio
       ParamConcretise.concretise_dtype x.params params x.body)
   | _ -> Some dtype
 
+let rec evaluate_param_expr (macro_defs : macro_def list) (expr : ParamEnv.param_expr) : int =
+  match expr with
+  | PE_Int n -> n
+  | PE_Id id ->
+      (match List.find_opt (fun (m: macro_def) -> m.id = id) macro_defs with
+      | Some macro -> macro.value
+      | None -> failwith ("Unknown parameter or macro: " ^ id))
+  | PE_Add (e1, e2) -> (evaluate_param_expr macro_defs e1) + (evaluate_param_expr macro_defs e2)
+  | PE_Sub (e1, e2) -> (evaluate_param_expr macro_defs e1) - (evaluate_param_expr macro_defs e2)
+  | PE_Mul (e1, e2) -> (evaluate_param_expr macro_defs e1) * (evaluate_param_expr macro_defs e2)
+  | PE_Div (e1, e2) -> (evaluate_param_expr macro_defs e1) / (evaluate_param_expr macro_defs e2)
+
 let rec data_type_size (type_defs : t) (macro_defs : macro_def list) (dtype : data_type) : int =
   match dtype with
   | `Logic -> 1
@@ -21,12 +33,15 @@ let rec data_type_size (type_defs : t) (macro_defs : macro_def list) (dtype : da
       let n_concrete = match n with
         | ParamEnv.Concrete value -> value
         | ParamEnv.Param param_name ->
-            match List.find_opt (fun (m: macro_def) -> m.id = param_name) macro_defs with
+            begin match List.find_opt (fun (m: macro_def) -> m.id = param_name) macro_defs with
             | Some macro -> macro.value
             | None ->
-                match ParamEnv.get_opt (Param param_name) with
+                begin match ParamEnv.get_opt (Param param_name) with
                 | Some value -> value
                 | None -> failwith ("Unknown parameter " ^ param_name)
+                end
+            end
+        | ParamEnv.Expr expr -> evaluate_param_expr macro_defs expr
       in
       (data_type_size type_defs macro_defs dtype') * n_concrete
   | `Named (type_name, params) ->

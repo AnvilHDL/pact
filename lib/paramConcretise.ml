@@ -28,7 +28,8 @@ and concretise_dtype_params int_env type_env (dtype : data_type) : data_type =
           Printf.eprintf "[ERROR] Failed to concretise array size parameter: %s\n"
             (match n with
              | ParamEnv.Concrete i -> Printf.sprintf "Concrete(%d)" i
-             | ParamEnv.Param p -> Printf.sprintf "Param(%s)" p);
+             | ParamEnv.Param p   -> Printf.sprintf "Param(%s)" p
+              | ParamEnv.Expr _    -> "Expr(...)");
           failwith "Array size concretisation failed"
     in
     `Array (base_type, size)
@@ -138,37 +139,58 @@ let concretise_array_dimm params param_values (dimm : Lang.array_dimensions) : a
   ) int_param_env in
   let mappings = String.concat "" mappings in
 
-  let get_concrete_params n = 
+  (* Evaluate a compile-time param_expr by substituting params from the environment *)
+  let rec eval_param_expr (pe : ParamEnv.param_expr) : int =
+    match pe with
+    | ParamEnv.PE_Int n -> n
+    | ParamEnv.PE_Id  id ->
+        (match ParamEnv.concretise_and_get int_param_env (ParamEnv.Param id) with
+         | Some v -> v
+         | None   ->
+             Printf.eprintf "[ERROR] Unknown parameter '%s' in array size expression | Current Mappings = %s\n" id mappings;
+             failwith ("Unknown parameter in array size expression: " ^ id))
+    | ParamEnv.PE_Add (e1, e2) -> eval_param_expr e1 + eval_param_expr e2
+    | ParamEnv.PE_Sub (e1, e2) -> eval_param_expr e1 - eval_param_expr e2
+    | ParamEnv.PE_Mul (e1, e2) -> eval_param_expr e1 * eval_param_expr e2
+    | ParamEnv.PE_Div (e1, e2) ->
+        let d = eval_param_expr e2 in
+        if d = 0 then failwith "Division by zero in array size expression"
+        else eval_param_expr e1 / d
+  in
+
+  let show_param n =
+    match n with
+    | ParamEnv.Concrete i -> Printf.sprintf "Concrete(%d)" i
+    | ParamEnv.Param    p -> Printf.sprintf "Param(%s)" p
+    | ParamEnv.Expr     _ -> "Expr(...)"
+  in
+
+  let get_concrete_params n =
     match ParamEnv.get_opt n with
     | Some v -> v
-    | None -> failwith "Unreachable : Please report bug"
+    | None   -> failwith "Unreachable : Please report bug"
   in
+
+  (* Unify resolution of Concrete, Param, and Expr into a Concrete result *)
+  let resolve_dim n =
+    match n with
+    | ParamEnv.Expr pe ->
+        ParamEnv.Concrete (eval_param_expr pe)
+    | _ ->
+        (match concretise_and_get int_param_env n with
+         | Some v -> ParamEnv.Concrete v
+         | None   ->
+             Printf.eprintf "[ERROR] Failed to concretise array dimension parameter: %s | Current Mappings = %s\n"
+               (show_param n) mappings;
+             failwith "Array dimension concretisation failed")
+  in
+
   let rec concretise_dimm dimm =
     match dimm with
     | Lang.OneDim n ->
-      let n' = match concretise_and_get int_param_env n with
-        | Some v -> ParamEnv.Concrete v
-        | None ->
-          Printf.eprintf "[ERROR] Failed to concretise array dimension parameter: %s | Current Mappings = %s\n"
-            (match n with
-             | ParamEnv.Concrete i -> Printf.sprintf "Concrete(%d)" i
-             | ParamEnv.Param p -> Printf.sprintf "Param(%s)" p)
-            mappings;
-          failwith "Array dimension concretisation failed"
-      in
-      Lang.OneDimmension (get_concrete_params n')
+        Lang.OneDimmension (get_concrete_params (resolve_dim n))
     | Lang.MultiDim (n, rest) ->
-      let rest' =  concretise_dimm rest in
-      let n' = match concretise_and_get int_param_env n with
-        | Some v -> ParamEnv.Concrete v
-        | None ->
-          Printf.eprintf "[ERROR] Failed to concretise array dimension parameter: %s | Current Mappings = %s\n"
-            (match n with
-             | ParamEnv.Concrete i -> Printf.sprintf "Concrete(%d)" i
-             | ParamEnv.Param p -> Printf.sprintf "Param(%s)" p)
-            mappings;
-          failwith "Array dimension concretisation failed"
-      in
-      Lang.MultiDimmension ((get_concrete_params n'), rest')
+        let rest' = concretise_dimm rest in
+        Lang.MultiDimmension (get_concrete_params (resolve_dim n), rest')
   in
   concretise_dimm dimm

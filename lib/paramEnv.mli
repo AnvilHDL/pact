@@ -2,7 +2,19 @@
 a value that may come from a parameter. The {!param_env} type
 describes a parameter environment use during concretisation. *)
 
-type 'a maybe_param = Param of string | Concrete of 'a
+(** A compile-time arithmetic expression for integer calculations (e.g. N*32, A+B-1). *)
+type param_expr =
+  | PE_Int of int
+  | PE_Id  of string
+  | PE_Add of param_expr * param_expr
+  | PE_Sub of param_expr * param_expr
+  | PE_Mul of param_expr * param_expr
+  | PE_Div of param_expr * param_expr
+
+type 'a maybe_param =
+  | Param    of string       (** a named compile-time parameter *)
+  | Concrete of 'a           (** a concrete (known) value *)
+  | Expr     of param_expr   (** a compile-time arithmetic expression, only valid for int *)
 type 'a param_env
 
 (** Create an empty parameter environment. *)
