@@ -4,6 +4,8 @@ open Lang
 open GraphBuildContext
 open DataTypeCheck
 
+type build_context = Typing.build_context
+module BuildContext = Typing.BuildContext
 
 let unwrap_or_err err_msg err_span opt =
   match opt with
@@ -21,8 +23,7 @@ List.iter (fun ((msg_spec : message_specifier), message_def) ->
       Except.codespan_local span])
   ) msg_list
 
-type build_context = Typing.build_context
-module BuildContext = Typing.BuildContext
+
 
 let binop_td_const graph (ci:cunit_info) _ctx span op n td =
   let w = unwrap_or_err "Invalid value" span td.w in
@@ -108,10 +109,6 @@ let rec lvalue_info_of graph (ci:cunit_info) ctx span lval =
       lval_range = {lval_info'.lval_range with subreg_range_interval = (le_n, len)};
       lval_dtype = dtype
     }
-
-
-
-
 
 and construct_graphIR (graph : event_graph) (ci : cunit_info)
                     (ctx : build_context) (e : expr_node) : timed_data =
@@ -273,7 +270,6 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         let ctx' = BuildContext.wait graph ctx td1.lt.live in
         construct_graphIR graph ci ctx' e2
       | Let ([ident], dtype, inner_e) ->
-        Printf.eprintf "Processing let binding for %s in wait expression\n" ident;
         let td1 = construct_graphIR graph ci ctx inner_e in
         let err_string = DTypeCheck.fmt_let_binding ident dtype td1.dtype in
         check_dtype err_string dtype td1.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;

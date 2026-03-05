@@ -715,8 +715,9 @@ let graph_owned_regs g =
 let message_is_immediate msg is_send =
   (is_send && msg.recv_sync <> Dynamic) || (not is_send && msg.send_sync <> Dynamic)
 
-
-  let rec recurse_unfold expr_full_node expr_node =
+(** Substitutes every {!Lang.Recurse} leaf in [expr_node] with
+    [expr_full_node], effectively unrolling one recursion level. *)
+let rec recurse_unfold expr_full_node expr_node =
   let unfold = recurse_unfold expr_full_node in
   if expr_node.d = Recurse then
     expr_full_node
@@ -809,7 +810,6 @@ let message_is_immediate msg is_send =
     {expr_node with d = expr'}
 
 module IntHashTbl = Hashtbl.Make(Int)
-
 
 (** Determine how many times [expr_node] must be unrolled so that the total
     body latency is at least as large as the recursion gap, then perform those

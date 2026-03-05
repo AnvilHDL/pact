@@ -8,8 +8,9 @@ let unwrap_or_err err_msg err_span opt =
   | None -> raise (event_graph_error_default err_msg err_span)
 
 module Typing = struct
-  type binding = {
-    binding_val : timed_data;
+  
+  type 'a binding  = {
+    binding_val : 'a;
     mutable binding_used : bool; (** if the binding has been used (to enforce relevance) *)
   }
 
@@ -17,10 +18,10 @@ module Typing = struct
     binding.binding_used <- true;
     binding.binding_val
 
-  type context = binding Utils.string_map
+  type 'a context = 'a binding Utils.string_map
 
   type build_context = {
-    cg_lt_ctx : context;
+    cg_lt_ctx : timed_data context;
     current : event;
     shared_vars_info : (identifier, shared_var_info) Hashtbl.t;
     rec_var_map : (identifier*int) list; (* map from recursive variable to event id of the root of the recursion *)
@@ -130,10 +131,10 @@ module Typing = struct
     let e = delay_pat_globalise msg.endpoint stype.lifetime.e in
     {w; lt = {live = event_received; dead = [(event_received, e)]}; reg_borrows = []; dtype = stype.dtype}
 
-  let context_add (ctx : context) (v : identifier) (d : timed_data) : context =
+  let context_add (ctx : timed_data context) (v : identifier) (d : timed_data) : timed_data context =
     Utils.StringMap.add v {binding_val = d; binding_used = false} ctx
-  let context_empty : context = Utils.StringMap.empty
-  let context_lookup (ctx : context) (v : identifier) = Utils.StringMap.find_opt v ctx
+  let context_empty = Utils.StringMap.empty
+  let context_lookup (ctx : timed_data context) (v : identifier) = Utils.StringMap.find_opt v ctx
   (* checks if lt lives at least as long as required *)
 
   let context_clear_used =
