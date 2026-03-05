@@ -132,29 +132,19 @@ val event_is_msg_end : Lang.message_specifier -> EventGraph.event -> bool
 (** Returns the list of immediate predecessors. *)
 val imm_preds : EventGraph.event -> EventGraph.event list
 
-val exists_path_prime : (EventGraph.event_graph_prime) -> int -> int -> bool
-
-val find_all_paths_prime : (EventGraph.event_graph_prime) -> int -> int -> int list list
-
-val get_all_reachable_prime : (EventGraph.event_graph_prime) -> int -> int list
-
-val filter_paths_with_event : int list list -> int list -> int list list
-
-val filter_paths_between_events : int list list -> int list -> int list list
-
-val filter_paths_with_multiple_events : int list list -> int list list -> int list list
-
-type session_node = {
-  session_msg : Lang.message_specifier;
-  mutable session_childs : Lang.message_specifier list;
-  event_id : int; (** the event where this message action occurs *)
-}
-
-type session_graph = {
-  session_nodes : session_node list;
-}
-
-
-val create_session_graph : EventGraph.event_graph -> session_graph
-
-val print_session_graph : session_graph -> unit
+(** Unroll [expr_node] the minimum number of times required so that the body
+    latency exceeds the recursion gap, as computed by a lightweight dry-run of
+    [construct_graphIR] on a temporary graph.  [construct_graphIR] is the IR-building
+    traversal from {!GraphBuilder} and is accepted as a parameter to avoid a
+    circular module dependency. *)
+val recurse_unfold_for_checks :
+  (EventGraph.event_graph ->
+   EventGraph.cunit_info ->
+   GraphBuildContext.Typing.build_context ->
+   Lang.expr_node ->
+   EventGraph.timed_data) ->
+  EventGraph.cunit_info ->
+  (Lang.identifier, EventGraph.shared_var_info) Hashtbl.t ->
+  EventGraph.event_graph ->
+  Lang.expr_node ->
+  Lang.expr_node

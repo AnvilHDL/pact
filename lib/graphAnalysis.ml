@@ -1,5 +1,6 @@
 open Lang
 open EventGraph
+open GraphBuildContext
 
 (* TODO: to use arrays instead of hash tables *)
 
@@ -715,291 +716,122 @@ let message_is_immediate msg is_send =
   (is_send && msg.recv_sync <> Dynamic) || (not is_send && msg.send_sync <> Dynamic)
 
 
-
-(* Check if there exists a path from event with id 'from_id' to event with id 'to_id' *)
-let exists_path_prime (graph_prime : event_graph_prime) (from_id : int) (to_id : int) : bool =
-  let visited = Hashtbl.create (List.length graph_prime.event_nodes) in
-  let event_map = 
-    List.fold_left (fun acc ev -> Hashtbl.add acc ev.ev_id ev; acc) 
-                   (Hashtbl.create (List.length graph_prime.event_nodes)) 
-                   graph_prime.event_nodes in
-
-  let rec dfs current_id =
-    if current_id = to_id then true
-    else if Hashtbl.mem visited current_id then false
-    else (
-      Hashtbl.add visited current_id ();
-      match Hashtbl.find_opt event_map current_id with
-      | None -> false
-      | Some event_prime -> List.exists (fun (child : event_child) -> dfs child.cid) event_prime.child
-    )
-  in
-  dfs from_id
-
-(* Get all events reachable from the given event id *)
-let get_all_reachable_prime (graph_prime : event_graph_prime) (from_id : int) : int list =
-  let visited = Hashtbl.create (List.length graph_prime.event_nodes) in
-  let reachable = ref [] in
-  let event_map = 
-    List.fold_left (fun acc ev -> Hashtbl.add acc ev.ev_id ev; acc) 
-                   (Hashtbl.create (List.length graph_prime.event_nodes)) 
-                   graph_prime.event_nodes in
-
-  let rec dfs current_id =
-    if not (Hashtbl.mem visited current_id) then (
-      Hashtbl.add visited current_id ();
-      reachable := current_id :: !reachable;
-      match Hashtbl.find_opt event_map current_id with
-      | None -> ()
-      | Some event_prime -> List.iter (fun (child : event_child) -> dfs child.cid) event_prime.child
-    )
-  in
-  dfs from_id;
-  List.rev !reachable
-
-(* Find all paths from 'from_id' to 'to_id' (returns list of path as list of event ids) *)
-let find_all_paths_prime (graph_prime : event_graph_prime) (from_id : int) (to_id : int) : int list list =
-  let event_map = 
-    List.fold_left (fun acc ev -> Hashtbl.add acc ev.ev_id ev; acc) 
-                   (Hashtbl.create (List.length graph_prime.event_nodes)) 
-                   graph_prime.event_nodes in
-
-  let rec find_paths current_id path visited =
-    if current_id = to_id then [List.rev (current_id :: path)]
-    else if List.mem current_id visited then []
-    else (
-      match Hashtbl.find_opt event_map current_id with
-      | None -> []
-      | Some event_prime -> 
-          List.fold_left (fun acc (child : event_child) ->
-            let new_paths = find_paths child.cid (current_id :: path) (current_id :: visited) in
-            acc @ new_paths
-          ) [] event_prime.child
-    )
-  in
-  find_paths from_id [] []
-
-(* cuts the path till reaching the event*)
-let filter_paths_with_event (paths: int list list) (event_ids: int list) : int list list =
-  let filter_path = List.filter (
-          fun p -> List.exists(fun ge -> List.mem ge p)event_ids
-  ) paths
-  in 
-  let split_path_on_events p =
-    let rec aux acc current = function
-      | [] -> if current = [] then List.rev acc else List.rev (List.rev current :: acc)
-      | x :: xs ->
-          if List.mem x event_ids then
-            if current = [] then aux acc [x] xs
-            else aux (List.rev current :: acc) [x] xs
-          else
-            aux acc (x :: current) xs
+  let rec recurse_unfold expr_full_node expr_node =
+  let unfold = recurse_unfold expr_full_node in
+  if expr_node.d = Recurse then
+    expr_full_node
+  else
+    let expr' = match expr_node.d with
+    | Literal _ | Identifier _
+    | Cycle _ | Sync _
+    | Ready _ | Read _ | Probe _
+    | Debug DebugFinish
+    | Recv _ -> expr_node.d
+    | Call (ident, expr_nodes) ->
+      Call (ident, List.map unfold expr_nodes)
+    | Assign (lval, expr_node') ->
+      Assign (lval, unfold expr_node')
+    | Binop (op, e1, e2) ->
+      ( match e2 with
+        | `List es2 ->
+          let es2' = List.map unfold es2 in
+          let e1' = unfold e1 in
+          Binop (op, e1', `List es2')
+        | `Single e2' ->
+          let e2n = unfold e2' in
+          Binop (op, unfold e1, (`Single e2n))
+      )
+    | Recursion (id, body) ->
+      Recursion (id, unfold body)
+    | Recursor id ->
+      Recursor id
+    | Unop (op, expr_node') ->
+      Unop (op, unfold expr_node')
+    | Tuple expr_nodes ->
+      Tuple (List.map unfold expr_nodes)
+    | Let (idents, dtype, e) ->
+      Let (idents, dtype, unfold e)
+    | Join (e1, e2) ->
+      Join (unfold e1, unfold e2)
+    | Wait (e1, e2) ->
+      Wait (unfold e1, unfold e2)
+    | IfExpr (e1, e2, e3) ->
+      IfExpr (unfold e1, unfold e2, unfold e3)
+    | TrySend (sp, e1, e2) ->
+      let sp = {sp with send_data = unfold sp.send_data} in
+      TrySend (sp, unfold e1, unfold e2)
+    | TryRecv (ident, rp, e1, e2) ->
+      TryRecv (ident, rp, unfold e1, unfold e2)
+    | Construct (cs, e') ->
+      Construct (cs, Option.map unfold e')
+    | Record (ident, vs, base) ->
+      Record (ident,
+        List.map (fun (i, e) -> (i, unfold e)) vs,
+        Option.map unfold base
+      )
+    | Index (e', idx) ->
+      Index (unfold e', idx)
+    | Indirect (e', ident) ->
+      Indirect (unfold e', ident)
+    | Cast (e', dtype) ->
+      Cast (unfold e', dtype)
+    | Concat (es, is_flat) ->
+      Concat (List.map unfold es, is_flat)
+    | Match (e, arms) ->
+      Match (unfold e,
+        List.map (fun (m, eop) -> (m, Option.map unfold eop)) arms
+      )
+    | Debug (DebugPrint (format, es)) ->
+      Debug (DebugPrint (format, List.map unfold es))
+    | Send sp ->
+      Send {sp with send_data = unfold sp.send_data}
+    | SharedAssign (ident, e') ->
+      SharedAssign (ident, unfold e')
+    | List es ->
+      List (List.map unfold es)
+    | XOffer (arms, selector) ->
+      XOffer (
+        List.map (fun (arm_type, e_body) ->
+          (arm_type, unfold e_body)
+        ) arms,
+        selector
+      )
+    | Offer arms ->
+      Offer (
+        List.map (fun (arm_type, e_body) ->
+          (arm_type, unfold e_body)
+        ) arms
+      )
+    | Until (cond, body) ->
+      Until (unfold cond, unfold body)
+    | Recurse -> failwith "Shouldn't reach here!"
     in
-    let segments = aux [] [] p |> List.filter (fun seg -> seg <> []) in
-    segments
-  in
-  let acc = ref [] in
-  List.iter (fun p -> acc := split_path_on_events p @ !acc) filter_path;
-  let trimmed_paths = !acc in
-  (* filter for duplicates *)
-  let unique_paths = Hashtbl.create (List.length trimmed_paths) in
-  List.iter (fun p -> Hashtbl.replace unique_paths p ()) trimmed_paths;
-  let trimmed_paths = Hashtbl.fold (fun k _ acc -> k :: acc) unique_paths [] in
-(* 
-  Printf.eprintf "The trimmed paths are  of len %d \n" (List.length (List.hd trimmed_paths));
-  List.iter(fun p -> Printf.eprintf "original path : " ;List.iter (fun ge -> Printf.eprintf "%d " ge) p; Printf.eprintf "\n") paths;
-  List.iter(
-    fun p -> Printf.eprintf "trimmed path : " ;List.iter (fun ge -> Printf.eprintf "%d " ge) p; Printf.eprintf "\n"
-  ) trimmed_paths; *)
-  trimmed_paths
+    {expr_node with d = expr'}
 
-(* cuts the path and returns segment in between the events*)
-let filter_paths_between_events (paths : int list list) (event_ids : int list) : int list list =
-  let filter_path = List.filter (
-          fun p -> List.exists (fun ge -> List.mem ge event_ids) p
-  ) paths
-  in 
-  let extract_segment_split p = 
-    let start = ref false in
-    let rec aux acc current = function
-    (* if empty and start is false discard the current segment and return the collection *)
-      | [] -> List.rev acc 
-      | x :: xs ->
-        if List.mem x event_ids then
-          if not !start then (
-            start := true;
-            aux acc [x] xs
-          ) else (
-            (* end of segment *)
-            let new_acc = List.rev (x :: current) :: acc in
-            aux new_acc [] xs
-          )
-      else aux acc (x :: current) xs
-  in
-  aux [] [] p
-  in
-  let acc = ref [] in
-  List.iter (fun p -> acc := extract_segment_split p @ !acc) filter_path;
-  let trimmed_paths = !acc in
-  (* filter for duplicates *)
-  let unique_paths = Hashtbl.create (List.length trimmed_paths) in
-  List.iter (fun p -> Hashtbl.replace unique_paths p ()) trimmed_paths;
-  let trimmed_paths = Hashtbl.fold (fun k _ acc -> k :: acc) unique_paths [] in
-
-  trimmed_paths
+module IntHashTbl = Hashtbl.Make(Int)
 
 
-let filter_paths_with_multiple_events (paths: int list list) (event_ids: int list list) : int list list =
-  (* Check if a path contains multiple events from the event pool of event ids list list *)
-  let filter_path = List.filter (
-          fun p -> 
-            let count = List.fold_left (fun acc event_pool ->
-              if List.exists (fun ge -> List.mem ge p) event_pool then acc + 1 else acc
-            ) 0 event_ids in
-            count >= 2
-  ) paths
-  in 
-  filter_path
-
-
-type session_node = {
-  session_msg : Lang.message_specifier;
-  mutable session_childs : Lang.message_specifier list;
-  event_id : int; (* the event where this message action occurs *)
-}
-
-type session_graph = {
-  session_nodes : session_node list;
-}
-
-
-let extract_message_from_action action =
-  match action with
-  | DebugPrint _ | DebugFinish | RegAssign _ | PutShared _ -> None
-  | ImmediateSend (msg, _) -> Some (msg) (* true = send *)
-  | ImmediateRecv msg -> Some (msg) (* false = receive *)
-
-
-let extract_message_from_sustained_action sa =
-  match sa.ty with
-  | Send (msg, _) -> Some (msg) (* true = send *)
-  | Recv msg -> Some (msg) (* false = receive *)
-
-
-
-let create_session_graph (g: event_graph) : session_graph = 
-  let visited_events = Hashtbl.create (List.length g.events) in
-  let all_nodes = ref [] in
-
-  (* Process the current event to extract message actions *)
-  let process_event event =
-    let action_nodes = List.fold_left (fun acc action ->
-      match extract_message_from_action action.d with
-      | Some (msg) ->
-        let node = { session_msg = msg; session_childs = []; event_id = event.id } in
-        node :: acc
-      | None -> acc
-    ) [] event.actions in
-    
-    let sustained_nodes = List.fold_left (fun acc sa ->
-      match extract_message_from_sustained_action sa.d with
-      | Some (msg) ->
-        let node = { session_msg = msg; session_childs = []; event_id = event.id } in
-        node :: acc
-      | None -> acc
-    ) [] event.sustained_actions in
-    
-    action_nodes @ sustained_nodes
-  in
-
-  (* Traverse over graphs bfs add children as session nodes *)
-  let rec bfs current_event =
-    if not (Hashtbl.mem visited_events current_event.id) then (
-      Hashtbl.add visited_events current_event.id ();
-      let nodes = process_event current_event in
-      all_nodes := nodes @ !all_nodes;
-      List.iter bfs current_event.outs
-    )
-  in
-  
-  (* Find root events and start BFS from them *)
-  let root_events = List.filter (fun e ->
-    match e.source with
-    | `Root _ -> true
-    | _ -> false
-  ) g.events in
-  
-  List.iter bfs root_events;
-  
-  (* Build connections between nodes based on event ordering *)
-  let event_to_nodes = Hashtbl.create (List.length !all_nodes) in
-  List.iter (fun node ->
-    let current_nodes = Hashtbl.find_opt event_to_nodes node.event_id |> Option.value ~default:[] in
-    Hashtbl.replace event_to_nodes node.event_id (node :: current_nodes)
-  ) !all_nodes;
-  
-  (* For each node, connect it to nodes in successor events *)
-  List.iter (fun node ->
-    let current_event = List.find (fun e -> e.id = node.event_id) g.events in
-    (* Use direct outgoing edges to connect to successor nodes *)
-    List.iter (fun succ_event ->
-      match Hashtbl.find_opt event_to_nodes succ_event.id with
-      | Some succ_nodes ->
-        List.iter (fun succ_node ->
-          if not (List.mem succ_node.session_msg node.session_childs) then
-            node.session_childs <- succ_node.session_msg :: node.session_childs
-        ) succ_nodes
-      | None -> ()
-    ) current_event.outs
-  ) !all_nodes;
-  
-  { session_nodes = !all_nodes }
-
-
-
-let print_session_graph (sg: session_graph) =
-
-  let node_map = Hashtbl.create (List.length sg.session_nodes) in
-  List.iter (fun node ->
-    Hashtbl.add node_map (node.session_msg.endpoint ^ "." ^ node.session_msg.msg) node
-  ) sg.session_nodes;
-  
-  let visited = Hashtbl.create (List.length sg.session_nodes) in
-  let msg_to_string msg = msg.endpoint ^ "." ^ msg.msg in
-  
-  let rec print_node node =
-    let node_key = msg_to_string node.session_msg in
-    if Hashtbl.mem visited node_key then
-      Printf.sprintf "(%s)" node_key
-    else (
-      Hashtbl.add visited node_key ();
-      match node.session_childs with
-      | [] -> node_key (* leaf node *)
-      | [child] -> 
-        let child_node = Hashtbl.find_opt node_map (msg_to_string child) in
-        (match child_node with
-         | Some cn -> Printf.sprintf "%s -> %s" node_key (print_node cn)
-         | None -> Printf.sprintf "%s -> %s" node_key (msg_to_string child))
-      | children ->
-        (* multiple children: node -> {child1 ^ child2 ^ ...} *)
-        let child_strs = List.map (fun child ->
-          let child_node = Hashtbl.find_opt node_map (msg_to_string child) in
-          match child_node with
-          | Some cn -> print_node cn
-          | None -> msg_to_string child
-        ) children in
-        Printf.sprintf "%s -> {%s}" node_key (String.concat " ^ " child_strs)
-    )
-  in
-  
-  let all_child_msgs = List.concat_map (fun node -> node.session_childs) sg.session_nodes in
-  let root_nodes = List.filter (fun node ->
-    not (List.exists (fun child_msg -> 
-      child_msg.endpoint = node.session_msg.endpoint && 
-      child_msg.msg = node.session_msg.msg
-    ) all_child_msgs)
-  ) sg.session_nodes in
-  
-  let graph_strings = List.map print_node root_nodes in
-  Printf.eprintf "Session Graph: %s\n" (String.concat " | " graph_strings)
-  
+(** Determine how many times [expr_node] must be unrolled so that the total
+    body latency is at least as large as the recursion gap, then perform those
+    unrolls.  [construct_graphIR] is the IR-building traversal from {!GraphBuilder}
+    and is passed here to avoid a circular module dependency. *)
+let recurse_unfold_for_checks construct_graphIR ci shared_vars_info graph (expr_node : Lang.expr_node) =
+  let tmp_graph = {graph with last_event_id = -1} in
+  let td = construct_graphIR tmp_graph ci
+    (Typing.BuildContext.create_empty tmp_graph shared_vars_info true)
+    expr_node in
+  (* now just check the total *)
+  let root = List.find (fun e -> e.source = `Root None) tmp_graph.events in
+  let recurse = List.find (fun e -> e.is_recurse) tmp_graph.events in
+  let dists = event_min_distance_with_later tmp_graph.events root root in
+  let full_dist = IntHashTbl.find dists td.lt.live.id in
+  let recurse_dist = IntHashTbl.find dists recurse.id in
+  if recurse_dist = 0 then
+    raise (event_graph_error_default "Recurse delay must be greater than 0!" expr_node.span);
+  (* the number of times to unfold is minimum for the recurse time to first pass the end event *)
+  let unfold_times = full_dist / recurse_dist in
+  let cur_expr = ref expr_node in
+  for _ = 1 to unfold_times do
+    cur_expr := recurse_unfold !cur_expr expr_node
+  done;
+  !cur_expr
