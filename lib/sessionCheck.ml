@@ -71,6 +71,36 @@ let rec remove_type_choice sty1 sty2 =
   | StySeq (s1, s2) ->
       StySeq (remove_type_choice s1 sty2, s2)
   | _ -> sty1
+
+let resolve_recvar (recvar_map : (identifier * session_type) list) sty =
+  let rec aux seen st =
+    match st with
+    | StyVar id ->
+        if List.mem id seen then
+          st
+        else
+          (match List.find_opt (fun (var_id, _) -> var_id = id) recvar_map with
+          | Some (_, bound_sty) -> aux (id :: seen) bound_sty
+          | None -> st)
+    | _ -> st
+  in
+  aux [] sty
+
+let normalize_for_match (recvar_map : (identifier * session_type) list) sty =
+  let rec aux st =
+    let st' = resolve_recvar recvar_map st in
+    match st' with
+    | StySeq (StyTrue, tail) -> aux tail
+    | StySeq (head, StyTrue) -> aux head
+    | StyParallel (StyTrue, StyTrue) -> StyTrue
+    | _ -> st'
+  in
+  aux sty
+
+let session_type_matches recvar_map lhs rhs =
+  let lhs_norm = normalize_for_match recvar_map lhs in
+  let rhs_norm = normalize_for_match recvar_map rhs in
+  lhs_norm = rhs_norm
       
 
   
@@ -239,7 +269,7 @@ let check_generalized_session
     module_name =
   
   if Option.is_none g.interface_protocol then
-      Printf.eprintf "[Generalized Session Type Check] No interface protocol specified, skipping check.\n"
+      Printf.eprintf "[Warning] No interface protocol specified for thread %d in module %s, skipping check.\n " (g.thread_id+1) module_name
   
   else
     let protocol_node = Option.get g.interface_protocol in
@@ -298,24 +328,32 @@ let check_generalized_session
           List.iter (fun child_ev ->
             match child_ev.session_type with
             | Some sty_node' -> 
-
-              let found = List.exists (fun hc ->
-                match hc.head with
-                | Terminal ->
-                    if not hc.visited then begin
-                      let cont = hc.cont in
-                      if sty_node'.d = cont then(
-                        hc.visited <- true;
-                        true
-                      )
-                      else false
-                    end
-                    else false
+              let should_skip_terminal_check =
+                match child_ev.source with
+                | `Branch _ -> true
                 | _ -> false
-              )head_conts in
-              if not found then
-                error_handler g (Printf.sprintf "Expected Terminal head-continuation for already assigned child event %d | However found %s"
-                  child_ev.id (Lang.string_of_protocol sty_node'.d)) g.thread_codespan module_name;
+              in
+              if should_skip_terminal_check then
+                is_propogated := true
+              else begin
+                let found = List.exists (fun hc ->
+                  match hc.head with
+                  | Terminal ->
+                      if not hc.visited then begin
+                        let cont = hc.cont in
+                        if session_type_matches (hc.recvar_map @ rec_var_cont) sty_node'.d cont then(
+                          hc.visited <- true;
+                          true
+                        )
+                        else false
+                      end
+                      else false
+                  | _ -> false
+                )head_conts in
+                if not found then
+                  error_handler g (Printf.sprintf "Expected Terminal head-continuation for already assigned child event %d | However found %s"
+                    child_ev.id (Lang.string_of_protocol sty_node'.d)) g.thread_codespan module_name
+              end;
             | _ ->
               let rec assign_session_type src = 
               match src with

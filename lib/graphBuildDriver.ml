@@ -12,7 +12,7 @@ open EventGraph
     @param graph    A freshly-constructed, empty event-graph skeleton for this
                     thread (thread_id, channels, regs, messages already set).
     @param e        The thread body expression to compile. *)
-let build_thread config ci shared_vars_info construct_graphIR (graph : event_graph) (e : Lang.expr_node) =
+let build_thread config ci shared_vars_info construct_graphIR (graph : event_graph) (e : Lang.expr_node) module_name =
   (* Round 1: optional lifetime-check pass on a disposable graph clone *)
   let graph_opt =
     if (not config.Config.disable_lt_checks) || config.Config.two_round_graph then (
@@ -44,6 +44,7 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
     let td  = construct_graphIR graph ci ctx e in
     graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
     graph.is_general_recursive <- graph.last_event_id <> td.ld.lt.live.id;
+    SessionCheck.check_generalized_session config graph module_name;
     let g' = GraphOpt.optimize config false ci graph in
     GraphOpt.combinational_codegen config g' ci
 
@@ -135,6 +136,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
         raise (Except.TypeError [Text (Printf.sprintf "Process %s must have at least one thread!" proc.name)]);
 
       let proc_threads = List.mapi (fun i ((e, reset_by) : expr_node * message_specifier option) ->
+        let protocol = if i = 0 then proc_interface_protocol else None in
         let graph = {
           thread_id = i;
           events = [];
@@ -149,9 +151,9 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           thread_codespan = e.span;
           comb = false;
           protocols = protocol_map;
-          interface_protocol =  proc_interface_protocol;
+          interface_protocol =  protocol;
         } in
-        let g = build_thread config ci shared_vars_info GraphBuilder.construct_graphIR graph e in
+        let g = build_thread config ci shared_vars_info GraphBuilder.construct_graphIR graph e module_name in
         (g, reset_by)
       ) body.threads in
       {name = module_name; extern_module = None;

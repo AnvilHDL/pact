@@ -217,7 +217,8 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     Typing.derived_data (Some w) td.ld
   | Tuple [] -> Typing.const_data graph None (unit_dtype) ctx.current
   | Let (_idents, _, e) ->
-    raise (Except.TypeError [Text ("Let expressions cannot be unused! | %s"^(string_of_expr e.d)); Except.codespan_local e.span])
+
+    raise (Except.TypeError [Text ("Let expressions cannot be unused! "^(string_of_expr e.d)); Except.codespan_local e.span])
   | Join (e1, e2) ->
     (
       match e1.d with
