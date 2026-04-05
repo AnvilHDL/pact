@@ -29,7 +29,7 @@ ifdef NOOPT
 endif
 
 ifdef SESSIONOFF
-	ANVIL_FLAGS += -disable-session-checks
+	ANVIL_FLAGS += -disable-session-checks -disable-compat-checks
 endif
 
 $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
