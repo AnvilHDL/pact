@@ -75,6 +75,23 @@ type transition = {
   mutable in_winning : bool;
 }
 
+type transition_outgoing_index = (int, transition list) Hashtbl.t
+
+let build_outgoing_index (transitions: transition list) : transition_outgoing_index =
+  let index = Hashtbl.create 16 in
+  List.iter (fun t ->
+    let existing =
+      try Hashtbl.find index t.from_state
+      with Not_found -> []
+    in
+    Hashtbl.replace index t.from_state (t :: existing)
+  ) transitions;
+  index
+
+let get_outgoing_from_index (index: transition_outgoing_index) (state_id: int) : transition list =
+  try Hashtbl.find index state_id
+  with Not_found -> []
+
 let print_string_of_transitions (transitions: transition list) : unit =
   List.iter (fun t ->
     let label_str = 
