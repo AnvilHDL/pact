@@ -125,14 +125,24 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
         in
 
         let current_state_offer_set_arr =
-          Array.init automata_count (fun idx -> current_state_info_arr.(idx).offers)
+          Array.init automata_count (fun idx -> (
+            let transitions = List.nth transitions_list (idx) in
+            let transition_for_this_state = List.filter (fun t -> t.from_state = current_states_arr.(idx)) transitions in
+            let offers = List.map( fun t -> 
+                List.filter_map (function
+                  | Action m -> Some m
+                  | _ -> None
+                ) (LabelSet.elements t.label)
+            )transition_for_this_state |> List.filter (fun x -> x <> []) in
+            offers
+          ))
         in
 
         let offers_from_other_states_arr =
           Array.init automata_count (fun exc ->
             let offers = ref [] in
             for idx = 0 to automata_count - 1 do
-              if idx <> exc then offers := current_state_offer_set_arr.(idx) @ !offers
+              if idx <> exc then offers := List.flatten(current_state_offer_set_arr.(idx)) @ !offers
             done;
             !offers
           )
@@ -193,10 +203,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )
           in
 
+          let create_message_specifier_set msg_list =
+            List.fold_left (fun acc msg -> MsgSpecSet.add msg acc) MsgSpecSet.empty msg_list
+          in
           let satisfiable_offers_arr =
             Array.init automata_count (fun i ->
-              List.filter_map (fun c ->
-                if MsgSpecSet.mem c offers_set_arr.(i) then Some c else None
+              List.filter_map (fun (c : message_specifier list)->
+                if MsgSpecSet.subset (create_message_specifier_set c) offers_set_arr.(i) then Some c else None
               ) current_state_offer_set_arr.(i)
             )
           in
@@ -206,10 +219,16 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           (* Printf.eprintf "Product State %d: Current States [%s], Satisfiable Offers per state: [%s]\n" prod_state_id (String.concat "," (List.map string_of_int current_states)) (String.concat " | " (List.map (fun ol -> "[" ^ (String.concat "," (List.map Lang.string_of_msg_spec ol)) ^ "]") satisfiable_offers)); *)
 
           (* this returns next states with their corresponding offers *)
-          let next_states = List.mapi(fun i off ->
+
+          let next_states = List.mapi(fun i (off : message_specifier list list) ->
             (* empty symbolizes current state *)
+            (* Printf.eprintf "Automaton %d: Satisfiable offers: [%s]\n" i (String.concat " | " (List.map (fun ol -> "[" ^ (String.concat "," (List.map Lang.string_of_msg_spec ol)) ^ "]") off)); *)
             if off = [] then [(current_states_arr.(i), [])]
-            else find_next_states (List.nth sync_transitions i) current_states_arr.(i) off
+            else ( 
+            List.map (fun o ->
+              find_next_states_refined (List.nth sync_transitions i) current_states_arr.(i) o
+            )off |> List.flatten
+            )
           )satisfiable_offers in
 
           assert (List.for_all (fun ns -> ns <> []) next_states);
@@ -362,18 +381,18 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )recurse_transitions *)
             );
             if not !found then (
-            let offers_from_others_arr =
+            let offers_in_future_from_others_arr =
               Array.init automata_count (fun exc ->
                 let offers = ref [] in
                 for idx = 0 to automata_count - 1 do
-                  if idx <> exc then offers := current_state_info_arr.(idx).offers @ !offers
+                  if idx <> exc then offers := current_state_info_arr.(idx).offers_in_future @ !offers
                 done;
                 !offers
               )
             in
             List.iteri(fun id tset ->
               inc_iter;
-              let offers_in_future_of_this_state = offers_from_others_arr.(id) in
+              let offers_in_future_of_this_state = offers_in_future_from_others_arr.(id) in
               List.iter (fun t -> 
                 let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
                 let t_not_acts_flat = List.flatten t_not_acts in
@@ -396,9 +415,44 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )conditional_trans;
             )
           );
-            
+          
+        if not !found then (
+            found := false;
+            let offers_for_this_state_arr_from_others =
+              Array.init automata_count (fun exc ->
+                let offers = ref [] in
+                for idx = 0 to automata_count - 1 do
+                  if idx <> exc then offers := current_state_info_arr.(idx).offers @ !offers
+                done;
+                !offers
+              )
+            in
+              List.iteri (fun i t_set ->
+                let offers_for_this_state = offers_for_this_state_arr_from_others.(i) in
+                List.iter (fun t -> 
+                  let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
+                  let t_not_acts_flat = List.flatten t_not_acts in
+                  let is_compatible =
+                    List.for_all (fun tna ->
+                      not (List.mem tna offers_for_this_state)
+                    ) t_not_acts_flat in 
+                  
+                    (* Printf.eprintf "[Verdict = %s] [State %d] Considering conditional transition with delay compatibility from automaton %d with not_acts: %s\n" (string_of_bool is_compatible) prod_state_id i (String.concat "," (List.map Lang.string_of_msg_spec t_not_acts_flat));
+                  Printf.eprintf "Offers for this state from others: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec offers_for_this_state));
+                  Printf.eprintf "Others states: %s\n" (String.concat "," (List.map string_of_int current_states)); *)
+                  if is_compatible then (
+                    found := true;
+                    let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
+                    let next_prod_state = get_product_state next_states in
+                    TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
+                    if not (IntListSet.mem next_states !visited) then 
+                        Queue.add next_states worklist
+                  )
+                )t_set
+              )conditional_trans
+          );
 
-          if all_has_delay then
+          if not !found && all_has_delay then
           ( 
             inc_iter;
             found := true;
@@ -419,6 +473,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               )
           ) all_delay_combinations;
           );
+          
 
           if not !found && not !found_epsilon then (
             let trace = collect_dead_ends_paths prod_auto [prod_state_id] in

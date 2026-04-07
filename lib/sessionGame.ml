@@ -149,16 +149,16 @@ let compute_id_attractor_indexed
         in
 
         let is_added = 
-          if not all_outgoing_valid then false
+          (* if not all_outgoing_valid then false *)
            
-          else if state.is_fair then
+          if state.is_fair then
             (* Fair Node: Requires at least one path to make progress req_id *)
             List.exists (fun t -> 
               let has_id = transition_has_id_cached t req_id in
               let leads_to_attr = IntSet.mem t.to_state !attractor in
               has_id || leads_to_attr
             ) outgoing
-          (* else if not all_outgoing_valid then false *)
+          else if not all_outgoing_valid then false
           else
             (* Normal Node: Requires all paths to make progress on that req_id *)
             List.for_all (fun t ->
