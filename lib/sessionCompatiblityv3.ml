@@ -205,11 +205,13 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
           (* Printf.eprintf "Product State %d: Current States [%s], Satisfiable Offers per state: [%s]\n" prod_state_id (String.concat "," (List.map string_of_int current_states)) (String.concat " | " (List.map (fun ol -> "[" ^ (String.concat "," (List.map Lang.string_of_msg_spec ol)) ^ "]") satisfiable_offers)); *)
 
-
+          (* this returns next states with their corresponding offers *)
           let next_states = List.mapi(fun i off ->
-            if off = [] then [current_states_arr.(i)]
+            (* empty symbolizes current state *)
+            if off = [] then [(current_states_arr.(i), [])]
             else find_next_states (List.nth sync_transitions i) current_states_arr.(i) off
           )satisfiable_offers in
+
           assert (List.for_all (fun ns -> ns <> []) next_states);
 
           let rec cartesian_product2 lists =
@@ -225,18 +227,68 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           
           let found = ref false in
 
-          List.iter(fun ns ->
-            if ns <> current_states then 
+          let normalize_transition_combo combo =
+            let selected = Array.of_list combo in
+            let active = Array.make automata_count true in
+            let changed = ref true in
+            while !changed do
+              changed := false;
+              for i = 0 to automata_count - 1 do
+                let _, offers_i = selected.(i) in
+                if active.(i) && offers_i <> [] then (
+                  let offers_from_others = ref [] in
+                  for j = 0 to automata_count - 1 do
+                    if j <> i && active.(j) then (
+                      let _, offers_j = selected.(j) in
+                      offers_from_others := offers_j @ !offers_from_others
+                    )
+                  done;
+                  let offers_from_others = List.sort_uniq compare_msg_spec !offers_from_others in
+                  let all_matched = List.for_all (fun m -> List.mem m offers_from_others) offers_i in
+                  if not all_matched then (
+                    active.(i) <- false;
+                    changed := true
+                  )
+                )
+              done
+            done;
+
+            let ns =
+              List.init automata_count (fun i ->
+                if active.(i) then
+                  let st, _ = selected.(i) in
+                  st
+                else
+                  current_states_arr.(i)
+              )
+            in
+            let combined_actions =
+              List.flatten (
+                List.init automata_count (fun i ->
+                  if active.(i) then
+                    let _, off = selected.(i) in
+                    off
+                  else
+                    []
+                )
+              )
+              |> List.sort_uniq compare_msg_spec
+            in
+            (ns, combined_actions)
+          in
+
+          List.iter (fun combo ->
+            let ns, combined_actions = normalize_transition_combo combo in
+            if ns <> current_states && combined_actions <> [] then begin
               found := true;
               inc_iter;
               let next_prod_state = get_product_state ns in
-              let combined_actions = List.flatten satisfiable_offers in
-              let combined_actions = List.sort_uniq compare_msg_spec combined_actions in
               let combined_label = List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label false false false false;
-              if not (IntListSet.mem ns !visited) then 
+              if not (IntListSet.mem ns !visited) then
                 Queue.add ns worklist
-          )possible_next_states;
+            end
+          ) possible_next_states;
 
           if not !found then (
             found := false;
@@ -277,7 +329,25 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
 
             if not !found then (
             found := false;
-            List.iteri (fun i t_set -> 
+            let next_states = List.mapi(fun i t_set -> 
+              if List.length t_set > 1 then raise (Failure "Unexpected: more than 1 recurse transition in set")
+              else if List.length t_set = 1 then (
+                let t = List.hd t_set in
+                t.to_state
+              ) else current_states_arr.(i)
+            )recurse_transitions in
+            let recurse_labels = List.flatten (List.map (fun t_set -> List.map (fun t -> t.label) t_set) recurse_transitions) in
+            let combined_label = union_labelsets recurse_labels in
+
+            if combined_label <> LabelSet.empty then (
+              found := true;
+              let next_prod_state = get_product_state next_states in
+              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label false false true false;
+              if not (IntListSet.mem next_states !visited) then 
+                  Queue.add next_states worklist
+            )
+
+            (* List.iteri (fun i t_set -> 
               inc_iter;
               if List.length t_set > 1 then raise (Failure "Unexpected: more than 1 recurse transition in set")
               else if List.length t_set = 1 then (
@@ -289,7 +359,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 if not (IntListSet.mem next_states !visited) then 
                     Queue.add next_states worklist
               ) 
-            )recurse_transitions
+            )recurse_transitions *)
             );
             if not !found then (
             let offers_from_others_arr =
@@ -354,6 +424,11 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             let trace = collect_dead_ends_paths prod_auto [prod_state_id] in
             let trace = Printf.sprintf "Dead-end trace leading to product state %d:\n%s\n" prod_state_id (List.hd trace|> snd) in
             let msg = Printf.sprintf "No compatible transitions found from product state %d corresponding to states %s\n%s" prod_state_id (String.concat "," (List.map string_of_int current_states)) trace in
+            Printf.eprintf "Offers of each automaton in current state: %s\n" (String.concat " | " (List.mapi (fun idx st_id ->
+              let auto, _ = automata_ids.(idx) in
+              let state = Hashtbl.find auto.states st_id in
+              Printf.sprintf "\nAutomaton %d offers: [%s] | has delay: %b" idx (String.concat "," (List.map Lang.string_of_msg_spec state.offers)) ((List.nth delay_transitions idx) <> [])
+            ) current_states));
             let out_channel = open_out ("incompat_prod_auto_"^_name^".dot") in
             print_automaton_dot prod_auto out_channel;
             close_out out_channel;
