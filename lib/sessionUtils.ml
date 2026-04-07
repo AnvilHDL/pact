@@ -51,7 +51,7 @@ let find_next_states transitions_list state_id offers =
 let find_next_states_refined transitions_list state_id offers = 
   (* find the transition to state with exact offer matching *)
   let transitions = List.filter (fun t -> (t.from_state = state_id)&&(get_ordered_transition_specifiers t = offers)) transitions_list in
-  if transitions <> [] then
-    List.map (fun t -> (t.to_state,offers)) transitions
+  if transitions <> [] && not (List.length transitions > 1) then
+    List.hd transitions |> fun t -> (t.to_state, offers)
   else
     raise (Failure (Printf.sprintf "No transition found from state %d with offers [%s]" state_id (String.concat "," (List.map Lang.string_of_msg_spec offers))))

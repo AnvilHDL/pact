@@ -214,8 +214,27 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             )
           in
 
+          (* let filter_maximal_offer_sets (offers : message_specifier list list) =
+            let offer_sets = List.map(fun o -> create_message_specifier_set o) offers in
+            let is_subset s1 s2 =
+              MsgSpecSet.subset s1 s2 && not (MsgSpecSet.equal s1 s2) in
+            
+            List.filter(fun s ->
+              not (List.exists (fun other -> is_subset s other) offer_sets)
+            ) offer_sets |> List.map (fun s -> MsgSpecSet.elements s)
+          in
+          
+          let satisfiable_offers =
+            Array.to_list satisfiable_offers_arr
+            |> List.map (fun offers -> (
+              Printf.eprintf ("before pruning" ^^" offers: [%s]\n") (String.concat "," (List.map (fun ol -> "[" ^ (String.concat "," (List.map Lang.string_of_msg_spec ol)) ^ "]") offers));
+              let filtered = filter_maximal_offer_sets offers in
+              Printf.eprintf ("after pruning" ^^" offers: [%s]\n") (String.concat "," (List.map (fun ol -> "[" ^ (String.concat "," (List.map Lang.string_of_msg_spec ol)) ^ "]") filtered));
+              filtered
+              )
+            )
+          in *)
           let satisfiable_offers = Array.to_list satisfiable_offers_arr in
-
           (* Printf.eprintf "Product State %d: Current States [%s], Satisfiable Offers per state: [%s]\n" prod_state_id (String.concat "," (List.map string_of_int current_states)) (String.concat " | " (List.map (fun ol -> "[" ^ (String.concat "," (List.map Lang.string_of_msg_spec ol)) ^ "]") satisfiable_offers)); *)
 
           (* this returns next states with their corresponding offers *)
@@ -227,7 +246,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             else ( 
             List.map (fun o ->
               find_next_states_refined (List.nth sync_transitions i) current_states_arr.(i) o
-            )off |> List.flatten
+            )off
             )
           )satisfiable_offers in
 
@@ -296,8 +315,36 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
             (ns, combined_actions)
           in
 
-          List.iter (fun combo ->
-            let ns, combined_actions = normalize_transition_combo combo in
+          let action_set_of_list actions =
+            List.fold_left (fun acc m -> MsgSpecSet.add m acc) MsgSpecSet.empty actions
+          in
+
+          let normalized_candidates =
+            possible_next_states
+            |> List.filter_map (fun combo ->
+              let ns, combined_actions = normalize_transition_combo combo in
+              if ns <> current_states && combined_actions <> [] then
+                Some (ns, List.sort_uniq compare_msg_spec combined_actions)
+              else
+                None
+            )
+            |> List.sort_uniq compare
+          in
+
+          let pruned_candidates =
+            List.filter (fun (ns, actions) ->
+              let actions_set = action_set_of_list actions in
+              not (
+                List.exists (fun (ns_other, actions_other) ->
+                  (ns_other <> ns || actions_other <> actions)
+                  && MsgSpecSet.subset actions_set (action_set_of_list actions_other)
+                  && not (MsgSpecSet.equal actions_set (action_set_of_list actions_other))
+                ) normalized_candidates
+              )
+            ) normalized_candidates
+          in
+
+          List.iter (fun (ns, combined_actions) ->
             if ns <> current_states && combined_actions <> [] then begin
               found := true;
               inc_iter;
@@ -307,7 +354,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               if not (IntListSet.mem ns !visited) then
                 Queue.add ns worklist
             end
-          ) possible_next_states;
+          ) pruned_candidates;
 
           if not !found then (
             found := false;
