@@ -54,12 +54,8 @@ let collect_reg_states g =
       let sn = EventStateFormatter.format_scorer g.thread_id e.id in
       [("logic[1:0]", sn)]
     | `Branch _  -> []
-    | `Root (Some (_, br_side_info)) ->
-      let is_branch_empty =  List.for_all(fun child_ev -> match child_ev.source with
-        | `Branch _ -> true
-        | _ -> false
-      ) e.outs in
-      if need_delay_reg e && br_side_info.owner_branch.branch_cond = TrueFalse && is_branch_empty then(
+    | `Root (Some _) ->
+      if need_delay_reg e then(
         Printf.eprintf "[Warning] Added Delay Register for Event %d in Thread %d to prevent combinational loop! If you dont expect this, please report a bug.\n" e.id g.thread_id;
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
@@ -707,4 +703,3 @@ let codegen_proc_states printer proc =
   );
   CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end";
   CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end"
-

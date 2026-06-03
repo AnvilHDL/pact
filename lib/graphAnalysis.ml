@@ -257,6 +257,19 @@ let events_prepare_outs events =
 type answer_type_t = 
 | Reaches of bool (*reaches with empty path or not*)
 | DoesntReach of bool (*doesnt reach with empty path or not*)
+
+let is_empty_true_false_branch_root (e : EventGraph.event) =
+  match e.source with
+  | `Root (Some (_, br_side_info)) ->
+      br_side_info.owner_branch.branch_cond = TrueFalse
+      && List.for_all
+           (fun child_ev ->
+              match child_ev.source with
+              | `Branch _ -> true
+              | _ -> false)
+           e.outs
+  | _ -> false
+
 let rec has_only_empty_path_to_recurse (target_event : EventGraph.event) (src_event : EventGraph.event) visited =
   let open EventGraph in
     if src_event.id = target_event.id then (
@@ -319,13 +332,15 @@ let make_branch_root_delay_checker events =
 
   fun (e : EventGraph.event) ->
     (* let has_zero_delay = IntHashtbl.find dist e.id = 0 in *)
-    let has_empty_path_to_terminal = has_only_empty_path_to_recurse e terminal_events  [] in
-    let has_empty_path_to_root = has_only_empty_path_to_recurse root_node e [] in
-    (* we only need to add a delay register if there is an empty path to the terminal event and there is an empty path from the root to this event, which means this event is part of the all-empty-path parallel branch *)
-    match (has_empty_path_to_terminal, has_empty_path_to_root) with
-    | (Reaches true, Reaches true) -> true
-    | (Reaches _ , Reaches _) -> false
-    | _ -> raise (Except.unknown_error_default "Unexpected case in branch root delay checker!")
+    if not (is_empty_true_false_branch_root e) then
+      false
+    else
+      let has_empty_path_to_terminal = has_only_empty_path_to_recurse e terminal_events  [] in
+      let has_empty_path_to_root = has_only_empty_path_to_recurse root_node e [] in
+      match (has_empty_path_to_terminal, has_empty_path_to_root) with
+      | (Reaches true, Reaches true) -> true
+      | (Reaches _ , Reaches _) -> false
+      | _ -> raise (Except.unknown_error_default "Unexpected case in branch root delay checker!")
 
 let event_is_dominant e1 e2 =
   let preds = (event_predecessors e1) @ [e1] in
