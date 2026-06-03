@@ -253,40 +253,79 @@ let events_prepare_outs events =
 
 (** True iff every path from event forward to a recurse event passes through
     zero delaying steps.*)
-let rec has_only_empty_path_to_recurse (event : EventGraph.event) visited =
-  let open EventGraph in
-  if List.mem event.id visited then false
-  else if event.is_loop_terminal then
-    (* At the recurse node itself: only Cycles n > 0 is a guaranteed delay *)
-    (match event.source with
-     | `Seq (_, `Cycles n) when n > 0 -> false
-     | _ -> true)
-  else
-    let visited' = event.id :: visited in
-    let rec get_empty src =
-      match src with
-      | `Seq (_, `Cycles n) when n > 0 -> false
-      | `Seq _ | `Branch _ | `Root _ ->
-        List.for_all (fun out -> has_only_empty_path_to_recurse out visited') event.outs
-      | `Recurse (sr, _) -> get_empty sr
-      | `Later _ ->
-        List.for_all (fun out -> has_only_empty_path_to_recurse out visited') event.outs
-    in
-    get_empty event.source
 
+type answer_type_t = 
+| Reaches of bool (*reaches with empty path or not*)
+| DoesntReach of bool (*doesnt reach with empty path or not*)
+let rec has_only_empty_path_to_recurse (target_event : EventGraph.event) (src_event : EventGraph.event) visited =
+  let open EventGraph in
+    if src_event.id = target_event.id then (
+      Reaches true)
+    else if List.exists (fun id -> id = src_event.id) visited then
+      DoesntReach true
+    else
+    let rec check_src src =
+    match (src : event_source) with
+    | `Root None -> DoesntReach true (* branch didnt reach target event *)
+    | `Later (e1, e2) ->
+      let x1 = has_only_empty_path_to_recurse target_event e1 (src_event.id :: visited)  in
+      let x2 = has_only_empty_path_to_recurse target_event e2 (src_event.id :: visited) in
+      (
+      match (x1, x2) with
+      | (Reaches b1, Reaches b2) -> Reaches (b1 && b2)
+      | (DoesntReach b1, DoesntReach b2) -> DoesntReach (b1 && b2)
+      | (Reaches b1, DoesntReach b2) -> Reaches (b1&&b2)
+      | (DoesntReach b1, Reaches b2) -> Reaches (b1&&b2)
+      )
+    | `Seq (e1, ad) ->
+      let is_empty = match ad with
+        | `Cycles n -> n = 0
+        | `Send _ | `Recv _ | `Choice _ | `Sync _ -> true
+      in
+      (
+      match has_only_empty_path_to_recurse target_event e1 (src_event.id :: visited) with
+      | Reaches b -> Reaches (b && is_empty)
+      | DoesntReach b -> DoesntReach (b && is_empty)
+      )
+    | `Branch (_, {branches_val; _}) ->
+      let branch_ans = List.map (fun e ->
+        has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
+      ) branches_val in
+      if List.exists (fun ans -> ans = Reaches true) branch_ans then Reaches true
+      else if List.for_all (fun ans -> match ans with DoesntReach _ -> true | _ -> false) branch_ans then DoesntReach ((List.exists (fun ans -> match ans with DoesntReach true -> true | _ -> false ) branch_ans))      else Reaches false
+      
+    | `Root (Some (e, _)) ->
+      has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
+    | `Recurse (src, id) -> (
+      match check_src src with
+      | Reaches b -> Reaches b
+      | _ ->
+      let ev' = List.find (fun e -> e.id = id) src_event.graph.events in
+         has_only_empty_path_to_recurse target_event ev' (src_event.id :: visited)
+    )
+    in
+    check_src src_event.source
+
+      
 (** performs one-time setup and returns a predicate that checks
     whether a event needs a delay register to prevent
     a combinational loop after an all-empty-path parallel branch. *)
 let make_branch_root_delay_checker events =
   events_prepare_outs events;
-  let root_event = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in
-  let dist = event_min_distance_with_later events root_event root_event in
+  (* let root_event = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in *)
+  let terminal_events = List.find (fun (ev : EventGraph.event) -> ev.is_loop_terminal) events in
+  let root_node = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in
+  (* let dist = event_min_distance_with_later events root_event root_event in *)
+
   fun (e : EventGraph.event) ->
-    let has_zero_delay = IntHashtbl.find dist e.id = 0 in
-    let has_empty_path =
-      List.for_all (fun out -> has_only_empty_path_to_recurse out []) e.outs
-    in
-    has_zero_delay && has_empty_path
+    (* let has_zero_delay = IntHashtbl.find dist e.id = 0 in *)
+    let has_empty_path_to_terminal = has_only_empty_path_to_recurse e terminal_events  [] in
+    let has_empty_path_to_root = has_only_empty_path_to_recurse root_node e [] in
+    (* we only need to add a delay register if there is an empty path to the terminal event and there is an empty path from the root to this event, which means this event is part of the all-empty-path parallel branch *)
+    match (has_empty_path_to_terminal, has_empty_path_to_root) with
+    | (Reaches true, Reaches true) -> true
+    | (Reaches _ , Reaches _) -> false
+    | _ -> raise (Except.unknown_error_default "Unexpected case in branch root delay checker!")
 
 let event_is_dominant e1 e2 =
   let preds = (event_predecessors e1) @ [e1] in

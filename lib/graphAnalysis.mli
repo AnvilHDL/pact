@@ -70,7 +70,6 @@ val events_prepare_outs : EventGraph.event list -> unit
 
 (** True iff every path from forward to a recurse event passes through
     zero delaying steps. *)
-val has_only_empty_path_to_recurse : EventGraph.event -> int list -> bool
 
 (**performs one-time setup and returns a predicate that checks
     whether a branch root event needs a delay register to prevent

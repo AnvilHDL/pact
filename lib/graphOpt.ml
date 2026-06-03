@@ -474,7 +474,7 @@ module CombSimplPass = struct
       List.iteri
         (fun idx e ->
           assert (event_arr_old.(e.id).id = e.id);
-          event_arr_old.(e.id) <- {e with id = idx}
+          event_arr_old.(e.id) <- {e with id = idx; graph}
         )
         events_to_keep_old;
       let events_to_keep = List.map (fun e -> event_arr_old.(e.id)) events_to_keep_old in
@@ -605,10 +605,9 @@ module CombSimplPass = struct
         ) @@ GraphAnalysis.imm_preds_nonrecursive ev
       ) events_to_keep;
 
-      {graph with
-        events = List.rev events_to_keep;
-        last_event_id = (List.length events_to_keep) - 1
-      }
+      graph.events <- List.rev events_to_keep;
+      graph.last_event_id <- (List.length events_to_keep) - 1;
+      graph
     ) else
       graph
 

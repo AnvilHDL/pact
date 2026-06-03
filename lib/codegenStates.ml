@@ -55,7 +55,11 @@ let collect_reg_states g =
       [("logic[1:0]", sn)]
     | `Branch _  -> []
     | `Root (Some (_, br_side_info)) ->
-      if need_delay_reg e && br_side_info.owner_branch.branch_cond = TrueFalse then(
+      let is_branch_empty =  List.for_all(fun child_ev -> match child_ev.source with
+        | `Branch _ -> true
+        | _ -> false
+      ) e.outs in
+      if need_delay_reg e && br_side_info.owner_branch.branch_cond = TrueFalse && is_branch_empty then(
         Printf.eprintf "[Warning] Added Delay Register for Event %d in Thread %d to prevent combinational loop! If you dont expect this, please report a bug.\n" e.id g.thread_id;
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
