@@ -519,6 +519,10 @@ offering_arm:
   { { Lang.trigger = Lang.AtomTerminal x; Lang.continuation = Some cont } : Lang.offering_session_type }
 | DOLLAR; x= local_session_type
   { { Lang.trigger = Lang.AtomTerminal x; Lang.continuation = None } : Lang.offering_session_type }
+| LEFT_BRACE; trig_list = separated_nonempty_list(COMMA, atomic_action); RIGHT_BRACE; COLON; cont = local_session_type
+  { { Lang.trigger = Lang.AtomConjunction trig_list; Lang.continuation = Some cont } : Lang.offering_session_type }
+| LEFT_BRACE; trig_list = separated_nonempty_list(COMMA, atomic_action); RIGHT_BRACE
+  { { Lang.trigger = Lang.AtomConjunction trig_list; Lang.continuation = None } : Lang.offering_session_type }
 atomic_action:
 | id = message_specifier
   { Lang.AtomBMsg id }
@@ -998,12 +1002,18 @@ match_arm:
 ;
 
 offer_arm:
-| KEYWORD_SEND; send_pack = send_pack; EQ_GT body = node(expr)
-  { (Lang.OfferSend send_pack, body) }
-| id = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack; EQ_GT body = node(expr)
-  { (Lang.OfferRecv (id, recv_pack), body) }
+| arm = offer_arm_atom; EQ_GT; body = node(expr)
+  { (Lang.OfferAtom arm, body) }
+| LEFT_BRACE; arms = separated_nonempty_list(SEMICOLON, offer_arm_atom); RIGHT_BRACE; EQ_GT; body = node(expr)
+  { (Lang.OfferConjunction arms, body) }
 | SHARP; EQ_GT; body = node(expr)
-  { (Lang.OfferWildcard , body) }
+  { (Lang.OfferAtom Lang.OfferWildcard, body) }
+;
+offer_arm_atom:
+| KEYWORD_SEND; send_pack = send_pack
+  { Lang.OfferSend send_pack }
+| id = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack
+  { Lang.OfferRecv (id, recv_pack) }
 ;  
 
 //Definition of messages: To Do: Doesnt support custom lifetime types, just sync?

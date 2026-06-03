@@ -12,10 +12,12 @@ module EventStateFormatter = struct
     Printf.sprintf "EVENTS%d[%d].event_current" thread_id ev_id
 end
 
-let is_wildcard_present msg_list =
+let flatten_choice_msg_groups = List.flatten
+
+let is_wildcard_present msg_groups =
     List.exists (fun (msg : Lang.message_specifier) ->
       if msg.endpoint = "*" && msg.msg = "*" then true else false
-    ) msg_list
+    ) (flatten_choice_msg_groups msg_groups)
 
 let collect_reg_states g =
   let open EventGraph in
@@ -157,8 +159,9 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                   Printf.sprintf "assign %s = %s || %s_q %s ;" cn cn' sn trigger |> print_line;
                   Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line
               )
-            | `Choice msg_list ->
-              let is_wildcard_present = is_wildcard_present msg_list in
+            | `Choice msg_groups ->
+              let msg_list = flatten_choice_msg_groups msg_groups in
+              let is_wildcard_present = is_wildcard_present msg_groups in
               (*For this we want to wait till or of the valid/ready port becomes 1 *)
               let sn_opt = if is_wildcard_present then
                 None
@@ -539,8 +542,9 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
 
     (* Handle Choice events: assert signals while waiting for handshake *)
     match e.source with
-    | `Seq (_, `Choice msg_list) ->
-      let is_wildcard = is_wildcard_present msg_list in
+    | `Seq (_, `Choice msg_groups) ->
+      let msg_list = flatten_choice_msg_groups msg_groups in
+      let is_wildcard = is_wildcard_present msg_groups in
       let activated = if not is_wildcard then (
            Printf.sprintf "(%s || %s_q)"
           (EventStateFormatter.format_current g.thread_id e.id)

@@ -20,8 +20,8 @@ type label_kind =
   | Action of message_specifier
   | Delay
   | Questionable of message_specifier list
-  | Negation of message_specifier list
-  | OptionDelay of message_specifier list
+  | Negation of message_specifier list list
+  | OptionDelay of message_specifier list list
   | Theta of session_type
   | Recurse of identifier
   | Terminal of int
@@ -51,14 +51,14 @@ let string_of_label_set (ls: LabelSet.t) : string =
     | Questionable ms ->
       let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
       Printf.sprintf "UpNext([%s])" ms_str
-    | Negation ms ->
-      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+    | Negation msg_groups ->
+      let ms_str = String.concat "|" (List.map (fun group -> String.concat "&" (List.map Lang.string_of_msg_spec group)) msg_groups) in
       Printf.sprintf "Negation([%s])" ms_str
     | Theta st -> Printf.sprintf "Theta(%s)" (Lang.string_of_protocol st)
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
     | Recurse var -> Printf.sprintf "$"^var
-    | OptionDelay ms ->
-      let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+    | OptionDelay msg_groups ->
+      let ms_str = String.concat "|" (List.map (fun group -> String.concat "&" (List.map Lang.string_of_msg_spec group)) msg_groups) in
       Printf.sprintf "(#Questionable[%s])" ms_str
   ) elements in
   "{" ^ (String.concat ", " str_list) ^ "}"
@@ -282,12 +282,12 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
           | Questionable ms ->
             let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
             Printf.sprintf " ? [%s]" ms_str
-          | Negation ms ->
-            let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+          | Negation msg_groups ->
+            let ms_str = String.concat "|" (List.map (fun group -> String.concat "&" (List.map Lang.string_of_msg_spec group)) msg_groups) in
             Printf.sprintf " ¬[%s]" ms_str
           | Theta st -> Printf.sprintf "θ(%s)" (Lang.string_of_protocol st)
-          | OptionDelay ms ->
-            let ms_str = String.concat "|" (List.map Lang.string_of_msg_spec ms) in
+          | OptionDelay msg_groups ->
+            let ms_str = String.concat "|" (List.map (fun group -> String.concat "&" (List.map Lang.string_of_msg_spec group)) msg_groups) in
             Printf.sprintf "(#¬[%s])" ms_str
           (* Explicitly handle Recurse if needed, or fallback *)
           | Recurse id -> Printf.sprintf "$%s" id
@@ -359,6 +359,10 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
     match st with
     | Lang.StyAtom (Lang.AtomicAct (Lang.AtomBMsg m)) -> [m]
     | Lang.StyAtom (Lang.AtomicAct (Lang.AtomNBMsg m)) -> [m]
+    | Lang.StyAtom (Lang.AtomConjunction acts) ->
+      List.map (function
+        | Lang.AtomBMsg m | Lang.AtomNBMsg m -> m
+      ) acts
     | Lang.StySeq (s1, _) -> (first_messages s1)
     | Lang.StyChoice (s1, s2) -> (first_messages s1) @ (first_messages s2)
     | Lang.StyOffer offerings | Lang.StyXOffer offerings ->
@@ -366,6 +370,10 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
         match o.Lang.trigger with
         | Lang.AtomicAct (Lang.AtomBMsg m) -> [m]
         | Lang.AtomicAct (Lang.AtomNBMsg m) -> [m]
+        | Lang.AtomConjunction acts ->
+          List.map (function
+            | Lang.AtomBMsg m | Lang.AtomNBMsg m -> m
+          ) acts
         | _ -> []
       ) offerings)
     | Lang.StyParallel (s1, s2) -> (first_messages s1) @ (first_messages s2)

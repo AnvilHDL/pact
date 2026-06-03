@@ -1,67 +1,6 @@
 open CompileHelpers
 
 
-
-
-let rely_guarantee_debug _out config  =
-  let toplevel_filename = List.hd config.Config.input_filenames in
-  let cunits = ref [] in
-  (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
-    with
-      | Except.TypeError msg ->
-        (Except.Text "Type error:")::msg
-          |> raise_compile_error None
-  );
-  let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
-    let open Lang in
-    let open SessionCompatiblityv2 in
-  List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
-
-    let sty_str = string_of_protocol sdef.d.body.d in
-    Printf.eprintf "Session Type %s: %s \n" sdef.d.name sty_str;
-    Printf.eprintf "\nReliability %s\n\n" (string_of_rgcollections (constructReliabilityCollection sdef.d.body.d));
-    Printf.eprintf "\nGuarantee %s\n\n" (string_of_rgcollections (constructGuaranteeCollection sdef.d.body.d));
-  )session_type_defs;
-  Printf.eprintf "\nPool Compatiblity Checks:\n\n";
-
-  let pools = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
-  List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-      let open Lang in
-      let open SessionCompatiblityv2 in
-     Printf.eprintf "Pool %s: \n" pool.d.pool_id;
-      if List.length pool.d.interface_members > 1 then
-        (
-          let open SessionCompatiblityv2 in
-        let (check, msg) = check_compatibility_multiparty pool config.verbose_max in
-        Printf.eprintf "[Multiparty Compatibility]: %b \n\n" (check);
-        Printf.eprintf "Message: %s \n\n" (msg);
-        )
-      else 
-        (
-        let im1 = List.nth pool.d.interface_members 0 in
-        let im2 = List.nth pool.d.interface_members 1 in
-        if im1.d.interface_def = None || im2.d.interface_def = None then
-          raise (Failure "Unimplemented: pool interface members without interface definitions");
-        let im1_sty = Option.get im1.d.interface_def in
-        let im2_sty = Option.get im2.d.interface_def in
-        Printf.eprintf "Interface Member 1: %s \n\n" (string_of_protocol im1_sty);
-        Printf.eprintf "Interface Member 2: %s \n\n" (string_of_protocol im2_sty);
-        Printf.eprintf "Reliability 1: %s \n\n" (string_of_rgcollections (constructReliabilityCollection im1_sty));
-        Printf.eprintf "Guarantee 2: %s \n\n" (string_of_rgcollections (constructGuaranteeCollection im2_sty));
-        Printf.eprintf "Reliability 2: %s \n\n" (string_of_rgcollections (constructReliabilityCollection im2_sty));
-        Printf.eprintf "Guarantee 1: %s \n\n" (string_of_rgcollections (constructGuaranteeCollection im1_sty));
-        let compatiblity = 
-          compatiblity_check_binary
-            {d = im1_sty; span = pool.span}
-            {d = im2_sty; span = pool.span} in
-        Printf.eprintf "[Compatibility]: %b \n\n" (compatiblity)
-        )
-  )pools;
-
-  Printf.eprintf "\n"
-
-
 let generalized_type_debug _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
@@ -253,7 +192,7 @@ let profile_compatibility_checks _out config =
 let debug_types_custom out config =
 let open Config in
 match config.debug_choice with
-| 0 -> rely_guarantee_debug out config
+| 0 -> generalized_type_debug out config
 | 1 -> profile_compatibility_checks out config
 | 2 -> generalized_type_debug out config
 | _ -> raise (Failure "Unknown debug choice")

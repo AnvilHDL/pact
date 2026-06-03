@@ -118,6 +118,144 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
                     (ctx : build_context) (e : expr_node) : node_data =
   let binop_td_const = binop_td_const graph ci ctx
   and _binop_td_td = binop_td_td graph ci ctx in
+  let wildcard_msg_spec = {endpoint = "*"; msg = "*"} in
+  let is_wildcard_atom = function
+    | OfferWildcard -> true
+    | OfferSend _ | OfferRecv _ -> false
+  in
+  let is_wildcard_arm = function
+    | OfferAtom OfferWildcard -> true
+    | OfferAtom (OfferSend _ | OfferRecv _) | OfferConjunction _ -> false
+  in
+  let offer_msg_spec_of_atom = function
+    | OfferSend send_pack -> send_pack.send_msg_spec
+    | OfferRecv (_, recv_pack) -> recv_pack.recv_msg_spec
+    | OfferWildcard -> wildcard_msg_spec
+  in
+  let offer_atoms_of_arm span = function
+    | OfferAtom OfferWildcard -> []
+    | OfferAtom atom -> [atom]
+    | OfferConjunction atoms ->
+        if atoms = [] then
+          raise (event_graph_error_default "Conjunctive offer arm must contain at least one action" span);
+        if List.exists is_wildcard_atom atoms then
+          raise (event_graph_error_default "Wildcard is not allowed inside a conjunctive offer arm" span);
+        atoms
+  in
+  let offer_msg_group_of_arm span arm =
+    if is_wildcard_arm arm then [wildcard_msg_spec]
+    else List.map offer_msg_spec_of_atom (offer_atoms_of_arm span arm)
+  in
+  let lookup_offer_msg_defs msg_group =
+    List.map (fun msg_spec ->
+      MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
+      |> unwrap_or_err "Invalid message specifier in offer" e.span
+    ) msg_group
+  in
+  let combine_wires op err_msg = function
+    | [] -> raise (event_graph_error_default err_msg e.span)
+    | hd :: tl ->
+        List.fold_left (fun acc w ->
+          let wires, new_w =
+            WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs op acc (`Single w) graph.wires
+          in
+          graph.wires <- wires;
+          new_w
+        ) hd tl
+  in
+  let literal_logic value =
+    let wires, w = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (1, value)) graph.wires in
+    graph.wires <- wires;
+    w
+  in
+  let readiness_wire_of_msg (msg_spec, msg_def) =
+    if msg_def.dir = Inp then
+      let wires, msg_valid_port = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
+      graph.wires <- wires;
+      msg_valid_port
+    else if msg_def.handshake_mode = Lang.ValidAck then
+      let wires, msg_ack_port = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
+      graph.wires <- wires;
+      msg_ack_port
+    else
+      let wires, msg_ready_port = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
+      graph.wires <- wires;
+      msg_ready_port
+  in
+  let readiness_wire_of_group msg_defs =
+    msg_defs
+    |> List.map readiness_wire_of_msg
+    |> combine_wires And "Conjunctive offer arm must contain at least one message"
+  in
+  let negated_any_wire wires =
+    let any_wire =
+      match wires with
+      | [] -> literal_logic 0
+      | _ -> combine_wires Or "Cannot build offer wildcard condition without arm wires" wires
+    in
+    let wires, not_w = WireCollection.add_unary graph.thread_id ci.typedefs Not any_wire graph.wires in
+    graph.wires <- wires;
+    not_w
+  in
+  let lower_offer_atom_from_root ctx_root ctx_bindings atom =
+    match atom with
+    | OfferSend send_pack ->
+        let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
+          |> unwrap_or_err "Invalid message specifier in offer send" e.span in
+        if msg.dir <> Out then
+          raise (event_graph_error_default "Mismatching message direction!" e.span);
+        let td_data = construct_graphIR graph ci ctx_root send_pack.send_data in
+        let msg_dtype = (List.hd msg.sig_types).dtype in
+        let err_string = Printf.sprintf "In offer send: Invalid data type for message %s: expected %s but got %s"
+          send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td_data.ld.dtype) in
+        check_dtype err_string (Some msg_dtype) td_data.ld.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
+        let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_root.current in
+        ctx_root.current.sustained_actions <-
+          ({until = ntd.ld.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data.ld)} |> tag_with_span e.span)::ctx_root.current.sustained_actions;
+        (ctx_bindings, ntd.ld.lt.live, None)
+    | OfferRecv (id, recv_pack) ->
+        let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
+          |> unwrap_or_err "Invalid message specifier in offer receive" e.span in
+        if msg.dir <> Inp then
+          raise (event_graph_error_default "Mismatching message direction!" e.span);
+        let wires, w = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
+        graph.wires <- wires;
+        let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg ctx_root.current in
+        ctx_root.current.sustained_actions <-
+          ({until = ntd.ld.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_root.current.sustained_actions;
+        (BuildContext.add_binding ctx_bindings id ntd.ld, ntd.ld.lt.live, Some (id, ntd.ld))
+    | OfferWildcard ->
+        raise (event_graph_error_default "Wildcard offer arm cannot be lowered as a message action" e.span)
+  in
+  let later_events = function
+    | [] -> raise (event_graph_error_default "Offer arm must contain at least one action" e.span)
+    | hd :: tl ->
+        List.fold_left (fun acc ev ->
+          if acc.is_recurse || ev.is_recurse then
+            raise (Except.TypeError [Except.Text "Recursive types not supported in conjunctive offer action completion"; Except.codespan_local e.span]);
+          Typing.event_create graph (`Later (acc, ev))
+        ) hd tl
+  in
+  let lower_offer_arm_from_root ctx_root arm_expr arm =
+    match arm with
+    | OfferAtom OfferWildcard -> construct_graphIR graph ci ctx_root arm_expr
+    | _ ->
+        let ctx_with_bindings, completion_events, recv_bindings =
+          List.fold_left (fun (ctx_acc, evs, recv_bindings) atom ->
+            let ctx_acc, completion_ev, recv_binding = lower_offer_atom_from_root ctx_root ctx_acc atom in
+            (ctx_acc, completion_ev :: evs, (match recv_binding with Some b -> b :: recv_bindings | None -> recv_bindings))
+          ) (ctx_root, [], []) (offer_atoms_of_arm e.span arm)
+        in
+        let completion_event = later_events (List.rev completion_events) in
+        let ctx_with_completion_bindings =
+          List.fold_left (fun ctx_acc (id, ld) ->
+            let anchored_dead = List.map (fun (_, pat) -> (completion_event, pat)) ld.lt.dead in
+            let anchored_ld = {ld with lt = {live = completion_event; dead = anchored_dead}} in
+            BuildContext.add_binding ctx_acc id anchored_ld
+          ) ctx_with_bindings recv_bindings
+        in
+        construct_graphIR graph ci {ctx_with_completion_bindings with current = completion_event} arm_expr
+  in
   match e.d with
   | Literal lit ->
     let (wires', w) = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs lit graph.wires in
@@ -681,266 +819,137 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     ntd
 | Offer offer_arms ->
-    let offer_msg_list = List.map (fun (offer_arm, _) ->
-      match offer_arm with
-      | OfferSend send_pack -> send_pack.send_msg_spec
-      | OfferRecv (_, recv_pack) -> recv_pack.recv_msg_spec
-      | OfferWildcard -> {endpoint = "*"; msg = "*"}
-    ) offer_arms in
-
-    let is_wildcard_present = List.exists (fun msg_spec ->
-      msg_spec.endpoint = "*" && msg_spec.msg = "*"
-    ) offer_msg_list in
-
-    let offer_msg_list_filtered = List.filter (fun msg_spec ->
-      msg_spec.endpoint <> "*" || msg_spec.msg <> "*"
-    ) offer_msg_list in
-
-    let msg_defs = List.map (fun msg_spec ->
-      MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
-      |> unwrap_or_err "Invalid message specifier in offer" e.span
-    ) offer_msg_list_filtered in
-
-    let msg_list = List.combine offer_msg_list_filtered msg_defs in
-
-    (* do_sanity_check_offer msg_list e.span; *)
-
-    let cond_td = Typing.offer_condition graph ctx offer_msg_list in
-    let ctx = BuildContext.wait graph ctx cond_td.ld.lt.live in
-
-    let offer_arm_filtered = List.filter (fun (offer_arm, _) ->
-      match offer_arm with
-      | OfferWildcard -> false
-      | _ -> true
-    ) offer_arms in
-
-    let ctx',wildcard_info =  if is_wildcard_present then (
-      let wildcard_arm_expr =
-        List.find_map (fun (offer_arm, arm_expr) ->
-          match offer_arm with
-          | OfferWildcard -> Some arm_expr
-          | _ -> None
-        ) offer_arms
-        |> unwrap_or_err "Wildcard arm not found" e.span
-      in
-      let branch_cond_wires = 
-        List.map (fun (msg_spec,msg_def) ->
-          if msg_def.dir = Inp then
-            let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
-            graph.wires <- wires';
-            msg_valid_port
-          else
-            if msg_def.handshake_mode == Lang.ValidAck then
-              let (wires', msg_ack_port) = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
-              graph.wires <- wires';
-              msg_ack_port
-            else
-              let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
-              graph.wires <- wires';
-              msg_ack_port
-        ) msg_list in
-
-        let wildcard_branch_cond = 
-          List.fold_left (fun acc w ->
-            let (wires', new_w) = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs Or acc (`Single w) graph.wires in
-            graph.wires <- wires';
-            new_w
-          ) (List.hd branch_cond_wires) (List.tl branch_cond_wires)
-        in 
-
-
-        (* create negatition of this *)
-        let wires,branch_cond_wire = WireCollection.add_unary graph.thread_id ci.typedefs Not wildcard_branch_cond graph.wires in
-        graph.wires <- wires;
-
-        let wire_td = Typing.immediate_data graph (Some branch_cond_wire) `Logic ctx.current in
-
-
+    let offer_msg_groups =
+      List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
+    in
+    let cond_td = Typing.offer_condition graph ctx offer_msg_groups in
+    let ctx_after_choice = BuildContext.wait graph ctx cond_td.ld.lt.live in
+    let non_wildcard_arms =
+      List.filter (fun (offer_arm, _) -> not (is_wildcard_arm offer_arm)) offer_arms
+    in
+    let wildcard_expr =
+      List.find_map (fun (offer_arm, arm_expr) ->
+        if is_wildcard_arm offer_arm then Some arm_expr else None
+      ) offer_arms
+    in
+    let non_wildcard_msg_defs =
+      List.map (fun (offer_arm, _) ->
+        offer_msg_group_of_arm e.span offer_arm
+        |> lookup_offer_msg_defs
+        |> List.combine (offer_msg_group_of_arm e.span offer_arm)
+      ) non_wildcard_arms
+    in
+    let non_wildcard_cond_wires =
+      List.map readiness_wire_of_group non_wildcard_msg_defs
+    in
+    let ctx_for_non_wildcard, wildcard_info =
+      match wildcard_expr, non_wildcard_arms with
+      | None, _ -> (ctx_after_choice, None)
+      | Some wildcard_arm_expr, [] ->
+          let td_wildcard = construct_graphIR graph ci ctx_after_choice wildcard_arm_expr in
+          ({ctx_after_choice with current = td_wildcard.ld.lt.live}, Some (`Only td_wildcard))
+      | Some wildcard_arm_expr, _ ->
+          let branch_cond_wire = negated_any_wire non_wildcard_cond_wires in
+          let wire_td = Typing.immediate_data graph (Some branch_cond_wire) `Logic ctx_after_choice.current in
           let outer_branch_info = {
-          branch_cond_v = wire_td.ld;
-          branch_cond = TrueFalse;
-          branch_count = 2; (* wildcard arm and others *)
-          branches_to = [];
-          branches_val = [];
-        } in
-        let (br_side_true, ctx_wildcard) = BuildContext.branch_side graph ctx outer_branch_info 0 in
-        let td_result = construct_graphIR graph ci ctx_wildcard wildcard_arm_expr in
-
-      
-        let (br_side_false, ctx_true) = BuildContext.branch_side graph ctx outer_branch_info 1 in
-        outer_branch_info.branches_to <- [ctx_wildcard.current; ctx_true.current];
-        outer_branch_info.branches_val <- [td_result.ld.lt.live];
-        (ctx_true, Some (outer_branch_info, br_side_true, br_side_false, td_result,ctx_wildcard))
-        (* Process the wildcard arm in the true branch *)
-      )
-      else(ctx ,None) in
-    
-    (* Create separate if-branches for each offer arm *)
-    let branch_contexts_and_tds = List.mapi (fun idx (offer_arm, arm_expr) ->
-      let (msg_spec, msg_def) = List.nth msg_list idx in
-      
-      (* Create condition wire for this branch *)
-      let wire_td = if msg_def.dir = Inp then
-        let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
-        graph.wires <- wires';
-        Typing.immediate_data graph (Some msg_valid_port) `Logic ctx'.current
-      else
-        if msg_def.handshake_mode == Lang.ValidAck then
-          let (wires', msg_ack_port) = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
-          graph.wires <- wires';
-          Typing.immediate_data graph (Some msg_ack_port) `Logic ctx'.current
-        else
-        let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
-        graph.wires <- wires';
-        Typing.immediate_data graph (Some msg_ack_port) `Logic ctx'.current
-      in
-      
-      (* Create branch info for this specific arm *)
-      let branch_info = {
-        branch_cond_v = wire_td.ld;
-        branch_cond = TrueFalse;
-        branch_count = 2;
-        branches_to = [];
-        branches_val = [];
-      } in
-      
-      let (br_side_true, ctx_branch) = BuildContext.branch_side graph ctx' branch_info 0 in
-      
-      (* Process the offer arm in the true branch *)
-      let td_result = match offer_arm with
-        | OfferSend send_pack ->
-            let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
-              |> unwrap_or_err "Invalid message specifier in offer send" e.span in
-            if msg.dir <> Out then
-              raise (event_graph_error_default "Mismatching message direction!" e.span);
-            
-            let td_data = construct_graphIR graph ci ctx_branch send_pack.send_data in
-            let msg_dtype = (List.hd msg.sig_types).dtype in
-            let err_string = Printf.sprintf "In offer send: Invalid data type for message %s: expected %s but got %s"
-              send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td_data.ld.dtype) in
-            check_dtype err_string (Some msg_dtype) td_data.ld.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
-            
-            let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_branch.current in
-            ctx_branch.current.sustained_actions <-
-              ({until = ntd.ld.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data.ld)} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            let ctx' = BuildContext.wait graph ctx_branch ntd.ld.lt.live in
-            construct_graphIR graph ci ctx' arm_expr
-
-        | OfferRecv (id, recv_pack) ->
-            let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
-              |> unwrap_or_err "Invalid message specifier in offer receive" e.span in
-            if msg.dir <> Inp then
-              raise (event_graph_error_default "Mismatching message direction!" e.span);
-            
-            let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
-            graph.wires <- wires';
-            let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg ctx_branch.current in
-            ctx_branch.current.sustained_actions <-
-              ({until = ntd.ld.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            
-            let ctx_with_binding = BuildContext.add_binding ctx_branch id ntd.ld in
-            let ctx' = BuildContext.wait graph ctx_with_binding ntd.ld.lt.live in
-            construct_graphIR graph ci ctx' arm_expr
-          | OfferWildcard ->
-            raise (event_graph_error_default "Wildcard offer arm should have been filtered out!" e.span)
-      in
-      
-      (* Create false branch (empty continuation) *)
-      let (br_side_false, ctx_false) = BuildContext.branch_side graph ctx' branch_info 1 in
-      let td_false = Typing.const_data graph None unit_dtype ctx_false.current in
-      
-      (* Update branch info *)
-      branch_info.branches_to <- [ctx_branch.current; ctx_false.current];
-      branch_info.branches_val <- [td_result.ld.lt.live; td_false.ld.lt.live];
-      
-      BuildContext.branch_merge ctx' [ctx_branch; ctx_false];
-      
-      let ctx_br = BuildContext.branch graph ctx' branch_info ci.file_name in
-      br_side_true.branch_event <- Some ctx_br.current;
-      br_side_false.branch_event <- Some ctx_br.current;
-      
-      (ctx_br, td_result)
-    ) offer_arm_filtered in
-
-    (* Merge all branch contexts using Later *)
-    (* let split3 lst =
-      let rec aux l (acc1, acc2, acc3) =
-        match l with
-        | [] -> (List.rev acc1, List.rev acc2, List.rev acc3)
-        | (x, y, z)::xs -> aux xs (x::acc1, y::acc2, z::acc3)
-      in
-      aux lst ([], [], [])
-    in *)
-    let (branch_ctxs, branch_tds) = List.split branch_contexts_and_tds in
-    let merged_event = List.fold_left (fun (acc_event:event) (branch_ctx:build_context) ->
-      if acc_event.is_recurse || branch_ctx.current.is_recurse then raise (Except.TypeError [Except.Text "Recursive types not supported in offer branch ends"; Except.codespan_local e.span]);
-      Typing.event_create graph (`Later (acc_event, branch_ctx.current))
-    ) (List.hd branch_ctxs).current (List.tl branch_ctxs) in
-    
-    (* Merge lifetimes and borrows from all branches *)
-    let merged_dead = List.fold_left Utils.list_unordered_join 
-      cond_td.ld.lt.dead (List.map (fun td -> td.ld.lt.dead) branch_tds) in
-    let merged_borrows = List.fold_left Utils.list_unordered_join 
-      [] (List.map (fun td -> td.ld.reg_borrows) branch_tds) in
-    
-    let lt = {live = merged_event; dead = merged_dead} in
-    
-    (* Use first branch's result as the representative *)
-    let result_w = match branch_tds with
-      | [] -> None
-      | hd::_ -> hd.ld.w
+            branch_cond_v = wire_td.ld;
+            branch_cond = TrueFalse;
+            branch_count = 2;
+            branches_to = [];
+            branches_val = [];
+          } in
+          let br_side_true, ctx_wildcard = BuildContext.branch_side graph ctx_after_choice outer_branch_info 0 in
+          let td_wildcard = construct_graphIR graph ci ctx_wildcard wildcard_arm_expr in
+          let br_side_false, ctx_non_wildcard = BuildContext.branch_side graph ctx_after_choice outer_branch_info 1 in
+          outer_branch_info.branches_to <- [ctx_wildcard.current; ctx_non_wildcard.current];
+          outer_branch_info.branches_val <- [td_wildcard.ld.lt.live];
+          (ctx_non_wildcard, Some (`Branched (outer_branch_info, br_side_true, br_side_false, td_wildcard, ctx_wildcard)))
     in
-    let result_dtype = match branch_tds with
-      | [] -> unit_dtype
-      | hd::_ -> hd.ld.dtype
-    in
-    
-    let td_false = {ld = {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype}} in
-    if is_wildcard_present then (
-      let (outer_branch_info, br_side_true, br_side_false, td_wildcard,ctx_wildcard) = Option.get wildcard_info in
-      (* outer_branch_info.branches_to <- outer_branch_info.branches_to @ [merged_event]; *)
-      outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_false.ld.lt.live];
-      BuildContext.branch_merge ctx [ctx'; ctx_wildcard];
-      let ctx_br = BuildContext.branch graph ctx' outer_branch_info ci.file_name in
-      br_side_true.branch_event <- Some ctx_br.current;
-      br_side_false.branch_event <- Some ctx_br.current;
-      {ld = {w = td_false.ld.w; lt = {live = ctx_br.current; dead = Utils.list_unordered_join td_false.ld.lt.dead td_wildcard.ld.lt.dead}; reg_borrows = Utils.list_unordered_join td_false.ld.reg_borrows td_wildcard.ld.reg_borrows; dtype = td_false.ld.dtype}}
-    ) else
-      td_false
+    (match wildcard_info, non_wildcard_arms with
+    | Some (`Only td_wildcard), [] -> td_wildcard
+    | _ ->
+        let branch_contexts_and_tds =
+          List.map2 (fun (offer_arm, arm_expr) msg_defs ->
+            let branch_cond_wire = readiness_wire_of_group msg_defs in
+            let wire_td = Typing.immediate_data graph (Some branch_cond_wire) `Logic ctx_for_non_wildcard.current in
+            let branch_info = {
+              branch_cond_v = wire_td.ld;
+              branch_cond = TrueFalse;
+              branch_count = 2;
+              branches_to = [];
+              branches_val = [];
+            } in
+            let br_side_true, ctx_branch = BuildContext.branch_side graph ctx_for_non_wildcard branch_info 0 in
+            let td_result = lower_offer_arm_from_root ctx_branch arm_expr offer_arm in
+            let br_side_false, ctx_false = BuildContext.branch_side graph ctx_for_non_wildcard branch_info 1 in
+            let td_false = Typing.const_data graph None unit_dtype ctx_false.current in
+            branch_info.branches_to <- [ctx_branch.current; ctx_false.current];
+            branch_info.branches_val <- [td_result.ld.lt.live; td_false.ld.lt.live];
+            BuildContext.branch_merge ctx_for_non_wildcard [ctx_branch; ctx_false];
+            let ctx_br = BuildContext.branch graph ctx_for_non_wildcard branch_info ci.file_name in
+            br_side_true.branch_event <- Some ctx_br.current;
+            br_side_false.branch_event <- Some ctx_br.current;
+            (ctx_br, td_result)
+          ) non_wildcard_arms non_wildcard_msg_defs
+        in
+        let branch_ctxs, branch_tds = List.split branch_contexts_and_tds in
+        let merged_event =
+          match branch_ctxs with
+          | [] -> ctx_for_non_wildcard.current
+          | hd :: tl ->
+              List.fold_left (fun (acc_event : event) (branch_ctx : build_context) ->
+                if acc_event.is_recurse || branch_ctx.current.is_recurse then
+                  raise (Except.TypeError [Except.Text "Recursive types not supported in offer branch ends"; Except.codespan_local e.span]);
+                Typing.event_create graph (`Later (acc_event, branch_ctx.current))
+              ) hd.current tl
+        in
+        let merged_dead = List.fold_left Utils.list_unordered_join
+          cond_td.ld.lt.dead (List.map (fun td -> td.ld.lt.dead) branch_tds) in
+        let merged_borrows = List.fold_left Utils.list_unordered_join
+          [] (List.map (fun td -> td.ld.reg_borrows) branch_tds) in
+        let result_w = match branch_tds with
+          | [] -> None
+          | hd :: _ -> hd.ld.w
+        in
+        let result_dtype = match branch_tds with
+          | [] -> unit_dtype
+          | hd :: _ -> hd.ld.dtype
+        in
+        let td_non_wildcard = {ld = {w = result_w; lt = {live = merged_event; dead = merged_dead}; reg_borrows = merged_borrows; dtype = result_dtype}} in
+        (match wildcard_info with
+        | Some (`Branched (outer_branch_info, br_side_true, br_side_false, td_wildcard, ctx_wildcard)) ->
+            outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_non_wildcard.ld.lt.live];
+            BuildContext.branch_merge ctx_after_choice [ctx_wildcard; ctx_for_non_wildcard];
+            let ctx_br = BuildContext.branch graph ctx_after_choice outer_branch_info ci.file_name in
+            br_side_true.branch_event <- Some ctx_br.current;
+            br_side_false.branch_event <- Some ctx_br.current;
+            {ld = {
+              w = td_non_wildcard.ld.w;
+              lt = {live = ctx_br.current; dead = Utils.list_unordered_join td_non_wildcard.ld.lt.dead td_wildcard.ld.lt.dead};
+              reg_borrows = Utils.list_unordered_join td_non_wildcard.ld.reg_borrows td_wildcard.ld.reg_borrows;
+              dtype = td_non_wildcard.ld.dtype;
+            }}
+        | _ -> td_non_wildcard))
     
   | XOffer (offer_arms, state_selector) ->
-    (* Create branches for each offer arm - all can start in parallel *)
-    (* create a special condition node *)
+    let offer_msg_groups =
+      List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
+    in
+    let is_wildcard_present =
+      List.exists (fun (offer_arm, _) -> is_wildcard_arm offer_arm) offer_arms
+    in
+    let offer_arm_filtered =
+      List.filter (fun (offer_arm, _) -> not (is_wildcard_arm offer_arm)) offer_arms
+    in
+    let non_wildcard_msg_defs =
+      List.map (fun (offer_arm, _) ->
+        let msg_group = offer_msg_group_of_arm e.span offer_arm in
+        lookup_offer_msg_defs msg_group |> List.combine msg_group
+      ) offer_arm_filtered
+    in
+    do_sanity_check_offer (List.flatten non_wildcard_msg_defs) e.span;
 
-
-    let offer_msg_list = List.map (fun (offer_arm, _) ->
-      match offer_arm with
-      | OfferSend send_pack -> send_pack.send_msg_spec
-      | OfferRecv (_, recv_pack) -> recv_pack.recv_msg_spec
-      | OfferWildcard -> {endpoint = "*"; msg = "*"}
-    ) offer_arms in
-
-    let offer_arm_filtered = List.filter (fun (offer_arm, _) ->
-      match offer_arm with
-      | OfferWildcard -> false
-      | _ -> true
-    ) offer_arms in
-
-    let offer_msg_list_filtered = List.filter (fun msg_spec ->
-      msg_spec.endpoint <> "*" || msg_spec.msg <> "*"
-    ) offer_msg_list in
-
-    let msg_defs = List.map (fun msg_spec ->
-      MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
-      |> unwrap_or_err "Invalid message specifier in offer" e.span
-    ) offer_msg_list_filtered in
-
-    let msg_list = List.combine offer_msg_list_filtered msg_defs in
-
-
-    do_sanity_check_offer msg_list e.span;
-
-    let cond_td = Typing.offer_condition graph ctx offer_msg_list in
+    let cond_td = Typing.offer_condition graph ctx offer_msg_groups in
     let ctx = BuildContext.wait graph ctx cond_td.ld.lt.live in
     
     (*==================== At this point one of the messages must have been received ==========================================================*)
@@ -962,37 +971,13 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let new_wires, sel_w = if Option.is_some state_selector then (find_wire_ctx ctx.cg_lt_ctx (Option.get state_selector)) else WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (bit_len, 0)) graph.wires in
     graph.wires <- new_wires;
 
-let wire_list =
-      List.fold_left (fun acc (msg_spec, msg_def) ->
-        if msg_def.dir = Inp then
-          let (wires', msg_valid_port) = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
-          graph.wires <- wires';
-          acc @ [msg_valid_port]
-        else
-          let (wires', msg_ack_port) = WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires in
-          graph.wires <- wires';
-          acc @ [msg_ack_port]
-      ) [] msg_list in
-      let is_wildcard_present = List.exists (fun msg_spec ->
-            msg_spec.endpoint = "*" && msg_spec.msg = "*"
-      ) offer_msg_list in
-      let updated_wire_list' =
-        if is_wildcard_present && ((List.length wire_list) = 1)  then
-          (
-            let wires', ww = WireCollection.add_unary graph.thread_id ci.typedefs Not (List.hd wire_list) graph.wires in
-            graph.wires <- wires';
-            wire_list @ [ww]
-          )
-        else(
-          let ww = List.fold_left (fun hd wire ->
-            let (wires', new_wire) = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs Or hd (`Single wire) graph.wires in
-            graph.wires <- wires';
-            new_wire
-          ) (List.hd wire_list) (List.tl wire_list) in
-          let wc,  ww_not = WireCollection.add_unary graph.thread_id ci.typedefs Not ww graph.wires in
-          graph.wires <- wc;
-          wire_list @ [ww_not]
-        ) in
+    let wire_list = List.map readiness_wire_of_group non_wildcard_msg_defs in
+    let updated_wire_list' =
+      if is_wildcard_present then
+        wire_list @ [negated_any_wire wire_list]
+      else
+        wire_list
+    in
 
     let max_len = int_of_float (2. ** float_of_int bit_len) in
     let extended_zero_needed = max_len - length_offering in
@@ -1042,16 +1027,10 @@ let wire_list =
       graph.wires <- wires;
 
     
-      let is_wildcard_present = List.exists (fun msg_spec ->
-            msg_spec.endpoint = "*" && msg_spec.msg = "*"
-      ) offer_msg_list in
-    
       let required_branch_conditions = List.filteri (fun i _ -> i < length_offering) index_values in
     let wildcard_arm =
       List.find_opt (fun (offer_arm, _) ->
-        match offer_arm with
-        | OfferWildcard -> true
-        | _ -> false
+        is_wildcard_arm offer_arm
       ) offer_arms
       in
 
@@ -1069,46 +1048,7 @@ let wire_list =
     (* Process each offer arm in its own branch *)
     let branch_contexts_and_tds = List.mapi (fun idx (offer_arm, arm_expr) ->
       let (br_side, ctx_branch) = BuildContext.branch_side graph ctx branch_info idx in
-      
-      let td_result = match offer_arm with
-        | OfferSend send_pack ->
-            let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
-              |> unwrap_or_err "Invalid message specifier in offer send" e.span in
-            if msg.dir <> Out then
-              raise (event_graph_error_default "Mismatching message direction!" e.span);
-            
-            let td_data = construct_graphIR graph ci ctx_branch send_pack.send_data in
-            let msg_dtype = (List.hd msg.sig_types).dtype in
-            let err_string = Printf.sprintf "In offer send: Invalid data type for message %s: expected %s but got %s"
-              send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td_data.ld.dtype) in
-            check_dtype err_string (Some msg_dtype) td_data.ld.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
-            
-            let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_branch.current in
-            ctx_branch.current.sustained_actions <-
-              ({until = ntd.ld.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data.ld)} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            let ctx' = BuildContext.wait graph ctx_branch ntd.ld.lt.live in
-            construct_graphIR graph ci ctx' arm_expr
-
-        | OfferRecv (id, recv_pack) ->
-            let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
-              |> unwrap_or_err "Invalid message specifier in offer receive" e.span in
-            if msg.dir <> Inp then
-              raise (event_graph_error_default "Mismatching message direction!" e.span);
-            
-            let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
-            graph.wires <- wires';
-            let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg ctx_branch.current in
-              
-            ctx_branch.current.sustained_actions <-
-              ({until = ntd.ld.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_branch.current.sustained_actions;
-            
-            (* Bind the received value and continue *)
-            let ctx_with_binding = BuildContext.add_binding ctx_branch id ntd.ld in
-            let ctx' = BuildContext.wait graph ctx_with_binding ntd.ld.lt.live in
-            construct_graphIR graph ci ctx' arm_expr
-        | OfferWildcard ->
-            construct_graphIR graph ci ctx_branch arm_expr
-      in
+      let td_result = lower_offer_arm_from_root ctx_branch arm_expr offer_arm in
       
       (br_side, ctx_branch, td_result)
     ) offer_arms_new in
@@ -1342,4 +1282,3 @@ let wire_list =
     Typing.create_recurse_td rec_event ctx.current.id
 
   | Tuple _ -> raise (event_graph_error_default "Unimplemented expression!" e.span)
-

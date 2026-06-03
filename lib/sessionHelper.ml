@@ -390,6 +390,7 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
     | Lang.AtomDelay n -> Lang.AtomDelay n
     | Lang.AtomicAct atomic -> Lang.AtomicAct (replace_in_atomic_action atomic)
     | AtomTerminal sty -> AtomTerminal (preprocess_sty sty)
+    | AtomConjunction actions -> AtomConjunction (List.map replace_in_atomic_action actions)
   
   and preprocess_sty (sty : Lang.session_type) : Lang.session_type =
     match sty with

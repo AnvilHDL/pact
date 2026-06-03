@@ -1,0 +1,20 @@
+chan conj_ch {
+    left req : (logic@#1),
+    left ack : (logic@#1),
+    left alt : (logic@#1)
+}
+interface conj_offer_xleft (ep : left conj_ch) = ^({ep.req, ep.ack} : #1, ep.alt : #1) ; #1
+
+proc offer_conj_worker(conj_offer_xleft) {
+    loop {
+        xoffer {
+            {x = recv ep.req; y = recv ep.ack} => (
+                dprint "offer conjunction %d %d" (x, y)
+            ),
+            z = recv ep.alt => (
+                dprint "offer singleton %d" (z)
+            )
+        } >>
+        cycle 1
+    }
+}

@@ -30,7 +30,7 @@ type atomic_delay = [
   | `Cycles of int (** elapse of a specific number of cycles *)
   | `Send of Lang.message_specifier (** sending of a message *)
   | `Recv of Lang.message_specifier (** receiving of a message *)
-  | `Choice of Lang.message_specifier list (** making a choice among multiple messages *)
+  | `Choice of Lang.message_specifier list list (** making a choice among message groups *)
   | `Sync of Lang.identifier (** synchronising on a local shared value *)
 ]
 

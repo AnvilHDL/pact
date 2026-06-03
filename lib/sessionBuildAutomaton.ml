@@ -14,6 +14,51 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
   
   (* Internal recursive builder *)
   let rec build (s_type: Lang.session_type) (current: int) (var_map : varContext list) : int =
+    let msg_of_action = function
+      | Lang.AtomBMsg m | Lang.AtomNBMsg m -> m
+    in
+    let is_blocking_action = function
+      | Lang.AtomBMsg _ -> true
+      | Lang.AtomNBMsg _ -> false
+    in
+    let immediate_action = function
+      | Lang.AtomBMsg m | Lang.AtomNBMsg m -> Lang.AtomNBMsg m
+    in
+    let trigger_actions = function
+      | Lang.AtomicAct act -> Some [act]
+      | Lang.AtomConjunction acts -> Some acts
+      | _ -> None
+    in
+    let trigger_msg_group trigger =
+      Option.map (List.map msg_of_action) (trigger_actions trigger)
+    in
+    let trigger_is_blocking trigger =
+      match trigger_actions trigger with
+      | Some actions -> List.for_all is_blocking_action actions
+      | None -> false
+    in
+    let trigger_is_nonblocking trigger =
+      match trigger_actions trigger with
+      | Some actions -> List.for_all (fun act -> not (is_blocking_action act)) actions
+      | None -> false
+    in
+    let atom_of_actions actions =
+      match actions with
+      | [act] -> Lang.AtomicAct act
+      | _ -> Lang.AtomConjunction actions
+    in
+    let branch_type_for_offering (offering : offering_session_type) =
+      match trigger_actions offering.trigger with
+      | Some actions ->
+        let immediate_trigger = atom_of_actions (List.map immediate_action actions) in
+        (match offering.continuation with
+        | Some cont -> StySeq (StyAtom immediate_trigger, cont)
+        | None -> StyAtom immediate_trigger)
+      | None ->
+        (match offering.continuation with
+        | Some cont -> cont
+        | None -> StyTrue)
+    in
     match s_type with
     | Lang.StyAtom at ->
       (
@@ -21,7 +66,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         | Lang.AtomicAct (Lang.AtomBMsg m) -> 
           (
             (Hashtbl.find auto.states current).accepting <- false;
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay [m])) false false false false;
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay [[m]])) false false false false;
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
             TypeAutomaton.append_offers auto current [m];
@@ -33,6 +78,24 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
             let next_s = TypeAutomaton.new_state auto true in
             TypeAutomaton.add_transition auto current next_s (LabelSet.singleton (Action m)) false false false false;
             TypeAutomaton.append_offers auto current [m];
+            next_s
+          )
+        | Lang.AtomConjunction acts ->
+          (
+            let all_blocking = List.for_all is_blocking_action acts in
+            let all_nonblocking = List.for_all (fun act -> not (is_blocking_action act)) acts in
+            if not (all_blocking || all_nonblocking) then
+              raise (TypeError [Text "Mixed blocking and non-blocking actions in conjunctive session atom"; Except.codespan_local default_span]);
+            let msg_group = List.map msg_of_action acts in
+            (Hashtbl.find auto.states current).accepting <- false;
+            if all_blocking then
+              TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay [msg_group])) false false false false;
+            let next_s = TypeAutomaton.new_state auto true in
+            let label =
+              List.fold_left (fun acc msg -> LabelSet.add (Action msg) acc) LabelSet.empty msg_group
+            in
+            TypeAutomaton.add_transition auto current next_s label false false false false;
+            TypeAutomaton.append_offers auto current msg_group;
             next_s
           )
         | Lang.AtomDelay n ->
@@ -88,17 +151,15 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         ) offerings in
 
         let all_msg_branches = List.filter_map (fun (o : offering_session_type) ->
-          match o.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg _) -> Some o
-          | Lang.AtomicAct (Lang.AtomNBMsg _) -> Some o
-          | _ -> None
+          match trigger_msg_group o.Lang.trigger with
+          | Some _ -> Some o
+          | None -> None
         ) offerings in
-        let all_blocking = List.for_all (fun (o : offering_session_type) ->
-          match o.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg _) -> true
-          | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
-          | _ -> false
-        ) offerings in
+        let all_blocking = List.for_all (fun (o : offering_session_type) -> trigger_is_blocking o.Lang.trigger) all_msg_branches in
+        let all_nonblocking = List.for_all (fun (o : offering_session_type) -> trigger_is_nonblocking o.Lang.trigger) all_msg_branches in
+        if all_msg_branches <> [] && not (all_blocking || all_nonblocking) then
+          raise (TypeError [Text "Mixed blocking and non-blocking offerings in external choice"; Except.codespan_local default_span]);
+        let all_msg_groups = List.filter_map (fun (o : offering_session_type) -> trigger_msg_group o.Lang.trigger) all_msg_branches in
 
         let end_state = TypeAutomaton.new_state auto true in
 
@@ -109,13 +170,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
             | Lang.AtomDelay _ -> true
             | _ -> false
           ) offerings in
-          let all_msg_specs = List.filter_map (fun b -> 
-            match b.Lang.trigger with 
-            | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
-            | _ -> None
-          ) all_msg_branches in
           let new_wildcard_state = TypeAutomaton.new_state auto true in
-          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_specs)) false false false true ;
+          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_groups)) false false false true ;
 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
@@ -126,29 +182,13 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         end;
 
         List.iter (fun o_ms ->
-          let m = match o_ms.Lang.trigger with
-            | Lang.AtomicAct (Lang.AtomBMsg m) -> m
-            | Lang.AtomicAct (Lang.AtomNBMsg m) -> m
-            | _ -> failwith "Should not reach here"
-          in
-          let st = match o_ms.Lang.continuation with
-            | Some cont -> StySeq (StyAtom (AtomicAct (AtomNBMsg m)), cont)
-            | None -> StyAtom (AtomicAct (AtomNBMsg m))
-          in
+          let st = branch_type_for_offering o_ms in
 
           let branch_end = build st current var_map in
-        if all_blocking then (
-            let all_msg_specs = List.filter_map (fun b -> 
-              match b.Lang.trigger with 
-              | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
-              | _ -> None
-            ) all_msg_branches in
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
-          );
-
-        
           if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state var_map
         ) all_msg_branches;
+        if all_blocking then
+          TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_groups)) false false false false;
           
         end_state
       )
@@ -162,17 +202,15 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         ) offerings in
 
         let all_msg_branches = List.filter_map (fun (o : offering_session_type) ->
-          match o.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg _) -> Some o
-          | Lang.AtomicAct (Lang.AtomNBMsg _) -> Some o
-          | _ -> None
+          match trigger_msg_group o.Lang.trigger with
+          | Some _ -> Some o
+          | None -> None
         ) offerings in
-        let all_blocking = List.for_all (fun (o : offering_session_type) ->
-          match o.Lang.trigger with
-          | Lang.AtomicAct (Lang.AtomBMsg _) -> true
-          | Lang.AtomicAct (Lang.AtomNBMsg _) -> false
-          | _ -> false
-        ) offerings in 
+        let all_blocking = List.for_all (fun (o : offering_session_type) -> trigger_is_blocking o.Lang.trigger) all_msg_branches in
+        let all_nonblocking = List.for_all (fun (o : offering_session_type) -> trigger_is_nonblocking o.Lang.trigger) all_msg_branches in
+        if all_msg_branches <> [] && not (all_blocking || all_nonblocking) then
+          raise (TypeError [Text "Mixed blocking and non-blocking offerings in external choice"; Except.codespan_local default_span]);
+        let all_msg_groups = List.filter_map (fun (o : offering_session_type) -> trigger_msg_group o.Lang.trigger) all_msg_branches in
         
         let end_state = TypeAutomaton.new_state auto true in
 
@@ -183,13 +221,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
             | Lang.AtomDelay _ -> true
             | _ -> false
           ) offerings in
-          let all_msg_specs = List.filter_map (fun b -> 
-            match b.Lang.trigger with 
-            | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
-            | _ -> None
-          ) all_msg_branches in
           let new_wildcard_state = TypeAutomaton.new_state auto true in
-          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_specs)) false false false true;
+          TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_groups)) false false false true;
 
           match wildcard_offer.Lang.continuation with
           | Some cont ->
@@ -234,12 +267,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       )
         ;
         if all_blocking then (
-            let all_msg_specs = List.filter_map (fun b -> 
-              match b.Lang.trigger with 
-              | Lang.AtomicAct (Lang.AtomBMsg m) | Lang.AtomicAct (Lang.AtomNBMsg m) -> Some m 
-              | _ -> None
-            ) all_msg_branches in
-            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_specs)) false false false false
+            TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_groups)) false false false false
           );
         end_state
       )

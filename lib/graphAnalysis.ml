@@ -493,7 +493,7 @@ let events_max_dist events lookup_message ev =
         | Static _ | Dependent _ -> 0
         | _ -> event_distance_max
       )
-    | `Choice mlist ->
+    | `Choice msg_groups ->
       List.fold_left (fun mx m ->
         let wild_card = {msg="*"; endpoint = "*"  } in
         if m = wild_card then
@@ -505,7 +505,7 @@ let events_max_dist events lookup_message ev =
           | _ -> event_distance_max
         in
         Int.max mx d
-      ) 0 mlist 
+      ) 0 (List.flatten msg_groups)
     | `Recv m ->
       let msg_def = lookup_message m |> Option.get in
       (

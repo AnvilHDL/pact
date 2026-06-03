@@ -148,16 +148,17 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           )
         in
 
-        let check_no_offers msg_list offer_list =
+        let group_satisfied msg_group offer_list =
+          List.for_all (fun m -> List.mem m offer_list) msg_group
+        in
+        let check_no_complete_offer msg_groups offer_list =
           if offer_list = [] then true else
-          List.for_all (fun m ->
-            not (List.mem m offer_list)
-          ) msg_list
-          in
+          List.for_all (fun msg_group -> not (group_satisfied msg_group offer_list)) msg_groups
+        in
         let is_delay i t =
           LabelSet.exists (function
             | Delay -> true
-            | OptionDelay m_list -> check_no_offers m_list offers_from_other_states_arr.(i)
+            | OptionDelay msg_groups -> check_no_complete_offer msg_groups offers_from_other_states_arr.(i)
             | _ -> false
           ) t.label
         in
@@ -346,13 +347,10 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               inc_iter;
               let offers_in_future_of_this_state = offers_in_future_from_others_arr.(id) in
               List.iter (fun t -> 
-                let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
-                let t_not_acts_flat = List.flatten t_not_acts in
-
                 let is_compatible =
-                  List.for_all (fun tna ->
-                    not (List.mem tna offers_in_future_of_this_state)
-                  ) t_not_acts_flat in
+                  List.for_all (fun msg_groups ->
+                    check_no_complete_offer msg_groups offers_in_future_of_this_state
+                  ) (List.filter_map (function Negation msg_groups -> Some msg_groups | _ -> None) (LabelSet.elements t.label)) in
 
                 (* Printf.eprintf "[Verdict = %s] [State %d] Considering conditional transition from automaton %d with not_acts: %s\n" (string_of_bool is_compatible) prod_state_id id (String.concat "," (List.map Lang.string_of_msg_spec t_not_acts_flat));
                 Printf.eprintf "Offers in future of this state: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec offers_in_future_of_this_state));
@@ -426,12 +424,10 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               List.iteri (fun i t_set ->
                 let offers_for_this_state = offers_for_this_state_arr_from_others.(i) in
                 List.iter (fun t -> 
-                  let t_not_acts = List.filter_map (function Negation ms -> Some ms | _ -> None) (LabelSet.elements t.label) in
-                  let t_not_acts_flat = List.flatten t_not_acts in
                   let is_compatible =
-                    List.for_all (fun tna ->
-                      not (List.mem tna offers_for_this_state)
-                    ) t_not_acts_flat in 
+                    List.for_all (fun msg_groups ->
+                      check_no_complete_offer msg_groups offers_for_this_state
+                    ) (List.filter_map (function Negation msg_groups -> Some msg_groups | _ -> None) (LabelSet.elements t.label)) in 
                   
                     (* Printf.eprintf "[Verdict = %s] [State %d] Considering conditional transition with delay compatibility from automaton %d with not_acts: %s\n" (string_of_bool is_compatible) prod_state_id i (String.concat "," (List.map Lang.string_of_msg_spec t_not_acts_flat));
                   Printf.eprintf "Offers for this state from others: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec offers_for_this_state));

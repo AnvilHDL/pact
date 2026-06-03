@@ -101,6 +101,7 @@ and atomic_action_with_gap =
   | AtomDelay of int (** atomic delay action *)
   | AtomicAct of atomic_action
   | AtomTerminal of session_type (** terminal action for interface session types *)
+  | AtomConjunction of atomic_action list
 
 and session_type =
   | StySeq of session_type * session_type (** sequence *)
@@ -517,10 +518,14 @@ and expr =
   | Recurse
 and expr_node = expr ast_node
 
-and offer_arm_type =
+and offer_arm_atom_type =
   | OfferSend of send_pack
   | OfferRecv of identifier * recv_pack
   | OfferWildcard
+  
+and offer_arm_type =
+  | OfferAtom of offer_arm_atom_type
+  | OfferConjunction of offer_arm_atom_type list
 
 (** A "location" that can be assigned to. *)
 and lvalue =
@@ -769,23 +774,28 @@ let rec string_of_expr (e : expr) : string =
        | DebugFinish -> "Debug:finish")
   | XOffer (arms, sel_opt) ->
       let arm_str (arm_ty, body) =
-        string_of_offer_arm_type arm_ty ^ " -> " ^ string_of_expr body.d
+        string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
       in
       let sel_str = match sel_opt with Some s -> " sel=" ^ s | None -> "" in
       "XOffer" ^ sel_str ^ " { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
   | Offer arms ->
       let arm_str (arm_ty, body) =
-        string_of_offer_arm_type arm_ty ^ " -> " ^ string_of_expr body.d
+        string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
       in
       "Offer { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
 
-and string_of_offer_arm_type (arm : offer_arm_type) : string =
+and string_of_offer_arm_type arm : string =
   match arm with
   | OfferSend sp ->
       "Send " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
   | OfferRecv (id, rp) ->
       "Recv " ^ id ^ " <- " ^ string_of_msg_spec rp.recv_msg_spec
   | OfferWildcard -> "_"
+
+and string_of_offer_arm (arm : offer_arm_type) : string =
+  match arm with
+  | OfferAtom atom -> string_of_offer_arm_type atom
+  | OfferConjunction arms -> "&(" ^ String.concat ", " (List.map string_of_offer_arm_type arms) ^ ")"
 
 and string_of_lvalue (lv : lvalue) : string =
   match lv with
@@ -1123,6 +1133,7 @@ and string_of_aa_with_gap = function
   | AtomicAct act -> string_of_atomic_action act
   | AtomDelay n -> Printf.sprintf "#<%d>" n
   | AtomTerminal sty -> "( end of " ^ string_of_protocol_for_graph sty ^ " )"
+  | AtomConjunction act_list -> "( " ^ String.concat " ∧ " (List.map string_of_atomic_action act_list) ^ " )" 
 and aux2 p =
   match p with
   | {trigger; continuation} ->
@@ -1196,6 +1207,7 @@ and string_of_aa_with_gap = function
   | AtomicAct act -> string_of_atomic_action act
   | AtomDelay n when n > 0 -> Printf.sprintf "#<%d>" n
   | AtomTerminal sty -> "( end of " ^ string_of_protocol sty ^ " )"
+  | AtomConjunction acts -> "( " ^ String.concat " ∧ " (List.map string_of_atomic_action acts) ^ " )"
   | _ -> "*"
 and aux2 p =
   match p with
@@ -1214,6 +1226,7 @@ let string_of_atomic_action_with_gap = function
   | AtomicAct act -> string_of_atomic_action act
   | AtomDelay n when n > 0 -> Printf.sprintf "#<%d>" n
   | AtomTerminal sty -> "( end of " ^ string_of_protocol sty ^ " )"
+  | AtomConjunction acts -> "( " ^ String.concat " ∧ " (List.map string_of_atomic_action acts) ^ " )"
   | _ -> "*"
 
 

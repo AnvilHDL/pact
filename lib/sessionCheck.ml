@@ -37,21 +37,80 @@ let print_string_of_head_cont_pair hc =
 
 (* Helper functions for session type judgements *)
 
+let wildcard_msg_spec = {endpoint = "*"; msg = "*"}
+
+let msg_spec_equal a b =
+  a.endpoint = b.endpoint && a.msg = b.msg
+
+let same_msg_spec_set a b =
+  let normalize = List.sort_uniq Stdlib.compare in
+  normalize a = normalize b
+
+let msg_spec_of_atomic_action = function
+  | Lang.AtomBMsg m | Lang.AtomNBMsg m -> m
+
+let is_blocking_atomic_action = function
+  | Lang.AtomBMsg _ -> true
+  | Lang.AtomNBMsg _ -> false
+
+let trigger_msg_group = function
+  | Lang.AtomicAct act -> Some [msg_spec_of_atomic_action act]
+  | Lang.AtomConjunction acts -> Some (List.map msg_spec_of_atomic_action acts)
+  | Lang.AtomDelay _ -> Some [wildcard_msg_spec]
+  | Lang.AtomTerminal _ -> None
+
+let trigger_matches_msg trigger msg =
+  match trigger_msg_group trigger with
+  | Some msgs -> List.exists (msg_spec_equal msg) msgs
+  | None -> false
+
+let session_of_atomic_actions actions =
+  match actions with
+  | [] -> StyTrue
+  | first :: rest ->
+      List.fold_left (fun acc act ->
+        StyParallel (acc, StyAtom (AtomicAct act))
+      ) (StyAtom (AtomicAct first)) rest
+
+let seq_if_needed head cont =
+  match head, cont with
+  | StyTrue, cont -> cont
+  | head, StyTrue -> head
+  | _ -> StySeq (head, cont)
+
+let continuation_or_true = function
+  | Some sty -> sty
+  | None -> StyTrue
+
+let offering_body_session (offering : offering_session_type) =
+  match offering.trigger with
+  | Lang.AtomicAct act ->
+      seq_if_needed (StyAtom (AtomicAct act)) (continuation_or_true offering.continuation)
+  | Lang.AtomConjunction actions ->
+      let all_blocking = List.for_all is_blocking_atomic_action actions in
+      let all_nonblocking = List.for_all (fun act -> not (is_blocking_atomic_action act)) actions in
+      if not (all_blocking || all_nonblocking) then
+        raise (Except.TypeError [Text "Mixed blocking and non-blocking actions in conjunctive offering"]);
+      seq_if_needed (session_of_atomic_actions actions) (continuation_or_true offering.continuation)
+  | Lang.AtomDelay _ | Lang.AtomTerminal _ ->
+      continuation_or_true offering.continuation
+
+let is_message_offering (offering : offering_session_type) =
+  match offering.trigger with
+  | Lang.AtomicAct _ | Lang.AtomConjunction _ -> true
+  | _ -> false
+
 (* Match offerings with messages *)
 let match_offerings_with_msgs
     (offerings : offering_session_type list)
-    (msgs : Lang.message_specifier list) : bool =
-    List.for_all (fun msg ->
+    (msg_groups : Lang.message_specifier list list) : bool =
+    List.for_all (fun msg_group ->
       List.exists (fun offering ->
-        match offering.trigger with
-        | Lang.AtomicAct (Lang.AtomBMsg m) ->
-            m.endpoint = msg.endpoint && m.msg = msg.msg
-        | Lang.AtomicAct (Lang.AtomNBMsg m) ->
-            m.endpoint = msg.endpoint && m.msg = msg.msg
-        | Lang.AtomDelay _ -> msg.endpoint = "*" && msg.msg = "*"
-        | _ -> false
+        match trigger_msg_group offering.trigger with
+        | Some offering_group -> same_msg_spec_set offering_group msg_group
+        | None -> false
       ) offerings
-    ) msgs
+    ) msg_groups
 
 let rec remove_type_choice sty1 sty2 =
   (* remove sty2 from sty1 : as consumed *)
@@ -150,6 +209,7 @@ let is_branch_root_of_parent (parent_ev : event) (child_ev : event) =
 
 (* Error handler that outputs the graph with session types before raising error *)
 let error_handler g err_msg err_span module_name  =
+  Printf.eprintf "\nPrinting file %s with session types for debugging...\n" module_name;
   let file_handler = Out_channel.open_text (Printf.sprintf "%s_error.dot" module_name) in
   EventGraphOps.print_graph_with_session_types g file_handler;
   Out_channel.close file_handler;
@@ -164,69 +224,22 @@ let error_handler g err_msg err_span module_name  =
 
 (* Build choice session type from list of offerings *)
 let rec build_choice_from_xofferings (offerings : offering_session_type list) =
-  if List.length offerings = 1 then
-    let only = List.hd offerings in
-    match only.trigger with
-    | Lang.AtomicAct trig ->
-        (match only.continuation with
-        | Some sty -> Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty)
-        | None -> Lang.StyAtom (Lang.AtomicAct trig)
-        )
-    | _ -> 
-        match only.continuation with
-        | Some sty -> sty
-        | None -> Lang.StyTrue
-  else
-    let first = List.hd offerings in
-    let rest = List.tl offerings in
-    match first.trigger with
-    | Lang.AtomicAct trig ->
-        Lang.StyChoice(
-          (match first.continuation with
-          | Some sty -> Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty)
-          | None -> Lang.StyAtom (Lang.AtomicAct trig)
-          ),
-          build_choice_from_xofferings rest
-        )
-    | _ -> build_choice_from_xofferings rest
+  match offerings with
+  | [] -> Lang.StyTrue
+  | [only] -> offering_body_session only
+  | first :: rest ->
+      Lang.StyChoice (offering_body_session first, build_choice_from_xofferings rest)
   
 let  build_choice_from_offerings (offerings : offering_session_type list) =
   let rec aux offings =
-    if List.length offings = 1 then
-      let only = List.hd offings in
-      match only.trigger with
-      | Lang.AtomicAct trig ->
-          (match only.continuation with
-          | Some sty -> StyChoice(Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty), Lang.StyTrue)
-          | None -> StyChoice(Lang.StyAtom (Lang.AtomicAct trig), Lang.StyTrue)
-          )
-      | _ -> 
-        raise (Except.TypeError [
-          Text "Unsupported offering trigger in build_choice_from_offerings | Should not happen";
-        ])
-    else
-      let first = List.hd offings in
-      let rest = List.tl offings in
-      match first.trigger with
-      | Lang.AtomicAct trig ->
-          Lang.StyParallel(
-            (match first.continuation with
-            | Some sty -> StyChoice(Lang.StySeq(Lang.StyAtom (Lang.AtomicAct trig), sty), Lang.StyTrue)
-            | None -> StyChoice(Lang.StyAtom (Lang.AtomicAct trig), Lang.StyTrue)
-            ),
-            aux rest
-          )
-      | _ -> raise (Except.TypeError [
-          Text "Unsupported offering trigger in build_choice_from_offerings | Should not happen";
-        ])
+    match offings with
+    | [] -> StyTrue
+    | [only] -> StyChoice (offering_body_session only, StyTrue)
+    | first :: rest ->
+        StyParallel (StyChoice (offering_body_session first, StyTrue), aux rest)
   in
 
-  let offerings_list_filtered = List.filter (fun off ->
-    match off.trigger with
-    | Lang.AtomicAct (Lang.AtomBMsg _) -> true
-    | Lang.AtomicAct (Lang.AtomNBMsg _) -> true
-    | _ -> false
-  ) offerings in 
+  let offerings_list_filtered = List.filter is_message_offering offerings in 
   let wildcard = List.filter (fun off ->
     match off.trigger with
     | Lang.AtomDelay _ -> true
@@ -245,6 +258,7 @@ let  build_choice_from_offerings (offerings : offering_session_type list) =
 let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (rec_var_context : (identifier*session_type) list) : head_continuation_pair list =
   match sty_node with
   | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = StyTrue ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomConjunction acts) -> [{default_head_continuation_pair with head = Atom (AtomConjunction acts); cont = StyTrue ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
   | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
   | StySeq (s1, s2) -> (  
     let head_conts = get_head_continuation_pair s1 sp rec_var_context in
@@ -267,9 +281,9 @@ let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (r
      (
       let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
       let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
-      let has_same_hd hd_act other_pairs = List.exists (fun hc -> hc.head = hd_act) other_pairs in
-      let head_conts_transform_1 = List.map (fun hc -> {hc with cont = if has_same_hd hc.head head_conts2 then StyParallel (hc.cont, s2) else hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts1 in
-      let head_conts_transform_2 = List.map (fun hc -> {hc with cont = if has_same_hd hc.head head_conts1 then StyParallel (s1, hc.cont) else hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts2 in
+      (* let has_same_hd hd_act other_pairs = List.exists (fun hc -> hc.head = hd_act) other_pairs in *)
+      let head_conts_transform_1 = List.map (fun hc -> {hc with cont = hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts1 in
+      let head_conts_transform_2 = List.map (fun hc -> {hc with cont =  hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts2 in
       head_conts_transform_1 @ head_conts_transform_2
     )
   )
@@ -643,13 +657,7 @@ let check_generalized_session
                               match hc.head with
                               | XOffers offerings | Offers offerings ->
                                   List.for_all (fun offering ->
-                                    match offering.trigger with
-                                    | Lang.AtomicAct (Lang.AtomBMsg m) ->
-                                        m.endpoint = msg.endpoint && m.msg = msg.msg
-                                    | Lang.AtomicAct (Lang.AtomNBMsg m) ->
-                                        m.endpoint = msg.endpoint && m.msg = msg.msg
-                                    | Lang.AtomDelay _ -> true
-                                    | _ -> false
+                                    trigger_matches_msg offering.trigger msg || offering.trigger = Lang.AtomDelay 0
                                   ) offerings
                               | _ -> false
                             ) offer_atoms
@@ -673,8 +681,7 @@ let check_generalized_session
                               error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
                                 child_ev.id) g.thread_codespan module_name
                             else
-                              let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
-                                || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
+                              let own_cont, other_cont = if trigger_matches_msg (List.nth cont 0).trigger msg then
                                   (List.nth cont 0, List.nth cont 1)
                                 else
                                   (List.nth cont 1, List.nth cont 0)
@@ -711,11 +718,7 @@ let check_generalized_session
                               match hc.head with
                               | XOffers offerings | Offers offerings ->
                                   List.for_all (fun offering ->
-                                    match offering.trigger with
-                                    | Lang.AtomicAct (Lang.AtomBMsg m) -> m.endpoint = msg.endpoint && m.msg = msg.msg
-                                    | Lang.AtomicAct (Lang.AtomNBMsg m) ->m.endpoint = msg.endpoint && m.msg = msg.msg
-                                    | Lang.AtomDelay _ -> true
-                                    | _ -> false
+                                    trigger_matches_msg offering.trigger msg || offering.trigger = Lang.AtomDelay 0
                                   ) offerings
                               | _ -> false
                             ) offer_atoms
@@ -738,8 +741,7 @@ let check_generalized_session
                               error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
                                 child_ev.id) g.thread_codespan module_name
                             else
-                              let own_cont, other_cont = if (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomBMsg msg)
-                                || (List.nth cont 0 ).trigger = Lang.AtomicAct (Lang.AtomNBMsg msg) then
+                              let own_cont, other_cont = if trigger_matches_msg (List.nth cont 0).trigger msg then
                                   (List.nth cont 0, List.nth cont 1)
                                 else
                                   (List.nth cont 1, List.nth cont 0)
@@ -865,11 +867,9 @@ let check_generalized_session
                           child_ev.session_type <- Some {protocol_node with d = new_cont};
                           Queue.add (child_ev, merged_recvar_map) next_queue
                       | _ ->
-                        raise (Except.TypeError [
-                          Text (Printf.sprintf "No terminal head-continuation found at later event %d | hc = \n%s"
-                            child_ev.id (String.concat "\n" (List.map print_string_of_head_cont_pair head_conts)));
-                          Except.codespan_local g.thread_codespan
-                        ])
+                        let err_txt = Printf.sprintf "No terminal head-continuation found at later event %d | hc_a = \n%s | hc_b = \n%s"
+                          child_ev.id (String.concat "\n" (List.map print_string_of_head_cont_pair hd_cont_a)) (String.concat "\n" (List.map print_string_of_head_cont_pair hd_cont_b)) in
+                          error_handler g err_txt g.thread_codespan module_name
                       )
                   | _ -> ()  (* Wait for both parent events to be processed *)
                 )
