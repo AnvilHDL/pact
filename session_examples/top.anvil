@@ -1,74 +1,14 @@
-chan arb_worker_ch{
-    left req : (void@#1),
-    left done : (void@#1)
+chan ch {
+    left req : (logic@#1)
 }
+interface itf (ep : left ch) = ep.req;#1
 
-interface arbiter_itfc(ep1: left arb_worker_ch, ep2: left arb_worker_ch) = ^(ep1.req : ep1.done , ep2.req : ep2.done) ; #1    
-proc arbiter(arbiter_itfc){
+
+proc top(itf){
     loop{
-        xoffer{
-            _ = recv ep1.req => (
-                let _ = recv ep1.done >>
-                ()
-            ),
-            _ = recv ep2.req => (
-                let _ = recv ep2.done >> 
-                ()
-            )
-        } >> cycle 1
-    }
-}
-
-
-interface worker_itfc(ep1: right arb_worker_ch, ep2: right arb_worker_ch) = 
-    ep1.req; #1; (ep1.done + (ep2.req;#1;(#ep1.done||#ep2.done)));#1
-
-proc worker(worker_itfc){
-    reg cycle_count : logic[32];
-    loop{
-        send ep1.req(()) >>
-        cycle 1 >>
-        if((*cycle_count)&32'd1 == 32'd0){
-            send ep2.req(()) >>
-            cycle 1 >>
-            (
-                send ep1.done(());
-                send ep2.done(())
-            )
-        }
-        else{
-            send ep1.done(())
-        } >>
+        let _ = recv ep.req >>
+        cycle 1 >> 
+        let _ = recv ep.req >>
         cycle 1
     }
-    loop{
-        set cycle_count := *cycle_count + 32'd1
-    }
-}
-
-
-pool arbiter_pool{
-    worker1_ep1 -- worker1_ep1_ri : arbiter_worker_ch,
-    worker1_ep2 -- worker1_ep2_ri : arbiter_worker_ch,
-    worker2_ep1 -- worker2_ep1_ri : arbiter_worker_ch,
-    worker2_ep2 -- worker2_ep2_ri : arbiter_worker_ch;
-
-    i1 : arbiter_itfc(worker1_ep1, worker2_ep1),
-    i2 : arbiter_itfc(worker1_ep2, worker2_ep2),
-    w1 : worker_itfc(worker1_ep1_ri, worker1_ep2_ri),
-    w2 : worker_itfc(worker2_ep1_ri, worker2_ep2_ri)
-}
-proc top(){
-    pool p : arbiter_pool;
-    spawn arbiter[p.i1];
-    spawn arbiter[p.i2];
-    spawn worker[p.w1];
-    spawn worker[p.w2];
-
-    loop{
-        cycle 20 >>
-        dfinish
-    }
-
-
 }
