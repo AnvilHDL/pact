@@ -88,11 +88,18 @@ let generalized_type_debug _out config =
   if config.verbose then Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
+    try
         let gen_type = build_automaton None sdef.d.body.d sdef.d.body.span in 
         let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
         let out = open_out out_channel in
         print_automaton_dot gen_type out;
         close_out out
+    with
+    | Except.TypeError msg ->
+        let err_msg = List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; " in
+        Printf.eprintf "Error generating generalized type for %s: %s\n" sdef.d.name err_msg
+    | Failure msg ->
+        Printf.eprintf "Error generating generalized type for %s: %s\n" sdef.d.name msg
   )session_type_defs;
 
   (* check compatibility *)

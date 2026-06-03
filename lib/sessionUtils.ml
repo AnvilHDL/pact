@@ -39,9 +39,19 @@ let find_next_states transitions_list state_id offers =
       if pending_offer = [] then (acc, [])
       else
         let pending_offer_filtered = List.filter (fun o -> not (List.mem o off)) pending_offer in
-        (acc @ [stid], pending_offer_filtered)
+        let offers_covered = List.filter (fun o -> List.mem o off) pending_offer in
+        (acc @ [(stid, offers_covered)], pending_offer_filtered)
     ) ([], offers) offer_state_pair_sorted
   in
   assert (if(remaining_offers = []) then true else (Printf.eprintf "Remaining offers: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec remaining_offers)); false));
+  Printf.eprintf "State %d: Offers = [%s], Next states = [%s]\n" state_id (String.concat "," (List.map Lang.string_of_msg_spec offers)) (String.concat "," (List.map (fun (stid, _) -> string_of_int stid) next_states));
   next_states
 
+
+let find_next_states_refined transitions_list state_id offers = 
+  (* find the transition to state with exact offer matching *)
+  let transitions = List.filter (fun t -> (t.from_state = state_id)&&(get_ordered_transition_specifiers t = offers)) transitions_list in
+  if transitions <> [] && not (List.length transitions > 1) then
+    List.hd transitions |> fun t -> (t.to_state, offers)
+  else
+    raise (Failure (Printf.sprintf "No transition found from state %d with offers [%s]" state_id (String.concat "," (List.map Lang.string_of_msg_spec offers))))
