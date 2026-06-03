@@ -1315,6 +1315,7 @@ let wire_list =
     let td = List.hd tds in
     Typing.merged_data graph (Some new_w) (`Array (td.ld.dtype, ParamEnv.Concrete (List.length tds))) ctx.current (List.map (fun td -> td.ld) tds)
   | Recurse ->
+    ctx.current.is_loop_terminal <- true;
     ctx.current.is_recurse <- true;
     Typing.const_data graph None unit_dtype ctx.current
   | Recursion (id, body) ->

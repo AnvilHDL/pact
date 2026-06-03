@@ -69,8 +69,10 @@ let print_dot_graph g out =
       label
   in
   List.iter (fun ev ->
-    if ev.is_recurse then
-      Printf.fprintf out "  %s [peripheries=2];\n" @@ ev_node_name ev;
+    if ev.is_loop_terminal then
+      Printf.fprintf out "  %s [peripheries=2];\n" @@ ev_node_name ev
+    else if ev.is_recurse then
+      Printf.fprintf out "  %s [style=dashed];\n" @@ ev_node_name ev;
     let rec print_src_edge src =
     (
       match src with
@@ -97,10 +99,18 @@ let print_dot_graph g out =
         | ImmediateRecv _ | ImmediateSend _ -> true
         | _ -> false
       ) ev.actions in
-      if Option.is_some ev_has_imm_act then
-        print_edge ev' ev "Imm"
-      else
-      print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+      (
+        match ev_has_imm_act with
+        | Some act ->
+          let act_string =
+            match act.Lang.d with
+            | ImmediateRecv ms -> (Lang.string_of_msg_spec ms)^"?"
+            | ImmediateSend (ms, _) -> (Lang.string_of_msg_spec ms)^"!"
+            | _ -> failwith "Unexpected action"
+          in
+          print_edge ev' ev act_string
+        | None -> print_edge ev' ev @@ string_of_int br_side_info.branch_side_sel
+      )
     | `UntilEntry (ev', info) ->
       print_edge ev' ev "UE";
       print_edge info.until_body_end ev "UL" (* loop back *)
@@ -143,7 +153,7 @@ let print_graph_with_session_types g out =
       label
   in
   List.iter (fun ev ->
-    if ev.is_recurse then
+    if ev.is_loop_terminal then
       Printf.fprintf out "  %s [peripheries=2];\n" @@ ev_node_name ev;
    let rec print_src_edge src =
     (
@@ -194,7 +204,7 @@ let print_graph_with_session_types g out =
 let find_last_event g =
   List.find (
     fun e ->
-      e.is_recurse
+      e.is_loop_terminal
   ) g.events
 
 let string_of_actions action = 

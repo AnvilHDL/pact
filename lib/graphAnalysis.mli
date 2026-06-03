@@ -132,6 +132,10 @@ val event_is_msg_end : Lang.message_specifier -> EventGraph.event -> bool
 (** Returns the list of immediate predecessors. *)
 val imm_preds : EventGraph.event -> EventGraph.event list
 
+(** Returns immediate predecessors inside the current recursive unfolding.
+    Recursive back-edges are omitted. *)
+val imm_preds_nonrecursive : EventGraph.event -> EventGraph.event list
+
 val recurse_unfold :
   Lang.expr_node -> Lang.expr_node -> Lang.expr_node
 

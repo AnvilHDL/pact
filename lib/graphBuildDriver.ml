@@ -44,8 +44,10 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
     let td  = construct_graphIR graph ci ctx e in
     graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
     graph.is_general_recursive <- graph.last_event_id <> td.ld.lt.live.id;
-    if not config.Config.disable_session_checks then
+    if not config.Config.disable_session_checks then begin
       SessionCheck.check_generalized_session config graph module_name;
+      Printf.eprintf "[Info] Session check passed for process %s\n" module_name
+    end;
     let g' = GraphOpt.optimize config false ci graph in
     GraphOpt.combinational_codegen config g' ci
 

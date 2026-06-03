@@ -122,6 +122,7 @@ and event = {
   id : int; (** an integral identifier of the event, unique within the event graph *)
   graph : event_graph;
   mutable is_recurse : bool; (** does this event represent the recursive structure of the event graph *)
+  mutable is_loop_terminal : bool; (** is this event a loop terminal, i.e., the point where the loop recurses back to the beginning *)
   mutable actions: action Lang.ast_node list; (** instant actions that take place when this event is reached *)
   mutable sustained_actions : sustained_action Lang.ast_node list;
   (** actions that may take multiple cycles and start when this event is reached*)

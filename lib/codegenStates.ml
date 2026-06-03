@@ -111,7 +111,8 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
   let print_line = CodegenPrinter.print_line printer in
   let print_lines = CodegenPrinter.print_lines printer in
   let lookup_msg_def msg = MessageCollection.lookup_message pg.messages msg graphs.channel_classes in
-  let recurse_event = List.find (fun e -> let open EventGraph in e.is_recurse && (List.is_empty e.outs)) g.events in
+  GraphAnalysis.events_prepare_outs g.events;
+  let recurse_event = List.find (fun e -> let open EventGraph in e.is_loop_terminal && (List.is_empty e.outs)) g.events in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
   let print_compute_next (e : EventGraph.event) =
       let cn = EventStateFormatter.format_current g.thread_id e.id in

@@ -23,7 +23,7 @@ let event_traverse (ev : event) visitor : event list =
   !res
 
 (* returns immediate predecessors *)
-let imm_preds ev =
+let imm_preds_with_recurse include_recurse ev =
   let rec get_pred src =
   match src with
   | `Seq (e', _)
@@ -33,9 +33,17 @@ let imm_preds ev =
   | `Root None -> []
   | `UntilEntry (e', _info) -> [e']
   | `UntilExit info -> [info.until_stop_cond]
-  | `Recurse (src, id) -> get_pred src@[List.find (fun e -> e.id = id) ev.graph.events]
+  | `Recurse (src, id) ->
+    let preds = get_pred src in
+    if include_recurse then
+      preds @ [List.find (fun e -> e.id = id) ev.graph.events]
+    else
+      preds
   in
   get_pred ev.source
+
+let imm_preds ev = imm_preds_with_recurse true ev
+let imm_preds_nonrecursive ev = imm_preds_with_recurse false ev
 
 let toposort_with_preds preds events =
   let n = List.fold_left (fun l e -> Int.max l e.id) 0 events in
@@ -266,7 +274,7 @@ let events_prepare_outs events =
 let rec has_only_empty_path_to_recurse (event : EventGraph.event) visited =
   let open EventGraph in
   if List.mem event.id visited then false
-  else if event.is_recurse then
+  else if event.is_loop_terminal then
     (* At the recurse node itself: only Cycles n > 0 is a guaranteed delay *)
     (match event.source with
      | `Seq (_, `Cycles n) when n > 0 -> false
@@ -822,7 +830,7 @@ let recurse_unfold_for_checks construct_graphIR ci shared_vars_info graph (expr_
     expr_node in
   (* now just check the total *)
   let root = List.find (fun e -> e.source = `Root None) tmp_graph.events in
-  let recurse = List.find (fun e -> e.is_recurse) tmp_graph.events in
+  let recurse = List.find (fun e -> e.is_loop_terminal) tmp_graph.events in
   let dists = event_min_distance_with_later tmp_graph.events root root in
   let full_dist = IntHashTbl.find dists td.ld.lt.live.id in
   let recurse_dist = IntHashTbl.find dists recurse.id in
