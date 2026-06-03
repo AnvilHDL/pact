@@ -94,7 +94,6 @@
 %token KEYWORD_F         (* F *)
 %token KEYWORD_OFFER        (* offer *)
 %token KEYWORD_TRY          (* try *)
-%token KEYWORD_UNTIL        (* until *)
 %token <int>INT             (* int literal *)
 %token <string>IDENT        (* identifier *)
 %token <string>BIT_LITERAL  (* bit literal *)
@@ -867,10 +866,6 @@ expr:
   { Lang.XOffer (offer_arms, Some selector) }
 | KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
   { Lang.Offer offer_arms }
-| KEYWORD_UNTIL; cond = node(expr); LEFT_BRACE; body = node(expr); RIGHT_BRACE
-  { Lang.Until (cond, body) }
-;
-
 expr_in_parenthese:
   LEFT_PAREN; e = expr; RIGHT_PAREN
   { e }

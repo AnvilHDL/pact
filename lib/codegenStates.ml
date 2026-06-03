@@ -53,10 +53,7 @@ let collect_reg_states g =
       (* this state needs to distinguish two sources *)
       let sn = EventStateFormatter.format_scorer g.thread_id e.id in
       [("logic[1:0]", sn)]
-    | `Branch _ | `UntilEntry _  -> []
-    | `UntilExit _ -> 
-      let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-      [("logic", sn)]
+    | `Branch _  -> []
     | `Root (Some (_, br_side_info)) ->
       if need_delay_reg e && br_side_info.owner_branch.branch_cond = TrueFalse then(
         Printf.eprintf "[Warning] Added Delay Register for Event %d in Thread %d to prevent combinational loop! If you dont expect this, please report a bug.\n" e.id g.thread_id;
@@ -341,23 +338,6 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                 CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end" (* ending always_comb *)
               )
           )
-        | `UntilEntry (parent, info) ->
-          (* Until loop entry: active when (parent active AND stop_cond not fired) OR body_end loops back *)
-          (* ToDo : Note this implies if the condition is immediately true it will not run the body even once/maybe we should allow to loop at least once *)
-          let cn_parent = EventStateFormatter.format_current g.thread_id parent.id in
-          let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
-          let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
-          Printf.sprintf "assign %s = ((%s && !%s) || %s) %s;" cn cn_parent cn_stop cn_body_end trigger
-          |> print_line
-        | `UntilExit info ->
-          (* Until loop exit: active when stop condition fires and loop body ends *)
-          let cn_stop = EventStateFormatter.format_current g.thread_id info.until_stop_cond.id in
-          let cn_body_end = EventStateFormatter.format_current g.thread_id info.until_body_end.id in
-          let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
-          [
-            Printf.sprintf "assign %s = ((%s && (%s || %s_q)) %s;" cn cn_body_end cn_stop sn trigger;
-            Printf.sprintf "assign %s_n = (%s && !%s) || (!%s && %s_q) ;" sn cn_stop cn_body_end  cn_body_end sn
-          ] |> print_lines
         | `Recurse (source, trig_id) ->
           let cn' = EventStateFormatter.format_current g.thread_id trig_id in
           let trigger_string = Printf.sprintf "|| %s" cn' in

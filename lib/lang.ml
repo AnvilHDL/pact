@@ -512,7 +512,6 @@ and expr =
   | Recv of recv_pack
   | SharedAssign of identifier * expr_node (** make ready a shared value *)
   | List of expr_node list (** array/list of expressions *)
-  | Until of expr_node * expr_node (** until (cond) { body } *)
   | Recursion of identifier * expr_node (** define a recursive block *)
   | Recursor of identifier  (** invoke a recursive block *)
   | Recurse
@@ -753,8 +752,6 @@ let rec string_of_expr (e : expr) : string =
   | SharedAssign (id, e) -> "SharedAssign (" ^ id ^ ", " ^ string_of_expr e.d ^ ")"
   | List es ->
       "List [" ^ String.concat "; " (List.map (fun e -> string_of_expr e.d) es) ^ "]"
-  | Until (cond, body) ->
-      "Until (" ^ string_of_expr cond.d ^ ") { " ^ string_of_expr body.d ^ " }"
   | Recursion (id, body) ->
       "Recursion " ^ id ^ " { " ^ string_of_expr body.d ^ " }"
   | Recursor id -> "Recursor " ^ id
@@ -979,8 +976,7 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
       let new_recv_pack = {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id} in
       Recv new_recv_pack
   | Sync _ -> expr.d
-  | Until (cond, body) ->
-      Until (subst cond, subst body)
+
 
   in
   { expr with d = new_expr }

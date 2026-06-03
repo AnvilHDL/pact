@@ -1334,36 +1334,6 @@ let wire_list =
       |> unwrap_or_err ("Invalid recursion event id " ^ string_of_int rec_event_id) e.span in
     ctx.current.is_recurse <- true;
     Typing.create_recurse_td rec_event ctx.current.id
-  | Until (cond, body) ->
-    
-    (* Start evaluating the condition - this runs in parallel *)
-    let td_cond = construct_graphIR graph ci ctx cond in
-    
-
-    let until_info = {
-      until_entry =  ctx.current; (* placeholder, will be set *)
-      until_stop_cond = td_cond.ld.lt.live;
-      until_body_end = ctx.current; (* placeholder, will be set *)
-    } in
-    
-    let body_entry = Typing.event_create graph (`UntilEntry (ctx.current, until_info)) in
-    until_info.until_entry <- body_entry;
-    
-    let ctx_body = {ctx with current = body_entry} in
-    let td_body = construct_graphIR graph ci ctx_body body in
-    
-    let body_end = td_body.ld.lt.live in
-    until_info.until_body_end <- body_end;
-    
-    let exit_event = Typing.event_create graph (`UntilExit until_info) in
-    
-    let lt = {
-      live = exit_event;
-      dead = Utils.list_unordered_join td_cond.ld.lt.dead td_body.ld.lt.dead
-    } in
-    let reg_borrows' = Utils.list_unordered_join td_cond.ld.reg_borrows td_body.ld.reg_borrows in
-    {ld = {w = None; lt; reg_borrows = reg_borrows'; dtype = unit_dtype}}
-
 
   | Tuple _ -> raise (event_graph_error_default "Unimplemented expression!" e.span)
 

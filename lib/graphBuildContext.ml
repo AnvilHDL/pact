@@ -39,8 +39,6 @@ module Typing = struct
         | `Root Some (e, _) -> [e]
         | `Later (e1, e2) -> [e1; e2]
         | `Branch (_, { branches_val; _ }) -> branches_val
-        | `UntilEntry (e, info) -> [e; info.until_body_end] (* parent and body_end for recursion *)
-        | `UntilExit info -> [info.until_stop_cond; info.until_body_end] (* exit depends on stop condition/as well as the body finishing *)
         | `Recurse (src, n) -> parents src@ [List.find_opt
             (fun ev -> ev.is_recurse && ev.id = n)
             g.events

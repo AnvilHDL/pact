@@ -31,8 +31,6 @@ let imm_preds_with_recurse include_recurse ev =
   | `Branch (_, {branches_val; _}) -> branches_val
   | `Later (e1, e2) -> [e1; e2]
   | `Root None -> []
-  | `UntilEntry (e', _info) -> [e']
-  | `UntilExit info -> [info.until_stop_cond]
   | `Recurse (src, id) ->
     let preds = get_pred src in
     if include_recurse then
@@ -92,11 +90,6 @@ let event_predecessors (ev : event) : event list =
     | `Root (Some (ev', _)) ->
       add_to_queue ev'
     | `Root None -> ()
-    | `UntilEntry (ev', info) ->
-      add_to_queue ev';
-      add_to_queue info.until_body_end
-    | `UntilExit info ->
-      add_to_queue info.until_stop_cond
     | `Recurse (src, id) ->(
       get_queue src;
       let ev' = List.find (fun e -> e.id = id) cur.graph.events in
@@ -212,12 +205,6 @@ let event_min_among_succ events weights =
         @@ List.fold_left
           (fun v e -> Int.max v res.(e.id)) v br_side.owner_branch.branches_to
       )
-    | `UntilEntry (e, info) ->
-      (* To Do : verify *)
-      update_res e v;
-      update_res info.until_body_end v
-    | `UntilExit info ->
-      update_res info.until_stop_cond v
     | `Recurse (src, id) ->
       let ev' = List.find (fun e -> e.id = id) ev'.graph.events in
       update_res ev' v;
@@ -256,11 +243,6 @@ let events_prepare_outs events =
     | `Root (Some (ev', _)) ->
       ev'.outs <- ev::ev'.outs
     | `Root None -> ()
-    | `UntilEntry (ev', info) ->
-      ev'.outs <- ev::ev'.outs;
-      info.until_body_end.outs <- ev::info.until_body_end.outs
-    | `UntilExit info ->
-      info.until_stop_cond.outs <- ev::info.until_stop_cond.outs
     | `Recurse (src, id) ->
       let ev' = List.find (fun e -> e.id = id) ev.graph.events in
       ev'.outs <- ev::ev'.outs;
@@ -284,7 +266,6 @@ let rec has_only_empty_path_to_recurse (event : EventGraph.event) visited =
     let rec get_empty src =
       match src with
       | `Seq (_, `Cycles n) when n > 0 -> false
-      | `UntilEntry _ | `UntilExit _ -> false (* To Do : verify *)
       | `Seq _ | `Branch _ | `Root _ ->
         List.for_all (fun out -> has_only_empty_path_to_recurse out visited') event.outs
       | `Recurse (sr, _) -> get_empty sr
@@ -329,11 +310,6 @@ let event_is_dominant e1 e2 =
         | `Root (Some (e', _)) ->
           is_dominated.(e'.id)
           (* for now i *)
-        | `UntilEntry (e', _) ->
-          (* assuming entry happens always : can also be exit of body *)
-          is_dominated.(e'.id) 
-        | `UntilExit info ->
-          is_dominated.(info.until_stop_cond.id)
         | `Recurse (src, id) ->
           let ev' = List.find (fun e -> e.id = id) e.graph.events in
           get_dominant src && is_dominated.(ev'.id)
@@ -431,11 +407,6 @@ let events_reachable events ev =
           | `Seq (e', _) -> event_is_reachable.(e'.id)
           | `Branch (_, {branches_val; _}) ->
             List.fold_left (fun b e -> b || event_is_reachable.(e.id)) false branches_val
-          | `UntilEntry (e', _) ->
-            (* same thing : To  Do *)
-            event_is_reachable.(e'.id)
-          | `UntilExit info ->
-            event_is_reachable.(info.until_stop_cond.id)
           | `Recurse (src, id) ->
             let ev' = List.find (fun e -> e.id = id) e.graph.events in
             get_src_reachable src || event_is_reachable.(ev'.id)
@@ -576,10 +547,6 @@ let events_max_dist events lookup_message ev =
             update_dist e res.(e'.id);
             let first_br_to = List.hd br_side.owner_branch.branches_to in
             update_dist e @@ pick_filter_out min2_outs.(e'.id) first_br_to.id
-          | `UntilEntry (e', info) ->
-            update_dist e @@ Int.max res.(e'.id) res.(info.until_body_end.id)
-          | `UntilExit info ->
-            update_dist e res.(info.until_stop_cond.id)
           | `Recurse (src, id) ->
             let ev' = List.find (fun e -> e.id = id) e.graph.events in
             gen_src_max src;
@@ -650,11 +617,6 @@ let events_first_msg events ev msg =
             else
               v
           ) true branches_val
-        | `UntilEntry (e', info) ->
-          path_has_msg.(e'.id) || path_has_msg.(info.until_body_end.id)
-            || (event_succ_masked_has_msg e') || (event_succ_masked_has_msg info.until_body_end)
-        | `UntilExit info ->
-          path_has_msg.(info.until_stop_cond.id) || (event_succ_masked_has_msg info.until_stop_cond)
         | `Recurse (src, id) ->
           let ev' = List.find (fun e -> e.id = id) e.graph.events in
           get_v src && (if reachable.(ev'.id) then
@@ -811,8 +773,6 @@ let rec recurse_unfold expr_full_node expr_node =
           (arm_type, unfold e_body)
         ) arms
       )
-    | Until (cond, body) ->
-      Until (unfold cond, unfold body)
     | Recurse -> failwith "Shouldn't reach here!"
     in
     {expr_node with d = expr'}
