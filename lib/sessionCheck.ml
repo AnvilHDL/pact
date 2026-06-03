@@ -266,10 +266,11 @@ let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (r
     | _ ->
      (
       let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
-      let head_conts1 = List.map (fun hc -> {hc with cont = StyParallel (hc.cont, s2); recvar_map = hc.recvar_map @ rec_var_context}) head_conts1 in
       let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
-      let head_conts2 = List.map (fun hc -> {hc with cont = StyParallel (s1, hc.cont); recvar_map = hc.recvar_map @ rec_var_context}) head_conts2 in
-      head_conts1 @ head_conts2
+      let has_same_hd hd_act other_pairs = List.exists (fun hc -> hc.head = hd_act) other_pairs in
+      let head_conts_transform_1 = List.map (fun hc -> {hc with cont = if has_same_hd hc.head head_conts2 then StyParallel (hc.cont, s2) else hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts1 in
+      let head_conts_transform_2 = List.map (fun hc -> {hc with cont = if has_same_hd hc.head head_conts1 then StyParallel (s1, hc.cont) else hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts2 in
+      head_conts_transform_1 @ head_conts_transform_2
     )
   )
   | StyChoice (s1, s2) -> (
@@ -428,6 +429,7 @@ let check_generalized_session
             ) head_conts
           );
           let is_propogated = ref false in
+          let mark_structural_propagation () = is_propogated := true in
 
           List.iter (fun child_ev ->
             match child_ev.session_type with
@@ -439,9 +441,7 @@ let check_generalized_session
                 | _ -> false
               in
               if should_skip_terminal_check then
-                match child_ev.source with
-                | `Branch _ -> is_propogated := true
-                | _ -> ()
+                mark_structural_propagation ()
               else begin
                 let found = List.exists (fun hc ->
                   match hc.head with
@@ -609,6 +609,14 @@ let check_generalized_session
                     | `Branch _ -> true
                     | _ -> false
                   )child_ev.outs in
+                  let all_branches_empty = List.for_all (fun ex -> 
+                    List.for_all (fun e ->
+                      match e.source with
+                      | `Branch _ -> true
+                      | _ -> false
+                    ) ex.outs
+                  ) branches.owner_branch.branches_to in
+          
                   let has_immediate_actions = List.filter ( fun a ->
                     match a.d with
                     | ImmediateRecv _ | ImmediateSend _ -> true
@@ -765,9 +773,10 @@ let check_generalized_session
                     ) has_immediate_actions
                   end
                   else if has_immediate_sibling then
-                    is_propogated := true
-                  else if not is_empty_branch then
+                    mark_structural_propagation ()
+                  else if (not is_empty_branch) || all_branches_empty then
                     (
+                    mark_structural_propagation ();
                     child_ev.session_type <- Some {protocol_node with d = current_sty} ;
                     Queue.add (child_ev, rec_var_cont) next_queue
                     )
@@ -871,7 +880,7 @@ let check_generalized_session
                   | None -> false
                 ) branch.branches_val in
                 if not all_branches_reached then begin
-                  is_propogated := true;
+                  mark_structural_propagation ();
                 end
                 else
                   let true_cont_opt = List.find_opt(fun br ->
@@ -923,7 +932,7 @@ let check_generalized_session
                       error_handler g (Printf.sprintf "Mismatched session types in branch event %d"
                         child_ev.id) g.thread_codespan module_name
                   in
-                  is_propogated := true;
+                  mark_structural_propagation ();
                   child_ev.session_type <- Some merged_branch_type;
                   if not (IntHashtbl.mem visited child_ev.id)then
                     Queue.add (child_ev, rec_var_cont) next_queue
