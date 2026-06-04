@@ -130,11 +130,13 @@ let print_graph_with_session_types g out =
       | _ -> String.make 1 c
     ) (List.of_seq (String.to_seq s)))
   in
-  let ev_node_name ev = 
-    if Option.is_some ev.session_type then 
-      Printf.sprintf "\"event%d\\n(%s)\"" ev.id (escape_dot_string (Lang.string_of_protocol (Option.get ev.session_type).d))
-    else 
-      Printf.sprintf "event%d" ev.id 
+  let ev_node_name ev =
+    match ev.session_type with
+    | Some session_type ->
+      Printf.sprintf "\"event%d\\n(%s)\""
+        ev.id (escape_dot_string (Lang.string_of_protocol session_type.d))
+    | None ->
+      Printf.sprintf "\"event%d\\n($)\"" ev.id
   in
   let print_edge e1 e2 label =
     Printf.fprintf out "  %s -> %s [label = \"%s\"];\n"

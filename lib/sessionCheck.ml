@@ -8,18 +8,22 @@ type big_atomic_action =
   | Atom of atomic_action_with_gap
   | Offers of offering_session_type list
   | XOffers of offering_session_type list
-  | Terminal
+  | Terminal of terminal_kind
+
+and terminal_kind =
+  | ParallelDone
+  | RecurseJump
 
 type head_continuation_pair = {
   head : big_atomic_action;
-  cont : session_type;
+  cont : session_type option;
   mutable visited : bool;
   is_choice : bool;
   recvar_map : (identifier * session_type) list;
 }
 let default_head_continuation_pair = {
   head = Atom (AtomicAct (AtomBMsg {endpoint = ""; msg = ""}));
-  cont = StyTrue;
+  cont = None;
   visited = false;
   is_choice = false;
   recvar_map = [];
@@ -30,10 +34,18 @@ let print_string_of_head_cont_pair hc =
     | Atom act -> string_of_atomic_action_with_gap act
     | Offers off -> string_of_protocol (StyOffer off)
     | XOffers xoff -> string_of_protocol (StyXOffer xoff)
-    | Terminal -> string_of_protocol StyTrue
+    | Terminal ParallelDone -> string_of_protocol StyTrue
+    | Terminal RecurseJump -> "recurse"
   in
-  let cont_str = string_of_protocol hc.cont in
+  let cont_str = match hc.cont with
+    | Some sty -> string_of_protocol sty
+    | None -> "<>"
+  in
   Printf.sprintf "[Head: %s | Cont: %s]" head_str cont_str
+
+let is_terminal_head = function
+  | Terminal _ -> true
+  | _ -> false
 
 (* Helper functions for session type judgements *)
 
@@ -112,25 +124,6 @@ let match_offerings_with_msgs
       ) offerings
     ) msg_groups
 
-let rec remove_type_choice sty1 sty2 =
-  (* remove sty2 from sty1 : as consumed *)
-  match sty1 with
-  | StyChoice (s1, s2) ->
-      if s1 = sty2 then
-        s2
-      else if s2 = sty2 then
-        s1
-      else if s1 = StyTrue then
-        s2
-      else if s2 = StyTrue then
-        s1
-      else
-        StyChoice (remove_type_choice s1 sty2, remove_type_choice s2 sty2)
-      
-  | StySeq (s1, s2) ->
-      StySeq (remove_type_choice s1 sty2, s2)
-  | _ -> sty1
-
 let resolve_recvar (recvar_map : (identifier * session_type) list) sty =
   let rec aux seen st =
     match st with
@@ -200,13 +193,6 @@ let event_session_action_msgs (ev : event) =
   in
   immediate_msgs @ sustained_msgs
 
-let is_branch_root_of_parent (parent_ev : event) (child_ev : event) =
-  match child_ev.source with
-  | `Root (Some (branch_parent, _)) -> branch_parent.id = parent_ev.id
-  | _ -> false
-
-  
-
 (* Error handler that outputs the graph with session types before raising error *)
 let error_handler g err_msg err_span module_name  =
   Printf.eprintf "\nPrinting file %s with session types for debugging...\n" module_name;
@@ -254,63 +240,125 @@ let  build_choice_from_offerings (offerings : offering_session_type list) =
   | None -> aux offerings_list_filtered
 
 
+let seq_of_sty_opt sty_opt cont_opt =
+  match sty_opt, cont_opt with
+  | Some sty, Some cont -> Some (StySeq (sty, cont))
+  | None, Some cont -> Some cont
+  | Some sty, None -> Some sty
+  | None, None -> None
+
+type session_residual = session_type option
+
+let string_of_residual = function
+  | Some sty -> string_of_protocol sty
+  | None -> "<>"
+
+let residual_to_choice_arm = function
+  | Some sty -> sty
+  | None -> StyTrue
+
+let choice_of_residuals lhs rhs =
+  Some (StyChoice (residual_to_choice_arm lhs, residual_to_choice_arm rhs))
+
+let rec normalize_residual_for_match recvar_map sty =
+  let sty' = resolve_recvar recvar_map sty in
+  match sty' with
+  | StySeq (left, right) ->
+      StySeq
+        ( normalize_residual_for_match recvar_map left,
+          normalize_residual_for_match recvar_map right )
+  | StyParallel (left, right) ->
+      StyParallel
+        ( normalize_residual_for_match recvar_map left,
+          normalize_residual_for_match recvar_map right )
+  | StyChoice (left, right) ->
+      StyChoice
+        ( normalize_residual_for_match recvar_map left,
+          normalize_residual_for_match recvar_map right )
+  | _ -> sty'
+
+let residual_matches recvar_map lhs rhs =
+  match lhs, rhs with
+  | None, None -> true
+  | Some lhs_sty, Some rhs_sty ->
+      normalize_residual_for_match recvar_map lhs_sty
+      = normalize_residual_for_match recvar_map rhs_sty
+  | _ -> false
+
+let combine_offering_continuation offering_cont head_cont =
+  seq_of_sty_opt offering_cont head_cont
+
+let node_of_residual protocol_node = function
+  | Some sty -> Some {protocol_node with d = sty}
+  | None -> None
+
+let rec consume_parallel_done_from_sty = function
+  | StyTrue -> Some None
+  | StySeq (StyTrue, tail) -> Some (Some tail)
+  | StySeq (head, tail) ->
+      (match consume_parallel_done_from_sty head with
+      | Some None -> Some (Some tail)
+      | Some (Some head') -> Some (Some (StySeq (head', tail)))
+      | None -> None)
+  | _ -> None
+
+let consume_parallel_done_marker = function
+  | Some sty -> consume_parallel_done_from_sty sty
+  | None -> None
+
+let rec strip_parallel_done_markers residual =
+  match consume_parallel_done_marker residual with
+  | Some next_residual -> strip_parallel_done_markers next_residual
+  | None -> residual
 
 let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (rec_var_context : (identifier*session_type) list) : head_continuation_pair list =
   match sty_node with
-  | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = StyTrue ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
-  | StyAtom (AtomConjunction acts) -> [{default_head_continuation_pair with head = Atom (AtomConjunction acts); cont = StyTrue ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
-  | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = None ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomConjunction acts) -> [{default_head_continuation_pair with head = Atom (AtomConjunction acts); cont = None; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = None; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
   | StySeq (s1, s2) -> (  
     let head_conts = get_head_continuation_pair s1 sp rec_var_context in
       List.map (fun hc ->
-        {hc with cont = 
-        (
-          match hc.cont with
-          | StyTrue -> s2
-          | _ -> StySeq (hc.cont, s2)
-        )
-          ; recvar_map = hc.recvar_map @ rec_var_context
-        }
+        {hc with cont = seq_of_sty_opt hc.cont (Some s2)}
       ) head_conts
     )
   | StyParallel (s1, s2) ->
   (
     match s1, s2 with
-    | StyTrue, StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue; recvar_map = rec_var_context}]
+    | StyTrue, StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = rec_var_context}]
     | _ ->
      (
       let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
       let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
       (* let has_same_hd hd_act other_pairs = List.exists (fun hc -> hc.head = hd_act) other_pairs in *)
-      let head_conts_transform_1 = List.map (fun hc -> {hc with cont = hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts1 in
-      let head_conts_transform_2 = List.map (fun hc -> {hc with cont =  hc.cont; recvar_map = hc.recvar_map @ rec_var_context}) head_conts2 in
+      let head_conts_transform_1 = List.map (fun hc -> {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)}) head_conts1 in
+      let head_conts_transform_2 = List.map (fun hc -> {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)}) head_conts2 in
       head_conts_transform_1 @ head_conts_transform_2
     )
   )
   | StyChoice (s1, s2) -> (
       let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
       let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
-      List.map (fun hc -> {hc with is_choice = true; recvar_map = hc.recvar_map @ rec_var_context}) (head_conts1 @ head_conts2)
+      List.map (fun hc -> {hc with is_choice = true}) (head_conts1 @ head_conts2)
     )
   | StyFuture s -> 
     let head_conts = get_head_continuation_pair s sp rec_var_context in
-    let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = StyFuture s; is_choice = true; recvar_map = rec_var_context} in
+    let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = Some (StyFuture s); is_choice = true; recvar_map = rec_var_context} in
     possible_delay :: head_conts
   | StyXOffer offerings ->
       (* let continuation = build_choice_from_xofferings offerings in *)
-      [{default_head_continuation_pair with head = XOffers offerings; cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+      [{default_head_continuation_pair with head = XOffers offerings; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
       (* let continuation = build_choice_from_offerings offerings in *)
-      [{default_head_continuation_pair with head = Offers offerings; cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
-  | StyTrue -> [{default_head_continuation_pair with head = Terminal; cont = StyTrue; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+      [{default_head_continuation_pair with head = Offers offerings; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyRec(id,s') -> get_head_continuation_pair s' sp ((id, sty_node)::rec_var_context)
   | StyVar id -> 
-    let sty' = List.filter_map (fun (var_id, var_sty) -> if var_id = id then Some var_sty else None) rec_var_context in
     (
-    match sty' with
-    | [sty''] -> [{default_head_continuation_pair with head = Terminal; cont = sty''; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+    match List.find_opt (fun (var_id, _) -> var_id = id) rec_var_context with
+    | Some (_, sty'') -> [{default_head_continuation_pair with head = Terminal RecurseJump; cont = Some sty''; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
     | _ -> raise (Except.TypeError [
-        Text (Printf.sprintf "Unbound or multiple bindings for recursive variable %s in head-continuation extraction" id);
+        Text (Printf.sprintf "Unbound recursive variable %s in head-continuation extraction" id);
         Except.codespan_local sp
       ])
     )
@@ -324,31 +372,7 @@ let restart_head_continuation_pairs protocol_sty sp =
   get_head_continuation_pair protocol_sty sp []
   |> List.map (fun hc -> {hc with is_choice = true})
 
-let add_terminal_restart_heads protocol_sty sp recvar_map current_sty head_conts =
-  if session_type_matches recvar_map current_sty StyTrue then
-    head_conts @ restart_head_continuation_pairs protocol_sty sp
-  else
-    head_conts
-
-let session_type_can_start_with_msg sp recvar_map sty msg =
-  let rec search seen current_recvar_map current_sty =
-    if List.mem current_sty seen then
-      false
-    else
-      let heads = get_head_continuation_pair current_sty sp current_recvar_map in
-      List.exists (fun hc ->
-        match hc.head with
-        | Atom (AtomicAct (AtomBMsg head_msg))
-        | Atom (AtomicAct (AtomNBMsg head_msg)) ->
-            msg_matches head_msg msg
-        | Terminal ->
-            search (current_sty :: seen) hc.recvar_map hc.cont
-        | _ -> false
-      ) heads
-  in
-  search [] recvar_map sty
-
-let delay_continuation_after_terminal_closure protocol_sty n sp head_conts =
+let delay_continuation_after_terminal_closure n sp head_conts =
   let rec search seen hcs =
     List.find_map (fun hc ->
       match hc.head with
@@ -357,25 +381,30 @@ let delay_continuation_after_terminal_closure protocol_sty n sp head_conts =
             let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
             let new_cont = match remaining_delay with
               | StyTrue -> hc.cont
-              | _ -> StySeq (remaining_delay, hc.cont)
+              | _ -> seq_of_sty_opt (Some remaining_delay) hc.cont
             in
             hc.visited <- true;
             Some (new_cont, hc.recvar_map)
           end
           else None
-      | Terminal ->
-          if List.mem hc.cont seen then
-            None
-          else
-            let cont_heads =
-              get_head_continuation_pair hc.cont sp hc.recvar_map
-              |> add_terminal_restart_heads protocol_sty sp hc.recvar_map hc.cont
-            in
-            (match search (hc.cont :: seen) cont_heads with
-            | Some result ->
-                hc.visited <- true;
-                Some result
-            | None -> None)
+      | Terminal terminal_kind ->
+          (match hc.cont with
+          | None -> None
+          | Some cont ->
+              if List.mem cont seen then
+                None
+              else
+                let cont_heads = get_head_continuation_pair cont sp hc.recvar_map in
+                (match search (cont :: seen) cont_heads with
+                | Some (found_cont, found_map) ->
+                    hc.visited <- true;
+                    let delayed_cont =
+                      match terminal_kind with
+                      | ParallelDone -> seq_of_sty_opt (Some StyTrue) found_cont
+                      | RecurseJump -> found_cont
+                    in
+                    Some (delayed_cont, found_map)
+                | None -> None))
       | _ -> None
     ) hcs
   in
@@ -402,39 +431,70 @@ let check_generalized_session
       Out_channel.close file_handler;
     );
 
+    let event_residuals : session_residual IntHashtbl.t =
+      IntHashtbl.create (List.length g.events)
+    in
+    let event_recvars : ((identifier * session_type) list) IntHashtbl.t =
+      IntHashtbl.create (List.length g.events)
+    in
+
+    let get_event_residual ev =
+      try Some (IntHashtbl.find event_residuals ev.id) with Not_found -> None
+    in
+    let get_event_recvars ev =
+      try IntHashtbl.find event_recvars ev.id with Not_found -> []
+    in
+    let set_event_residual ev recvars residual =
+      IntHashtbl.replace event_residuals ev.id residual;
+      IntHashtbl.replace event_recvars ev.id recvars;
+      ev.session_type <- node_of_residual protocol_node residual
+    in
+
     (* Visit the event graph BFS *)
     let rec generalized_session_judgement
-        (next_queue : (event * ((identifier*session_type) list)) Queue.t)
-        (visited : bool IntHashtbl.t) =
+        (next_queue : event Queue.t)
+        (processed_count : int IntHashtbl.t) =
       if Queue.is_empty next_queue then
         ()
       else
-        let (ev : event), (rec_var_cont : (identifier*session_type) list) = Queue.pop next_queue in
-        if IntHashtbl.mem visited ev.id || ev.is_recurse then
+        let (ev : event) = Queue.pop next_queue in
+        if ev.is_recurse then
           (
-            IntHashtbl.add visited ev.id true;
-            generalized_session_judgement next_queue visited
+            generalized_session_judgement next_queue processed_count
           )
         else begin
-          IntHashtbl.add visited ev.id true;
+          let count =
+            try IntHashtbl.find processed_count ev.id with Not_found -> 0
+          in
+          if count > List.length g.events then
+            error_handler g
+              (Printf.sprintf
+                "Session residual propagation did not reach a fixpoint at event %d"
+                ev.id)
+              g.thread_codespan module_name;
+          IntHashtbl.replace processed_count ev.id (count + 1);
 
-          (* Process current event *)
-
-          let current_sty = match ev.session_type with
-            | Some sty_node -> sty_node.d
-            | None -> 
-              let err_msg = Printf.sprintf 
-                "Event %d has no session type assigned during generalized session type check" ev.id in
-              error_handler g err_msg g.thread_codespan module_name
-            in
+          let rec_var_cont = get_event_recvars ev in
+          let current_residual =
+            match get_event_residual ev with
+            | Some residual -> residual
+            | None ->
+                let err_msg = Printf.sprintf
+                  "Event %d has no residual assigned during generalized session type check"
+                  ev.id
+                in
+                error_handler g err_msg g.thread_codespan module_name
+          in
           if config.verbose then
-            Printf.eprintf "Processing event %d with session type %s\n"
-              ev.id (Lang.string_of_protocol current_sty);
+            Printf.eprintf "Processing event %d with residual %s\n"
+              ev.id (string_of_residual current_residual);
 
           let child_events = ev.outs in
           let head_conts =
-            get_head_continuation_pair current_sty g.thread_codespan rec_var_cont
-            |> add_terminal_restart_heads protocol_node.d g.thread_codespan rec_var_cont current_sty
+            match current_residual, child_events with
+            | Some sty, _ -> get_head_continuation_pair sty g.thread_codespan rec_var_cont
+            | None, [] -> []
+            | None, _ -> restart_head_continuation_pairs protocol_node.d g.thread_codespan
           in
           if config.verbose then (
             Printf.eprintf "Extracted head-continuation pairs for event %d:\n" ev.id;
@@ -442,528 +502,365 @@ let check_generalized_session
               Printf.eprintf "  %s\n" (print_string_of_head_cont_pair hc)
             ) head_conts
           );
+
           let is_propogated = ref false in
           let mark_structural_propagation () = is_propogated := true in
+          let enqueue_if_needed child_ev =
+            if not child_ev.is_recurse then
+              Queue.add child_ev next_queue
+          in
+          let assign_child_residual ?(allow_choice=false) child_ev recvars residual =
+            match get_event_residual child_ev with
+            | None ->
+                set_event_residual child_ev recvars residual;
+                enqueue_if_needed child_ev
+            | Some existing ->
+                let merged_recvars = get_event_recvars child_ev @ recvars in
+                if residual_matches merged_recvars existing residual then
+                  ()
+                else if allow_choice then begin
+                  let merged_residual = choice_of_residuals existing residual in
+                  set_event_residual child_ev merged_recvars merged_residual;
+                  enqueue_if_needed child_ev
+                end
+                else
+                  error_handler g
+                    (Printf.sprintf
+                      "Event %d already has residual %s, but parent event %d produced %s"
+                      child_ev.id
+                      (string_of_residual existing)
+                      ev.id
+                      (string_of_residual residual))
+                    g.thread_codespan module_name
+          in
+          let head_matches_msg msg = function
+            | Atom (AtomicAct (AtomBMsg m))
+            | Atom (AtomicAct (AtomNBMsg m)) -> msg_matches m msg
+            | _ -> false
+          in
+          let assign_msg_from_heads child_ev msg err_label =
+            let matched = ref false in
+            List.iter (fun hc ->
+              if head_matches_msg msg hc.head then begin
+                matched := true;
+                hc.visited <- true;
+                assign_child_residual ~allow_choice:true child_ev hc.recvar_map hc.cont
+              end
+            ) head_conts;
+            if not !matched then
+              error_handler g
+                (Printf.sprintf "Expected %s message (%s) at event %d | However found %s"
+                  err_label
+                  (string_of_msg_spec msg)
+                  child_ev.id
+                  (string_of_residual current_residual))
+                g.thread_codespan module_name
+          in
+          let assign_immediate_msg branches child_ev msg =
+            let offering_matches_immediate_msg offering =
+              trigger_matches_msg offering.trigger msg
+            in
+            let offer_atoms = List.filter_map (fun hc ->
+              match hc.head with
+              | Offers _ | XOffers _ -> Some hc
+              | _ -> None
+            ) head_conts in
+            let found_hc_opt =
+              List.find_opt (fun hc ->
+                match hc.head with
+                | XOffers offerings | Offers offerings ->
+                    List.exists offering_matches_immediate_msg offerings
+                | _ -> false
+              ) offer_atoms
+            in
+            match found_hc_opt with
+            | Some hc ->
+                hc.visited <- true;
+                let offerings =
+                  match hc.head with
+                  | Offers offerings | XOffers offerings -> offerings
+                  | _ -> []
+                in
+                let matching, remaining =
+                  List.partition offering_matches_immediate_msg offerings
+                in
+                (match matching with
+                | own_cont :: _ ->
+                    let own_residual =
+                      combine_offering_continuation own_cont.continuation hc.cont
+                    in
+                    assign_child_residual child_ev hc.recvar_map own_residual;
+                    (match remaining with
+                    | other_cont :: _ ->
+                        let other_residual =
+                          combine_offering_continuation other_cont.continuation hc.cont
+                        in
+                        let other_branch =
+                          List.filter (fun b -> b.id <> child_ev.id)
+                            branches.owner_branch.branches_to
+                        in
+                        (match other_branch with
+                        | [other_ev] ->
+                            assign_child_residual other_ev hc.recvar_map other_residual
+                        | _ -> ())
+                    | [] -> ())
+                | [] -> assign_msg_from_heads child_ev msg "Immediate")
+            | None -> assign_msg_from_heads child_ev msg "Immediate"
+          in
 
           List.iter (fun child_ev ->
-            match child_ev.session_type with
-            | Some sty_node' -> 
-              let should_skip_terminal_check =
-                match child_ev.source with
-                | `Branch _ -> true
-                | _ when is_branch_root_of_parent ev child_ev -> true
-                | _ -> false
-              in
-              if should_skip_terminal_check then
-                mark_structural_propagation ()
-              else begin
-                let found = List.exists (fun hc ->
-                  match hc.head with
-                  | Terminal ->
-                      if not hc.visited then begin
-                        let cont = hc.cont in
-                        if session_type_matches (hc.recvar_map @ rec_var_cont) sty_node'.d cont then(
-                          hc.visited <- true;
-                          true
-                        )
-                        else false
-                      end
-                      else false
-                  | _ -> false
-                )head_conts in
-                if not found then
-                  error_handler g (Printf.sprintf "Expected Terminal head-continuation for already assigned child event %d | However found %s"
-                    child_ev.id (Lang.string_of_protocol sty_node'.d)) g.thread_codespan module_name
-              end;
-            | _ ->
-              let rec assign_session_type src = 
+            let rec assign_session_type src =
               match src with
               | `Seq (_, `Choice msg_list) ->
-                  
-                  let found = List.fold_left (fun acc hc ->
+                  let matched = ref false in
+                  List.iter (fun hc ->
                     match hc.head with
                     | Offers offerings ->
-                        let msgs = msg_list in
-                        let matches = match_offerings_with_msgs offerings msgs in
-                        if matches then begin
-                          let co = match hc.cont with 
-                          |StyTrue -> build_choice_from_offerings offerings 
-                          | _-> StySeq (build_choice_from_offerings offerings, hc.cont) 
-                        in
-                        let next_sty = match child_ev.session_type with
-                        | Some sty' ->
-                            StyChoice (sty'.d,co)
-                        | None -> co
-                        in
-                          child_ev.session_type <- Some {protocol_node with d = next_sty};
+                        if match_offerings_with_msgs offerings msg_list then begin
+                          matched := true;
                           hc.visited <- true;
-                          acc@hc.recvar_map
-                        end
-                        else acc
-                        
-                    | XOffers offerings ->
-                        let msgs = msg_list in
-                        let matches = match_offerings_with_msgs offerings msgs in
-                        if matches then begin
-                          let co = match hc.cont with 
-                          |StyTrue -> build_choice_from_xofferings offerings 
-                          | _-> StySeq (build_choice_from_xofferings offerings, hc.cont) 
-                        in
-                          let next_sty = match child_ev.session_type with
-                          | Some sty' ->
-                              StyChoice (sty'.d,co)
-                          | None -> co
+                          let residual =
+                            seq_of_sty_opt
+                              (Some (build_choice_from_offerings offerings))
+                              hc.cont
                           in
-                          child_ev.session_type <- Some {protocol_node with d = next_sty};
-                          hc.visited <- true;
-                          acc@hc.recvar_map
+                          assign_child_residual ~allow_choice:true
+                            child_ev hc.recvar_map residual
                         end
-                        else acc
-                    | _ -> acc
-                  ) [] head_conts in 
-                  if child_ev.session_type = None then
-                    error_handler g (Printf.sprintf "Expected Offerings at event %d | However found %s"
-                      child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                  if not (IntHashtbl.mem visited child_ev.id) then
-                    Queue.add (child_ev, found) next_queue
-
+                    | XOffers offerings ->
+                        if match_offerings_with_msgs offerings msg_list then begin
+                          matched := true;
+                          hc.visited <- true;
+                          let residual =
+                            seq_of_sty_opt
+                              (Some (build_choice_from_xofferings offerings))
+                              hc.cont
+                          in
+                          assign_child_residual ~allow_choice:true
+                            child_ev hc.recvar_map residual
+                        end
+                    | _ -> ()
+                  ) head_conts;
+                  if not !matched then
+                    error_handler g
+                      (Printf.sprintf "Expected Offerings at event %d | However found %s"
+                        child_ev.id (string_of_residual current_residual))
+                      g.thread_codespan module_name
 
               | `Seq (_, `Send msg) ->
-                  let found = List.fold_left (fun acc hc ->
-                    match hc.head with
-                    | Atom (AtomicAct (AtomBMsg m)) ->
-                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                          let next_sty = match child_ev.session_type with
-                          | Some sty' ->
-                              StyChoice (sty'.d, hc.cont)
-                          | None -> hc.cont
-                          in
-                          child_ev.session_type <- Some {protocol_node with d = next_sty};
-                          hc.visited <- true;
-                          acc @ hc.recvar_map
-                        end
-                        else acc
-                    | Atom (AtomicAct (AtomNBMsg m)) ->
-                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                          let next_sty = match child_ev.session_type with
-                          | Some sty' ->
-                              StyChoice (sty'.d, hc.cont)
-                          | None -> hc.cont
-                            in
-                          child_ev.session_type <- Some {protocol_node with d = next_sty};
-                          hc.visited <- true;
-                          acc @ hc.recvar_map
-                        end
-                        else acc                    
-                    | __ -> acc
-                  ) [] head_conts in
+                  assign_msg_from_heads child_ev msg "Send"
 
-                  if child_ev.session_type = None then
-                    error_handler g (Printf.sprintf "Expected Send message (%s) at event %d | However found %s"
-                    (string_of_msg_spec msg) child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                  if not (IntHashtbl.mem visited child_ev.id) then
-                    Queue.add (child_ev, found) next_queue
-                    
-                    
               | `Seq (_, `Recv msg) ->
-                  let found = List.fold_left (fun acc hc ->
-                    match hc.head with
-                    | Atom (AtomicAct (AtomBMsg m)) ->
-                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                          let next_sty = match child_ev.session_type with
-                          | Some sty' ->
-                              StyChoice (sty'.d, hc.cont)
-                          | None -> hc.cont
-                            in
-                          child_ev.session_type <- Some {protocol_node with d = next_sty};
-                          hc.visited <- true;
-                          acc @ hc.recvar_map
-                        end
-                        else acc
-                    | Atom (AtomicAct (AtomNBMsg m)) ->
-                        if m.endpoint = msg.endpoint && m.msg = msg.msg then begin
-                          let next_sty = match child_ev.session_type with
-                          | Some sty' ->
-                              StyChoice (sty'.d, hc.cont)
-                          | None -> hc.cont
-                            in
-                          child_ev.session_type <- Some {protocol_node with d = next_sty};
-                          hc.visited <- true;
-                          acc @ hc.recvar_map
-                        end
-                        else acc
-                    | __ -> acc
-                  ) [] head_conts in
+                  assign_msg_from_heads child_ev msg "Recv"
 
-                  if child_ev.session_type = None then
-                    error_handler g (Printf.sprintf "Expected Recv message at event %d | However found %s"
-                        child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                  if not (IntHashtbl.mem visited child_ev.id) then
-                    Queue.add (child_ev, found) next_queue
               | `Seq (_, `Cycles n) ->
-                let found = match delay_continuation_after_terminal_closure protocol_node.d n g.thread_codespan head_conts with
+                  (match delay_continuation_after_terminal_closure
+                      n g.thread_codespan head_conts with
                   | Some (new_cont, found_map) ->
-                      let next_sty = match child_ev.session_type with
-                        | Some sty' -> StyChoice (sty'.d, new_cont)
-                        | None -> new_cont
-                      in
-                      child_ev.session_type <- Some {protocol_node with d = next_sty};
-                      found_map
-                  | None -> []
-                in
-                if child_ev.session_type = None then 
-                  error_handler g (Printf.sprintf "Expected Delay at event %d | However found %s"
-                    child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name;
-                if not (IntHashtbl.mem visited child_ev.id) then
-                  Queue.add (child_ev, found) next_queue
+                      assign_child_residual ~allow_choice:true
+                        child_ev found_map new_cont
+                  | None ->
+                      error_handler g
+                        (Printf.sprintf "Expected Delay at event %d | However found %s"
+                          child_ev.id (string_of_residual current_residual))
+                        g.thread_codespan module_name)
+
               | `Root Some (_, branches) ->
-                if Option.is_none child_ev.session_type then begin
-                  let is_empty_branch = List.for_all( fun e ->
+                  let is_empty_branch = List.for_all (fun e ->
                     match e.source with
                     | `Branch _ -> true
                     | _ -> false
-                  )child_ev.outs in
-                  let all_branches_empty = List.for_all (fun ex -> 
+                  ) child_ev.outs in
+                  let all_branches_empty = List.for_all (fun ex ->
                     List.for_all (fun e ->
                       match e.source with
                       | `Branch _ -> true
                       | _ -> false
                     ) ex.outs
                   ) branches.owner_branch.branches_to in
-          
-                  let has_immediate_actions = List.filter ( fun a ->
-                    match a.d with
-                    | ImmediateRecv _ | ImmediateSend _ -> true
-                    | _ -> false
-                  ) child_ev.actions in
+                  let has_immediate_actions =
+                    List.filter (fun a ->
+                      match a.d with
+                      | ImmediateRecv _ | ImmediateSend _ -> true
+                      | _ -> false
+                    ) child_ev.actions
+                  in
                   let has_immediate_sibling =
                     List.exists (fun sibling_ev ->
                       sibling_ev.id <> child_ev.id
                       && event_has_immediate_session_action sibling_ev
                     ) branches.owner_branch.branches_to
                   in
-                  let offer_atoms = List.filter_map (fun hc ->
-                    match hc.head with
-                    | Offers _ -> Some hc
-                    | XOffers _ -> Some hc
-                    | _ -> None
-                  ) head_conts in
-                  if List.length has_immediate_actions > 0 then begin
+                  if has_immediate_actions <> [] then
                     List.iter (fun ia ->
                       match ia.d with
-                      | ImmediateRecv msg ->
-                          let found_hc_opt =
-                            List.find_opt (fun hc ->
-                              match hc.head with
-                              | XOffers offerings | Offers offerings ->
-                                  List.for_all (fun offering ->
-                                    trigger_matches_msg offering.trigger msg || offering.trigger = Lang.AtomDelay 0
-                                  ) offerings
-                              | _ -> false
-                            ) offer_atoms
-                          in
-                          if Option.is_none found_hc_opt then
-                            error_handler g (Printf.sprintf "Expected Offerings for ImmediateRecv at event %d | However found %s"
-                              child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
-                          else
-                            let hc = Option.get found_hc_opt in
-                            (* Printf.eprintf "Found matching head-continuation for ImmediateRecv at event %d: %s\n"
-                              child_ev.id (print_string_of_head_cont_pair hc); *)
-                            List.iter (fun h ->
-                              if h = hc then h.visited <- true
-                            ) head_conts;
-                            let cont = match hc.head with
-                              | Offers offerings -> offerings
-                              | XOffers offerings -> offerings
-                              | _ -> []
-                            in
-                            if List.length cont > 2 then
-                              error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
-                                child_ev.id) g.thread_codespan module_name
-                            else
-                              let own_cont, other_cont = if trigger_matches_msg (List.nth cont 0).trigger msg then
-                                  (List.nth cont 0, List.nth cont 1)
-                                else
-                                  (List.nth cont 1, List.nth cont 0)
-                        
-                              in
-                              let own_contin = match own_cont.continuation, hc.cont with
-                                | None , StyTrue -> StyTrue
-                                | Some st, StyTrue -> st
-                                | Some st, st' -> StySeq (st, st')
-                                | None, st' -> st' 
-                              in
-                              let other_contin = match other_cont.continuation, hc.cont with
-                                | None , StyTrue -> StyTrue
-                                | Some st, StyTrue -> st
-                                | Some st, st' -> StySeq (st, st')
-                                | None, st' -> st' 
-                              in
-
-
-                              child_ev.session_type <- Some {protocol_node with d = own_contin};
-                              
-                              let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
-                              if List.length child_other_branch = 1 then
-                                let other_ev = List.hd child_other_branch in
-                                (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
-                                  (Lang.string_of_protocol other_contin) other_ev.id; *)
-                                other_ev.session_type <- Some {protocol_node with d = other_contin};
-                                Queue.add (child_ev, hc.recvar_map) next_queue;
-                                Queue.add (other_ev, hc.recvar_map) next_queue
-
-                      | ImmediateSend (msg,_) -> (
-                          let found_hc_opt =
-                            List.find_opt (fun hc ->
-                              match hc.head with
-                              | XOffers offerings | Offers offerings ->
-                                  List.for_all (fun offering ->
-                                    trigger_matches_msg offering.trigger msg || offering.trigger = Lang.AtomDelay 0
-                                  ) offerings
-                              | _ -> false
-                            ) offer_atoms
-                          in
-                          if Option.is_none found_hc_opt then
-                            error_handler g (Printf.sprintf "Expected Offerings for ImmediateRecv at event %d | However found %s"
-                              child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name
-                          else
-                            let hc = Option.get found_hc_opt in
-                            (* Printf.eprintf "Found matching head-continuation for ImmediateSend at event %d: %s\n"
-                              child_ev.id (print_string_of_head_cont_pair hc); *)
-                            List.iter (fun h ->
-                              if h = hc then h.visited <- true
-                            ) head_conts;
-                            let cont = match hc.head with
-                              | XOffers offerings | Offers offerings -> offerings
-                              | _ -> []
-                            in
-                            if List.length cont > 2 then
-                              error_handler g (Printf.sprintf "Multiple matching offerings for ImmediateRecv at event %d"
-                                child_ev.id) g.thread_codespan module_name
-                            else
-                              let own_cont, other_cont = if trigger_matches_msg (List.nth cont 0).trigger msg then
-                                  (List.nth cont 0, List.nth cont 1)
-                                else
-                                  (List.nth cont 1, List.nth cont 0)
-                                in
-                              let own_contin = match own_cont.continuation, hc.cont with
-                                | None , StyTrue -> StyTrue
-                                | Some st, StyTrue -> st
-                                | Some st, st' -> StySeq (st, st')
-                                | None, st -> st
-                              in
-                              let other_contin = match other_cont.continuation, hc.cont with
-                                | Some st, StyTrue -> st
-                                | Some st, st' -> StySeq (st, st')
-                                | None, st -> st
-                              in
-                              
-                              child_ev.session_type <- Some {protocol_node with d = own_contin};
-                              let child_other_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
-
-                              if List.length child_other_branch = 1 then
-                                let other_ev = List.hd child_other_branch in
-                                (* Printf.eprintf "Assigning session type %s to other branch event %d\n"
-                                  (Lang.string_of_protocol other_contin) other_ev.id; *)
-                                other_ev.session_type <- Some {protocol_node with d = other_contin};
-                                Queue.add (child_ev, hc.recvar_map) next_queue;
-                                Queue.add (other_ev, hc.recvar_map) next_queue
-
-                      )
-
+                      | ImmediateRecv msg
+                      | ImmediateSend (msg, _) ->
+                          assign_immediate_msg branches child_ev msg
                       | _ -> ()
                     ) has_immediate_actions
-                  end
                   else if has_immediate_sibling then
                     mark_structural_propagation ()
-                  else if (not is_empty_branch) || all_branches_empty then
-                    (
+                  else if (not is_empty_branch) || all_branches_empty then begin
                     mark_structural_propagation ();
-                    child_ev.session_type <- Some {protocol_node with d = current_sty} ;
-                    Queue.add (child_ev, rec_var_cont) next_queue
-                    )
+                    assign_child_residual child_ev rec_var_cont current_residual
+                  end
                   else begin
-                    let sibling_action_msgs =
-                      branches.owner_branch.branches_to
-                      |> List.filter (fun sibling_ev -> sibling_ev.id <> child_ev.id)
-                      |> List.concat_map event_session_action_msgs
-                    in
-                    let terminal_matches_branch hc =
-                      match hc.head with
-                      | Terminal ->
-                          not hc.visited
-                          && List.for_all (fun msg ->
-                            not (session_type_can_start_with_msg g.thread_codespan hc.recvar_map hc.cont msg)
-                          ) sibling_action_msgs
-                      | _ -> false
-                    in
-                    let found = match List.find_opt (fun hc ->
-                      if sibling_action_msgs = [] then
-                        match hc.head with
-                        | Terminal -> not hc.visited
-                        | _ -> false
-                      else
-                        terminal_matches_branch hc
-                    ) head_conts with
-                    | Some hc ->
-                            (* Printf.eprintf "Assigning Terminal continuation = %s to empty branch event %d\n" *)
-                              (* (Lang.string_of_protocol hc.cont) child_ev.id; *)
-                            child_ev.session_type <- Some {protocol_node with d = hc.cont};                              
-                            hc.visited <- true;
-                            let other_side_remaining_type = remove_type_choice current_sty hc.cont in
-                            let other_child_branch = List.filter (fun b -> b.id <> child_ev.id) branches.owner_branch.branches_to in
-                            List.iter (fun ob ->
-                                (* Printf.eprintf "Assigning remaining choice continuation = %s to other branch event %d\n" *)
-                                (* (Lang.string_of_protocol other_side_remaining_type) ob.id; *)
-                              ob.session_type <- Some {protocol_node with d = other_side_remaining_type};
-                              (* Printf.eprintf "Adding other branch event %d to queue | for empty branch %d\n" ob.id child_ev.id; *)
-                              Queue.add (ob, hc.recvar_map) next_queue
-                            ) other_child_branch;           
-                            hc.recvar_map
-                    | None -> [] in
-                    if child_ev.session_type = None then
-                      error_handler g (Printf.sprintf "Expected Terminal at event %d | However found %s"
-                        child_ev.id (Lang.string_of_protocol current_sty)) g.thread_codespan module_name      
-                      ;
-                    if not (IntHashtbl.mem visited child_ev.id) then
-                      Queue.add (child_ev, found) next_queue
-                end;
+                    mark_structural_propagation ();
+                    assign_child_residual child_ev rec_var_cont current_residual
+                  end
 
-              end;    
-                  
               | `Later (ev_a, ev_b) ->
-                (match ev_a.session_type, ev_b.session_type with
-                  | Some sty_a_node, Some sty_b_node ->
-                    let hd_cont_a = get_head_continuation_pair sty_a_node.d g.thread_codespan [] in
-                    let hd_cont_b = get_head_continuation_pair sty_b_node.d g.thread_codespan [] in
-                    let cont_a = List.find_opt (
-                      fun hc -> match hc.head with
-                        | Terminal -> true
-                        | _ -> false
-                    ) hd_cont_a in
-                    let cont_b = List.find_opt (
-                      fun hc -> match hc.head with
-                        | Terminal -> true
-                        | _ -> false
-                    ) hd_cont_b in
-                    
-                      let match_cont_later sty1 sty2 = 
-                        if sty1 = sty2 then begin
-                          sty1
-                        end
-                        else begin
-                          match sty1, sty2 with
-                          | StySeq(StyParallel(StyTrue,StyTrue), s1), sty2 when s1 = sty2 -> StySeq(StyTrue, sty2)
-                          | sty1, StySeq(StyParallel(StyTrue, StyTrue), s2) when sty1 = s2 -> StySeq(StyTrue, sty1)
-                          | _ -> 
-                            error_handler g (Printf.sprintf "Mismatched session types at later event %d | Types: %s vs %s"
-                              child_ev.id (Lang.string_of_protocol sty1) (Lang.string_of_protocol sty2)) g.thread_codespan module_name;
-                        end in
+                  (match get_event_residual ev_a, get_event_residual ev_b with
+                  | Some residual_a, Some residual_b ->
+                      let recvars_a = get_event_recvars ev_a in
+                      let recvars_b = get_event_recvars ev_b in
+                      let merged_recvars = recvars_a @ recvars_b in
+                      let next_a = strip_parallel_done_markers residual_a in
+                      let next_b = strip_parallel_done_markers residual_b in
+                      if residual_matches merged_recvars next_a next_b then begin
+                        mark_structural_propagation ();
+                        assign_child_residual child_ev merged_recvars next_a
+                      end
+                      else
+                        error_handler g
+                          (Printf.sprintf
+                            "Mismatched session residuals at later event %d | Types: %s vs %s"
+                            child_ev.id
+                            (string_of_residual next_a)
+                            (string_of_residual next_b))
+                          g.thread_codespan module_name
+                  | _ ->
+                      mark_structural_propagation ())
 
-                      (match cont_a, cont_b with
-                      | Some hc_a, Some hc_b ->
-                        let new_cont = match_cont_later hc_a.cont hc_b.cont in
-                        let merged_recvar_map = hc_a.recvar_map @ hc_b.recvar_map in
-                          child_ev.session_type <- Some {protocol_node with d = new_cont};
-                          Queue.add (child_ev, merged_recvar_map) next_queue
-                      | _ ->
-                        let err_txt = Printf.sprintf "No terminal head-continuation found at later event %d | hc_a = \n%s | hc_b = \n%s"
-                          child_ev.id (String.concat "\n" (List.map print_string_of_head_cont_pair hd_cont_a)) (String.concat "\n" (List.map print_string_of_head_cont_pair hd_cont_b)) in
-                          error_handler g err_txt g.thread_codespan module_name
-                      )
-                  | _ -> ()  (* Wait for both parent events to be processed *)
-                )
-              | `Branch(_, branch) ->
-                let all_branches_reached = List.for_all (fun b ->
-                  match b.session_type with
-                  | Some _ -> true
-                  | None -> false
-                ) branch.branches_val in
-                if not all_branches_reached then begin
-                  mark_structural_propagation ();
-                end
-                else
-                  let true_cont_opt = List.find_opt(fun br ->
-                    match br.session_type with
-                    | Some _ -> true
-                    | None -> false
-                  )branch.branches_val in
-
-                  let true_cont_node = match true_cont_opt with
-                    | Some ev -> Option.get ev.session_type
-                    | None ->
-                        error_handler g (Printf.sprintf "No session types found in branches at event %d"
-                          child_ev.id) g.thread_codespan module_name
-                  in
-                  let true_node = match true_cont_node.d with
-                  | StySeq(StyTrue, cont) -> cont
-                  | _ -> true_cont_node.d
-                  in
-                  let branch_types =
-                    List.map (fun b ->
-                      match b.session_type with
-                      | Some sty -> sty
-                      | None ->
-                          error_handler g (Printf.sprintf "Missing session type in branch event %d"
-                            b.id) g.thread_codespan module_name
-                    ) branch.branches_val
-                  in
-                  let branch_types_match =
-                    List.for_all (fun sty ->
-                      session_type_matches rec_var_cont sty.d true_node
-                    ) branch_types
-                  in
-                  let branch_guards_session_action =
+              | `Branch (_, branch) ->
+                  let is_empty_branch_end branch_ev =
                     List.exists (fun branch_root ->
-                      event_session_action_msgs branch_root <> []
+                      branch_root.id = branch_ev.id
                     ) branch.branches_to
                   in
-                  let has_completed_branch =
-                    List.exists (fun sty ->
-                      session_type_matches rec_var_cont sty.d StyTrue
-                    ) branch_types
+                  let branch_residuals =
+                    List.map (fun branch_ev ->
+                      (branch_ev, is_empty_branch_end branch_ev, get_event_residual branch_ev)
+                    ) branch.branches_val
                   in
-                  let merged_branch_type =
-                    if branch_types_match then
-                      true_cont_node
-                    else if branch_guards_session_action && has_completed_branch then
-                      {protocol_node with d = StyTrue}
-                    else
-                      error_handler g (Printf.sprintf "Mismatched session types in branch event %d"
-                        child_ev.id) g.thread_codespan module_name
+                  let required_branch_residuals =
+                    List.filter (fun (_, is_empty_branch, _) ->
+                      not is_empty_branch
+                    ) branch_residuals
                   in
-                  mark_structural_propagation ();
-                  child_ev.session_type <- Some merged_branch_type;
-                  if not (IntHashtbl.mem visited child_ev.id)then
-                    Queue.add (child_ev, rec_var_cont) next_queue
-              | `Recurse(src',_) ->
-                assign_session_type src';
-              | _ ->
-                  error_handler g (Printf.sprintf "Unsupported child event source at event %d during generalized session type\n  check" child_ev.id) g.thread_codespan module_name
+                  if List.exists (fun (_, _, residual_opt) -> Option.is_none residual_opt)
+                      required_branch_residuals then
+                    mark_structural_propagation ()
+                  else begin
+                    let branch_residuals =
+                      List.map (fun (branch_ev, _, residual_opt) ->
+                        (branch_ev, Option.get residual_opt)
+                      ) required_branch_residuals
+                    in
+                    match branch_residuals with
+                    | [] ->
+                        mark_structural_propagation ();
+                        assign_child_residual child_ev rec_var_cont current_residual
+                    | (first_ev, first_residual) :: rest ->
+                        let merged_recvars =
+                          List.concat
+                            (List.map (fun (branch_ev, _) ->
+                              get_event_recvars branch_ev
+                            ) branch_residuals)
+                        in
+                        let branches_match =
+                          List.for_all (fun (branch_ev, residual) ->
+                            residual_matches
+                              (get_event_recvars first_ev @ get_event_recvars branch_ev)
+                              first_residual residual
+                          ) rest
+                        in
+                        if branches_match then begin
+                          mark_structural_propagation ();
+                          assign_child_residual child_ev merged_recvars first_residual
+                        end
+                        else
+                          error_handler g
+                            (Printf.sprintf "Mismatched session residuals in branch event %d"
+                              child_ev.id)
+                            g.thread_codespan module_name
+                  end
 
-              in 
-              assign_session_type child_ev.source
+              | `Recurse (src', _) ->
+                  assign_session_type src'
+
+              | _ ->
+                  error_handler g
+                    (Printf.sprintf
+                      "Unsupported child event source at event %d during generalized session type check"
+                      child_ev.id)
+                    g.thread_codespan module_name
+            in
+            assign_session_type child_ev.source
           ) child_events;
 
           List.iter (fun hc ->
-            if not hc.visited && not hc.is_choice && not !is_propogated && not (hc.head = Terminal) then
-              error_handler g (Printf.sprintf "No matching head-continuation found for event %d's children during generalized session type check | Head: %s | Cont: %s"
-                ev.id (match hc.head with | XOffers off | Offers off -> string_of_protocol (StyOffer off) | Atom act -> string_of_atomic_action_with_gap act | Terminal  -> string_of_protocol StyTrue) (string_of_protocol hc.cont) ) g.thread_codespan module_name 
+            if not hc.visited && not hc.is_choice && not !is_propogated
+               && not (is_terminal_head hc.head) then
+              error_handler g
+                (Printf.sprintf
+                  "No matching head-continuation found for event %d's children during generalized session type check | Head: %s | Cont: %s"
+                  ev.id
+                  (match hc.head with
+                  | XOffers off | Offers off -> string_of_protocol (StyOffer off)
+                  | Atom act -> string_of_atomic_action_with_gap act
+                  | Terminal ParallelDone -> string_of_protocol StyTrue
+                  | Terminal RecurseJump -> "recurse")
+                  (string_of_residual hc.cont))
+                g.thread_codespan module_name
           ) head_conts;
 
-          generalized_session_judgement next_queue visited
+          generalized_session_judgement next_queue processed_count
         end
     in
 
-
-    let visited_tbl = IntHashtbl.create (List.length g.events) in
+    let processed_count_tbl = IntHashtbl.create (List.length g.events) in
     let q = Queue.create () in
     let root_ev = List.find (fun e -> e.source = `Root None) g.events in
 
-    root_ev.session_type <- Some protocol_node;
-Queue.add (root_ev, []) q;
-    
-    generalized_session_judgement q visited_tbl;
+    set_event_residual root_ev [] (Some protocol_node.d);
+    Queue.add root_ev q;
+
+    generalized_session_judgement q processed_count_tbl;
+    let unassigned_events =
+      List.filter (fun ev ->
+        (not ev.removed)
+        && (not ev.is_recurse)
+        && not (IntHashtbl.mem event_residuals ev.id)
+      ) g.events
+    in
+    if unassigned_events <> [] then
+      error_handler g
+        (Printf.sprintf
+          "Session residual propagation left events unassigned: %s"
+          (String.concat ", "
+            (List.map (fun ev -> string_of_int ev.id) unassigned_events)))
+        g.thread_codespan module_name;
+
+    (* check terminal to be empty *)
+    let terminal_event = List.find_opt(fun e -> e.is_loop_terminal) g.events in
+    (match terminal_event with
+    | Some ev ->
+        (
+        match ev.session_type with
+        | Some residual ->
+            error_handler g
+              (Printf.sprintf "Terminal event %d has non-empty residual %s at end of generalized session type check"
+                ev.id (string_of_protocol residual.d))
+              g.thread_codespan module_name
+        | _ -> ()
+        )
+    | None -> raise (Except.TypeError [
+        Text "No terminal event found in event graph during generalized session type check";
+        Except.codespan_local g.thread_codespan
+      ])
+    );
     let file_name = Printf.sprintf "%sgraph.dot" module_name in
     let file_handler = Out_channel.open_text file_name in
     EventGraphOps.print_graph_with_session_types g file_handler;
