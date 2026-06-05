@@ -187,7 +187,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           let branch_end = build st current var_map in
           if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state var_map
         ) all_msg_branches;
-        if all_blocking then
+        if all_blocking && not is_wildcard_present then
           TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_groups)) false false false false;
           
         end_state
@@ -266,7 +266,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         )
       )
         ;
-        if all_blocking then (
+        if all_blocking && not is_wildcard_present then (
             TypeAutomaton.add_transition auto current current (LabelSet.singleton (OptionDelay all_msg_groups)) false false false false
           );
         end_state
