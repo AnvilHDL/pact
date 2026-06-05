@@ -546,7 +546,7 @@ let check_compatibility_multiparty
     let ids_list = List.map snd session_ids in
     
     let result, err = play_game prod_auto ids_list in
-    Printf.eprintf "Game Analysis Completed.\n";
+    Printf.eprintf "Game Analysis Completed : %b\n" result;
 
     if verbose || (not result) then begin
     let res_prefix = if result then "compat_" else "incompat_" in
