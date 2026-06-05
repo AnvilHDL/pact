@@ -261,7 +261,9 @@ type answer_type_t =
 let is_empty_true_false_branch_root (e : EventGraph.event) =
   match e.source with
   | `Root (Some (_, br_side_info)) ->
-      br_side_info.owner_branch.branch_cond = TrueFalse
+      e.actions = []
+      && e.sustained_actions = []
+      && br_side_info.owner_branch.branch_cond = TrueFalse
       && List.for_all
            (fun child_ev ->
               match child_ev.source with

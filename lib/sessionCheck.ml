@@ -277,13 +277,6 @@ let rec normalize_residual_for_match recvar_map sty =
           normalize_residual_for_match recvar_map right )
   | _ -> sty'
 
-let residual_matches recvar_map lhs rhs =
-  match lhs, rhs with
-  | None, None -> true
-  | Some lhs_sty, Some rhs_sty ->
-      normalize_residual_for_match recvar_map lhs_sty
-      = normalize_residual_for_match recvar_map rhs_sty
-  | _ -> false
 
 let combine_offering_continuation offering_cont head_cont =
   seq_of_sty_opt offering_cont head_cont
@@ -310,6 +303,14 @@ let rec strip_parallel_done_markers residual =
   match consume_parallel_done_marker residual with
   | Some next_residual -> strip_parallel_done_markers next_residual
   | None -> residual
+
+let residual_matches recvar_map lhs rhs =
+  match strip_parallel_done_markers lhs, strip_parallel_done_markers rhs with
+  | None, None -> true
+  | Some lhs_sty, Some rhs_sty ->
+      normalize_residual_for_match recvar_map lhs_sty
+      = normalize_residual_for_match recvar_map rhs_sty
+  | _ -> false
 
 let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (rec_var_context : (identifier*session_type) list) : head_continuation_pair list =
   match sty_node with

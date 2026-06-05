@@ -492,7 +492,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let td_send_data = construct_graphIR graph ci ctx send_pack.send_data in
     let wires, w_cond =
       if msg.handshake_mode <> Lang.ValidAck then
-        WireCollection.add_msg_ack_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
+        WireCollection.add_msg_ready_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
       else
         WireCollection.add_msg_ack_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
     in
