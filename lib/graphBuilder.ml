@@ -824,112 +824,64 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     in
     let cond_td = Typing.offer_condition graph ctx offer_msg_groups in
     let ctx_after_choice = BuildContext.wait graph ctx cond_td.ld.lt.live in
-    let non_wildcard_arms =
-      List.filter (fun (offer_arm, _) -> not (is_wildcard_arm offer_arm)) offer_arms
+    let only_wildcard_offer =
+      match offer_arms with
+      | [(offer_arm, _)] -> is_wildcard_arm offer_arm
+      | _ -> false
     in
-    let wildcard_expr =
-      List.find_map (fun (offer_arm, arm_expr) ->
-        if is_wildcard_arm offer_arm then Some arm_expr else None
-      ) offer_arms
-    in
-    let non_wildcard_msg_defs =
-      List.map (fun (offer_arm, _) ->
-        offer_msg_group_of_arm e.span offer_arm
-        |> lookup_offer_msg_defs
-        |> List.combine (offer_msg_group_of_arm e.span offer_arm)
-      ) non_wildcard_arms
-    in
-    let non_wildcard_cond_wires =
-      List.map readiness_wire_of_group non_wildcard_msg_defs
-    in
-    let ctx_for_non_wildcard, wildcard_info =
-      match wildcard_expr, non_wildcard_arms with
-      | None, _ -> (ctx_after_choice, None)
-      | Some wildcard_arm_expr, [] ->
-          let td_wildcard = construct_graphIR graph ci ctx_after_choice wildcard_arm_expr in
-          ({ctx_after_choice with current = td_wildcard.ld.lt.live}, Some (`Only td_wildcard))
-      | Some wildcard_arm_expr, _ ->
-          let branch_cond_wire = negated_any_wire non_wildcard_cond_wires in
-          let wire_td = Typing.immediate_data graph (Some branch_cond_wire) `Logic ctx_after_choice.current in
-          let outer_branch_info = {
-            branch_cond_v = wire_td.ld;
-            branch_cond = TrueFalse;
-            branch_count = 2;
-            branches_to = [];
-            branches_val = [];
-          } in
-          let br_side_true, ctx_wildcard = BuildContext.branch_side graph ctx_after_choice outer_branch_info 0 in
-          let td_wildcard = construct_graphIR graph ci ctx_wildcard wildcard_arm_expr in
-          let br_side_false, ctx_non_wildcard = BuildContext.branch_side graph ctx_after_choice outer_branch_info 1 in
-          outer_branch_info.branches_to <- [ctx_wildcard.current; ctx_non_wildcard.current];
-          outer_branch_info.branches_val <- [td_wildcard.ld.lt.live];
-          (ctx_non_wildcard, Some (`Branched (outer_branch_info, br_side_true, br_side_false, td_wildcard, ctx_wildcard)))
-    in
-    (match wildcard_info, non_wildcard_arms with
-    | Some (`Only td_wildcard), [] -> td_wildcard
-    | _ ->
-        let branch_contexts_and_tds =
-          List.map2 (fun (offer_arm, arm_expr) msg_defs ->
-            let branch_cond_wire = readiness_wire_of_group msg_defs in
-            let wire_td = Typing.immediate_data graph (Some branch_cond_wire) `Logic ctx_for_non_wildcard.current in
-            let branch_info = {
-              branch_cond_v = wire_td.ld;
-              branch_cond = TrueFalse;
-              branch_count = 2;
-              branches_to = [];
-              branches_val = [];
+    if only_wildcard_offer then (
+      raise (Except.TypeError [Except.Text "The offer branch cannot be a wildcard arm"; Except.codespan_local e.span])
+    ) else (
+      let select_context_for_arm offer_arm =
+        let msg_group = offer_msg_group_of_arm e.span offer_arm in
+        let select_event = Typing.event_create graph (`Select (ctx_after_choice.current, msg_group)) in
+        {
+          ctx_after_choice with
+          current = select_event;
+          cg_lt_ctx = Typing.context_clear_used ctx_after_choice.cg_lt_ctx;
+        }
+      in
+      let select_contexts_and_tds =
+        List.map (fun (offer_arm, arm_expr) ->
+          let select_ctx = select_context_for_arm offer_arm in
+          let td_result = lower_offer_arm_from_root select_ctx arm_expr offer_arm in
+          if td_result.ld.lt.live.is_recurse then
+            raise (Except.TypeError [Except.Text "Recursive types not supported in offer branch ends"; Except.codespan_local e.span]);
+          (select_ctx, td_result)
+        ) offer_arms
+      in
+      let select_ctxs, arm_tds = List.split select_contexts_and_tds in
+      let merged_event =
+        match select_ctxs, arm_tds with
+        | [], [] -> ctx_after_choice.current
+        | _ ->
+            BuildContext.branch_merge ctx_after_choice select_ctxs;
+            let join_info = {
+              join_parent = ctx_after_choice.current;
+              join_roots = List.map (fun (select_ctx : build_context) -> select_ctx.current) select_ctxs;
+              join_nodes = List.map (fun td -> td.ld.lt.live) arm_tds;
             } in
-            let br_side_true, ctx_branch = BuildContext.branch_side graph ctx_for_non_wildcard branch_info 0 in
-            let td_result = lower_offer_arm_from_root ctx_branch arm_expr offer_arm in
-            let br_side_false, ctx_false = BuildContext.branch_side graph ctx_for_non_wildcard branch_info 1 in
-            let td_false = Typing.const_data graph None unit_dtype ctx_false.current in
-            branch_info.branches_to <- [ctx_branch.current; ctx_false.current];
-            branch_info.branches_val <- [td_result.ld.lt.live; td_false.ld.lt.live];
-            BuildContext.branch_merge ctx_for_non_wildcard [ctx_branch; ctx_false];
-            let ctx_br = BuildContext.branch graph ctx_for_non_wildcard branch_info ci.file_name in
-            br_side_true.branch_event <- Some ctx_br.current;
-            br_side_false.branch_event <- Some ctx_br.current;
-            (ctx_br, td_result)
-          ) non_wildcard_arms non_wildcard_msg_defs
-        in
-        let branch_ctxs, branch_tds = List.split branch_contexts_and_tds in
-        let merged_event =
-          match branch_ctxs with
-          | [] -> ctx_for_non_wildcard.current
-          | hd :: tl ->
-              List.fold_left (fun (acc_event : event) (branch_ctx : build_context) ->
-                if acc_event.is_recurse || branch_ctx.current.is_recurse then
-                  raise (Except.TypeError [Except.Text "Recursive types not supported in offer branch ends"; Except.codespan_local e.span]);
-                Typing.event_create graph (`Later (acc_event, branch_ctx.current))
-              ) hd.current tl
-        in
-        let merged_dead = List.fold_left Utils.list_unordered_join
-          cond_td.ld.lt.dead (List.map (fun td -> td.ld.lt.dead) branch_tds) in
-        let merged_borrows = List.fold_left Utils.list_unordered_join
-          [] (List.map (fun td -> td.ld.reg_borrows) branch_tds) in
-        let result_w = match branch_tds with
-          | [] -> None
-          | hd :: _ -> hd.ld.w
-        in
-        let result_dtype = match branch_tds with
-          | [] -> unit_dtype
-          | hd :: _ -> hd.ld.dtype
-        in
-        let td_non_wildcard = {ld = {w = result_w; lt = {live = merged_event; dead = merged_dead}; reg_borrows = merged_borrows; dtype = result_dtype}} in
-        (match wildcard_info with
-        | Some (`Branched (outer_branch_info, br_side_true, br_side_false, td_wildcard, ctx_wildcard)) ->
-            outer_branch_info.branches_val <- outer_branch_info.branches_val @ [td_non_wildcard.ld.lt.live];
-            BuildContext.branch_merge ctx_after_choice [ctx_wildcard; ctx_for_non_wildcard];
-            let ctx_br = BuildContext.branch graph ctx_after_choice outer_branch_info ci.file_name in
-            br_side_true.branch_event <- Some ctx_br.current;
-            br_side_false.branch_event <- Some ctx_br.current;
-            {ld = {
-              w = td_non_wildcard.ld.w;
-              lt = {live = ctx_br.current; dead = Utils.list_unordered_join td_non_wildcard.ld.lt.dead td_wildcard.ld.lt.dead};
-              reg_borrows = Utils.list_unordered_join td_non_wildcard.ld.reg_borrows td_wildcard.ld.reg_borrows;
-              dtype = td_non_wildcard.ld.dtype;
-            }}
-        | _ -> td_non_wildcard))
+            Typing.event_create graph (`SelectJoin join_info)
+      in
+      let merged_dead = List.fold_left Utils.list_unordered_join
+        cond_td.ld.lt.dead (List.map (fun td -> td.ld.lt.dead) arm_tds) in
+      let merged_borrows = List.fold_left Utils.list_unordered_join
+        [] (List.map (fun td -> td.ld.reg_borrows) arm_tds) in
+      let result_w = match arm_tds with
+        | [] -> None
+        | hd :: _ -> hd.ld.w
+      in
+      let result_dtype = match arm_tds with
+        | [] -> unit_dtype
+        | hd :: _ -> hd.ld.dtype
+      in
+      {ld = {
+        w = result_w;
+        lt = {live = merged_event; dead = merged_dead};
+        reg_borrows = merged_borrows;
+        dtype = result_dtype;
+      }}
+    )
     
   | XOffer (offer_arms, state_selector) ->
     let offer_msg_groups =

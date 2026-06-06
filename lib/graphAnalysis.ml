@@ -171,6 +171,15 @@ let event_succ_distance non_succ_dist msg_dist_f later_dist_f either_dist_f even
     | `Branch (_, {branches_val = ev1::ev2::el; _}) ->
       let first_two = either_dist_f (get_dist ev1) (get_dist ev2) in
       List.fold_left (fun v e -> either_dist_f v @@ get_dist e) first_two el
+    | `Select (ev1, _) ->
+      get_dist ev1
+    | `SelectJoin {join_nodes = [ev]; _} ->
+      get_dist ev
+    | `SelectJoin {join_nodes = ev1::ev2::el; _} ->
+      let first_two = either_dist_f (get_dist ev1) (get_dist ev2) in
+      List.fold_left (fun v e -> either_dist_f v @@ get_dist e) first_two el
+    | `SelectJoin {join_nodes = []; _} ->
+      non_succ_dist
     | `Recurse (src, id) ->
       let ev' = List.find (fun e -> e.id = id) ev'.graph.events in
       get_d src |> either_dist_f (get_dist ev')
@@ -323,8 +332,14 @@ let rec has_only_empty_path_to_recurse (target_event : EventGraph.event) (src_ev
     | `Root (Some (e, _)) ->
       has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
     | `Select (e, _) -> has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
-    | `SelectJoin _ ->
-      raise (Except.UnimplementedError [Text "To be removed"])
+    | `SelectJoin {join_nodes; _} ->
+      let join_ans = List.map (fun e ->
+        has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
+      ) join_nodes in
+      if List.exists (fun ans -> ans = Reaches true) join_ans then Reaches true
+      else if List.for_all (fun ans -> match ans with DoesntReach _ -> true | _ -> false) join_ans then
+        DoesntReach (List.exists (fun ans -> match ans with DoesntReach true -> true | _ -> false) join_ans)
+      else Reaches false
     | `Recurse (src, id) -> (
       match check_src src with
       | Reaches b -> Reaches b
@@ -448,6 +463,12 @@ let events_pred_min_dist ev =
             update_dist e' v
         )
       )
+      | `Root (Some (e', _)) ->
+        update_dist e' v
+      | `Select (e', _) ->
+        update_dist e' v
+      | `SelectJoin {join_nodes; _} ->
+        List.iter (fun e -> update_dist e v) join_nodes
       | _ -> raise (Except.unknown_error_default "Unexpected event source!")
     );
   res
@@ -466,6 +487,19 @@ let events_reachable events ev =
           if other_side.id <> e.id && not is_pred.(other_side.id) then
             event_is_reachable.(other_side.id) <- false
         ) br_side_info.owner_branch.branches_to
+      | `Select (_, _) ->
+        List.iter (fun join_event ->
+          match join_event.source with
+          | `SelectJoin join_info ->
+            if List.exists (fun root -> root.id = e.id) join_info.join_roots then
+              List.iter2 (fun root join_node ->
+                if root.id <> e.id && not is_pred.(root.id) then (
+                  event_is_reachable.(root.id) <- false;
+                  event_is_reachable.(join_node.id) <- false
+                )
+              ) join_info.join_roots join_info.join_nodes
+          | _ -> ()
+        ) events
       | _ -> ()
     ) preds;
   (* now propagate *)
@@ -738,6 +772,31 @@ let is_strict_ordered = function
   | Before | After | Unreachable -> true
   | _ -> false
 
+let events_select_disjoint events e1 e2 =
+  let event_in_select_arm root join_node ev =
+    Utils.IntSet.mem root.id ev.preds && Utils.IntSet.mem ev.id join_node.preds
+  in
+  let arm_index join_info ev =
+    let rec find idx roots nodes =
+      match roots, nodes with
+      | root :: roots', join_node :: nodes' ->
+        if event_in_select_arm root join_node ev then
+          Some idx
+        else
+          find (idx + 1) roots' nodes'
+      | _ -> None
+    in
+    find 0 join_info.join_roots join_info.join_nodes
+  in
+  List.exists (fun ev ->
+    match ev.source with
+    | `SelectJoin join_info ->
+      (match arm_index join_info e1, arm_index join_info e2 with
+      | Some idx1, Some idx2 -> idx1 <> idx2
+      | _ -> false)
+    | _ -> false
+  ) events
+
 let events_get_order events lookup_message e1 e2 =
   let to_sign v =
     if v = -event_distance_max then -2
@@ -745,6 +804,9 @@ let events_get_order events lookup_message e1 e2 =
     else if v > 0 then 1
     else 0
   in
+  if events_select_disjoint events e1 e2 then
+    Unreachable
+  else
   let mx_dist1 = (events_max_dist events lookup_message e1).(e2.id) |> to_sign in
   let mx_dist2 = (events_max_dist events lookup_message e2).(e1.id) |> to_sign in
   match mx_dist1, mx_dist2 with
