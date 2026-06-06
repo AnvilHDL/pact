@@ -580,6 +580,15 @@ module CombSimplPass = struct
             let ev = List.find (fun e -> e.id = id) graph.events in
             let replaced_event = replace_event ev in
             `Recurse (create_new_src source, replaced_event.id)
+          | `Select (ev', grp) -> `Select (replace_event ev', grp)
+          | `SelectJoin join_info -> (
+            let new_join_info = {
+              join_parent = replace_event join_info.join_parent;
+              join_roots = List.map replace_event join_info.join_roots;
+              join_nodes = List.map replace_event join_info.join_nodes;
+            } in
+            `SelectJoin new_join_info
+          )
           )
           in
          let source' = create_new_src ev.source  in

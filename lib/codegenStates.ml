@@ -44,6 +44,7 @@ let describe_branch_side (br_side_info : EventGraph.branch_side_info) =
     Printf.sprintf "match case %d" br_side_info.branch_side_sel
 
 let describe_event_source (source : EventGraph.event_source) =
+  let open EventGraph in
   match source with
   | `Root None -> "thread root"
   | `Root (Some (parent_event, br_side_info)) ->
@@ -61,6 +62,16 @@ let describe_event_source (source : EventGraph.event_source) =
       source_event.id
   | `Recurse (_, trigger_event_id) ->
     Printf.sprintf "recursive path triggered by event %d" trigger_event_id
+  | `Select (parent_event, msg_group) ->
+    Printf.sprintf "Offer Select from event %d with message group {%s}"
+      parent_event.id
+      (msg_group |> List.map Lang.string_of_msg_spec |> String.concat "; ")
+  | `SelectJoin join_info ->
+    Printf.sprintf "Joining offer select from parent event %d with join roots [%s] and join nodes [%s]"
+      join_info.join_parent.id
+      (String.concat "?," (List.map (fun e -> string_of_int e.id) join_info.join_roots))
+      (String.concat ";" (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
+      
 
 let collect_reg_states g =
   let open EventGraph in
@@ -110,6 +121,7 @@ let collect_reg_states g =
     | `Root None -> []
     | `Recurse (source, _) ->
       collect_event_reg_states source
+    | _ -> raise (Except.UnimplementedError [Text "Unexpected event source type that requires register state"])
       ) in 
       collect_event_reg_states e.source
   ) g.events
@@ -390,6 +402,7 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           let cn' = EventStateFormatter.format_current g.thread_id trig_id in
           let trigger_string = Printf.sprintf "|| %s" cn' in
           gen_next source trigger_string
+        | _ -> raise (Except.UnimplementedError [Text "Unexpected event source type in next state generation"])
       in
     gen_next e.source "" 
   in

@@ -48,6 +48,12 @@ let print_graph (g: event_graph) =
     | `Recurse (source, id) ->
         src_string source;
         Printf.eprintf "> %d: recurse id:%d\n" ev.id id
+    | `Select (e, msg_group) ->
+        Printf.eprintf "> %d: select %d with msg group %s\n" ev.id e.id (String.concat ";" (List.map Lang.string_of_msg_spec msg_group))
+    | `SelectJoin join_info ->
+        Printf.eprintf "> %d: select join with parent %d, join roots [%s], join nodes [%s]\n" ev.id join_info.join_parent.id
+          (String.concat ";" (List.map (fun e -> string_of_int e.id) join_info.join_roots))
+          (String.concat ";" (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
       )
     in
     src_string ev.source
@@ -111,6 +117,12 @@ let print_dot_graph g out =
       print_src_edge source;
       let rec_ev = List.find (fun e -> e.id = id) g.events in
       print_edge rec_ev ev ("ϵ")
+    | `Select (e, msg_group) ->
+      print_edge e ev (Printf.sprintf "?{%s}" (String.concat ";" (List.map Lang.string_of_msg_spec msg_group)))
+    | `SelectJoin join_info ->
+      List.iter (fun e ->
+        print_edge e ev "?J"
+      ) join_info.join_nodes
     ) in
     print_src_edge ev.source
   ) g.events;
@@ -181,6 +193,12 @@ let print_graph_with_session_types g out =
       print_src_edge source;
       let rec_ev = List.find (fun e -> e.id = id) g.events in
       print_edge rec_ev ev ("ϵ")
+    | `Select (e, msg_group) ->
+      print_edge e ev (Printf.sprintf "?{%s}" (String.concat ";" (List.map Lang.string_of_msg_spec msg_group)))
+    | `SelectJoin join_info ->
+      List.iter (fun e ->
+        print_edge e ev "?J"
+      ) join_info.join_nodes
     ) in
     print_src_edge ev.source
   ) g.events;

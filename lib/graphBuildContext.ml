@@ -43,6 +43,8 @@ module Typing = struct
             (fun ev -> ev.is_recurse && ev.id = n)
             g.events
             |> unwrap_or_err ("Invalid recurse event id " ^ string_of_int n) g.thread_codespan]
+        | `Select (e, _) -> [e]
+        | `SelectJoin (join_info) -> join_info.join_nodes        
       in
       let new_preds = List.fold_left
         (fun preds e -> Utils.IntSet.union preds e.preds)

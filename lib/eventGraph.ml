@@ -165,7 +165,16 @@ and event_source = [
   | `Seq of event * atomic_delay (** reached when a {{!atomic_delay}delay} takes place after another event is reached *)
   | `Branch of event * branch_info (** branching out into two branches. This event is reached when the end of either side is reached *)
   | `Recurse of (event_source*int) (** reached when the recursive structure recurses back to the beginning *)
+  | `Select of (event * (Lang.message_specifier list)) (** When the parent event is reached and a list of message specifiers are available *)
+  | `SelectJoin of (join_info) (** Joins the selected events by fst from the snd list *)
 ]
+
+
+and join_info = {
+  join_parent : event; (** the event that branches out to the events in {!join_roots} *)
+  join_roots : event list; (** the events that start the join *)
+  join_nodes : event list; (** the events that are joined together *)
+}
 
 (** An action that starts at an event but may last multiple cycles.
 It is in effect until {!until} is reached. *)

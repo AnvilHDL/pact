@@ -37,6 +37,8 @@ let imm_preds_with_recurse include_recurse ev =
       preds @ [List.find (fun e -> e.id = id) ev.graph.events]
     else
       preds
+  | `Select (e, _) -> [e]
+  | `SelectJoin join_info -> join_info.join_nodes
   in
   get_pred ev.source
 
@@ -95,6 +97,9 @@ let event_predecessors (ev : event) : event list =
       let ev' = List.find (fun e -> e.id = id) cur.graph.events in
       add_to_queue ev'
     )
+    | `Select (e, _) -> add_to_queue e
+    | `SelectJoin join_info ->
+      List.iter add_to_queue join_info.join_nodes
   in
   get_queue cur.source in
   event_traverse ev visitor |> toposort
@@ -209,6 +214,9 @@ let event_min_among_succ events weights =
       let ev' = List.find (fun e -> e.id = id) ev'.graph.events in
       update_res ev' v;
       get_res src
+    | `Select (e, _) -> update_res e v
+    | `SelectJoin join_info ->
+      List.iter (fun e -> update_res e v) join_info.join_nodes
     in
     get_res ev'.source
   ) events;
@@ -247,6 +255,9 @@ let events_prepare_outs events =
       let ev' = List.find (fun e -> e.id = id) ev.graph.events in
       ev'.outs <- ev::ev'.outs;
       prep_out src
+   | `Select (e, _) -> e.outs <- ev::e.outs
+   | `SelectJoin join_info ->
+      List.iter (fun e -> e.outs <- ev::e.outs) join_info.join_nodes
     in
     prep_out ev.source
   ) events
@@ -311,6 +322,9 @@ let rec has_only_empty_path_to_recurse (target_event : EventGraph.event) (src_ev
       
     | `Root (Some (e, _)) ->
       has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
+    | `Select (e, _) -> has_only_empty_path_to_recurse target_event e (src_event.id :: visited)
+    | `SelectJoin _ ->
+      raise (Except.UnimplementedError [Text "To be removed"])
     | `Recurse (src, id) -> (
       match check_src src with
       | Reaches b -> Reaches b
@@ -369,6 +383,10 @@ let event_is_dominant e1 e2 =
         | `Recurse (src, id) ->
           let ev' = List.find (fun e -> e.id = id) e.graph.events in
           get_dominant src && is_dominated.(ev'.id)
+        | `Select (e, _) -> is_dominated.(e.id)
+        | `SelectJoin join_info ->
+          List.exists (fun e -> is_dominated.(e.id)) join_info.join_nodes
+          
         in
         get_dominant e.source
       )
@@ -466,6 +484,9 @@ let events_reachable events ev =
           | `Recurse (src, id) ->
             let ev' = List.find (fun e -> e.id = id) e.graph.events in
             get_src_reachable src || event_is_reachable.(ev'.id)
+          | `Select (e, _) -> event_is_reachable.(e.id)
+          | `SelectJoin join_info ->
+            List.for_all (fun e -> event_is_reachable.(e.id)) join_info.join_nodes
           in
           get_src_reachable e.source
         in
@@ -607,6 +628,11 @@ let events_max_dist events lookup_message ev =
             let ev' = List.find (fun e -> e.id = id) e.graph.events in
             gen_src_max src;
             update_dist e @@ (Int.max (res.(e.id)) (res.(ev'.id)))
+          | `Select (e, _) ->
+            update_dist e res.(e.id);
+          | `SelectJoin join_info ->
+            update_dist e
+              @@ List.fold_left (fun v e -> Int.max v res.(e.id)) (-event_distance_max) join_info.join_nodes
 
         )
           in
@@ -679,7 +705,12 @@ let events_first_msg events ev msg =
             path_has_msg.(ev'.id) || event_succ_masked_has_msg ev'
           else
             true)
-          in
+        | `Select (e, _) -> path_has_msg.(e.id) || event_succ_masked_has_msg e
+        | `SelectJoin join_info ->
+          List.exists (fun e ->
+            path_has_msg.(e.id) || event_succ_masked_has_msg e
+          ) join_info.join_nodes
+        in
         get_v e.source
       in
       path_has_msg.(e.id) <- v
