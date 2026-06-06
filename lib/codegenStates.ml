@@ -7,6 +7,8 @@ module EventStateFormatter = struct
   let format_counter = format_reg_state "counter"
   let format_scorer = format_reg_state "reg"
   let format_syncstate = format_reg_state "syncstate"
+  let format_select_selected = format_reg_state "select_selected"
+  let format_select_done = format_reg_state "select_done"
 
   let format_current thread_id ev_id =
     Printf.sprintf "EVENTS%d[%d].event_current" thread_id ev_id
@@ -18,6 +20,12 @@ let is_wildcard_present msg_groups =
     List.exists (fun (msg : Lang.message_specifier) ->
       if msg.endpoint = "*" && msg.msg = "*" then true else false
     ) (flatten_choice_msg_groups msg_groups)
+
+let is_wildcard_msg (msg : Lang.message_specifier) =
+  msg.endpoint = "*" && msg.msg = "*"
+
+let is_wildcard_msg_group msg_group =
+  List.exists is_wildcard_msg msg_group
 
 let format_msg_group msg_group =
   msg_group
@@ -69,8 +77,8 @@ let describe_event_source (source : EventGraph.event_source) =
   | `SelectJoin join_info ->
     Printf.sprintf "Joining offer select from parent event %d with join roots [%s] and join nodes [%s]"
       join_info.join_parent.id
-      (String.concat "?," (List.map (fun e -> string_of_int e.id) join_info.join_roots))
-      (String.concat ";" (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
+      (String.concat "; " (List.map (fun e -> string_of_int e.id) join_info.join_roots))
+      (String.concat "; " (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
       
 
 let collect_reg_states g =
@@ -121,7 +129,14 @@ let collect_reg_states g =
     | `Root None -> []
     | `Recurse (source, _) ->
       collect_event_reg_states source
-    | _ -> raise (Except.UnimplementedError [Text "Unexpected event source type that requires register state"])
+    | `Select _ -> []
+    | `SelectJoin join_info ->
+      let width = List.length join_info.join_roots in
+      let ty = Printf.sprintf "logic[%d:0]" (max 0 (width - 1)) in
+      [
+        (ty, EventStateFormatter.format_select_selected g.thread_id e.id);
+        (ty, EventStateFormatter.format_select_done g.thread_id e.id);
+      ]
       ) in 
       collect_event_reg_states e.source
   ) g.events
@@ -165,6 +180,66 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
   let print_line = CodegenPrinter.print_line printer in
   let print_lines = List.iter print_line in
   let lookup_msg_def msg = MessageCollection.lookup_message pg.messages msg graphs.channel_classes in
+  let readiness_signal_of_msg (msg : Lang.message_specifier) =
+    let msg_def = lookup_msg_def msg |> Option.get in
+    match msg_def.dir with
+    | Out ->
+      if CodegenPort.message_has_ack_port msg_def then
+        CodegenFormat.format_msg_ack_signal_name
+          (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
+      else if CodegenPort.message_has_ready_port msg_def then
+        CodegenFormat.format_msg_ready_signal_name
+          (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
+      else
+        "1'b1"
+    | Inp ->
+      if CodegenPort.message_has_valid_port msg_def then
+        CodegenFormat.format_msg_valid_signal_name
+          (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
+      else
+        "1'b1"
+  in
+  let readiness_condition_of_msg_group msg_group =
+    match List.filter (fun msg -> not (is_wildcard_msg msg)) msg_group with
+    | [] -> "1'b1"
+    | msgs ->
+      msgs
+      |> List.map readiness_signal_of_msg
+      |> String.concat " && "
+      |> Printf.sprintf "(%s)"
+  in
+  let select_condition_for_event (select_event : EventGraph.event) msg_group =
+    if not (is_wildcard_msg_group msg_group) then
+      readiness_condition_of_msg_group msg_group
+    else
+      let sibling_conditions =
+        g.events
+        |> List.find_map (fun (event : EventGraph.event) ->
+          match event.source with
+          | `SelectJoin join_info
+            when List.exists
+              (fun (root : EventGraph.event) -> root.id = select_event.id)
+              join_info.join_roots ->
+              Some (
+                join_info.join_roots
+                |> List.filter_map (fun (root : EventGraph.event) ->
+                  match root.source with
+                  | `Select (_, sibling_group) when not (is_wildcard_msg_group sibling_group) ->
+                    Some (readiness_condition_of_msg_group sibling_group)
+                  | _ -> None
+                )
+              )
+          | _ -> None
+        )
+        |> Option.value ~default:[]
+      in
+      match sibling_conditions with
+      | [] -> "1'b1"
+      | _ ->
+        sibling_conditions
+        |> String.concat " || "
+        |> Printf.sprintf "!(%s)"
+  in
   GraphAnalysis.events_prepare_outs g.events;
   let recurse_event = List.find (fun e -> let open EventGraph in e.is_loop_terminal && (List.is_empty e.outs)) g.events in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
@@ -402,7 +477,80 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           let cn' = EventStateFormatter.format_current g.thread_id trig_id in
           let trigger_string = Printf.sprintf "|| %s" cn' in
           gen_next source trigger_string
-        | _ -> raise (Except.UnimplementedError [Text "Unexpected event source type in next state generation"])
+        | `Select (parent_event, msg_group) ->
+          let parent_current = EventStateFormatter.format_current g.thread_id parent_event.id in
+          let select_condition = select_condition_for_event e msg_group in
+          Printf.sprintf "assign %s = (%s && %s) %s;"
+            cn
+            parent_current
+            select_condition
+            trigger
+          |> print_line
+        | `SelectJoin join_info ->
+          let join_arms = List.combine join_info.join_roots join_info.join_nodes in
+          let width = List.length join_arms in
+          let selected_name = EventStateFormatter.format_select_selected g.thread_id e.id in
+          let done_name = EventStateFormatter.format_select_done g.thread_id e.id in
+          let selected_q = selected_name ^ "_q" in
+          let selected_n = selected_name ^ "_n" in
+          let done_q = done_name ^ "_q" in
+          let done_n = done_name ^ "_n" in
+          let selected_bit idx = Printf.sprintf "%s[%d]" selected_q idx in
+          let done_bit idx = Printf.sprintf "%s[%d]" done_q idx in
+          let join_node_current (join_node : EventGraph.event) =
+            EventStateFormatter.format_current g.thread_id join_node.id
+          in
+          let any_selected =
+            if width = 0 then
+              "1'b0"
+            else
+              List.init width (fun idx -> selected_bit idx)
+              |> String.concat " || "
+              |> Printf.sprintf "(%s)"
+          in
+          let selected_done =
+            if width = 0 then
+              "1'b0"
+            else
+              List.mapi (fun idx ((_root, join_node) : EventGraph.event * EventGraph.event) ->
+                Printf.sprintf "(!%s || %s || %s)"
+                  (selected_bit idx)
+                  (done_bit idx)
+                  (join_node_current join_node)
+              ) join_arms
+              |> String.concat " && "
+              |> Printf.sprintf "(%s)"
+          in
+          Printf.sprintf "assign %s = (%s && %s) %s;"
+            cn
+            any_selected
+            selected_done
+            trigger
+          |> print_line;
+          CodegenPrinter.print_line ~lvl_delta_post:1 printer
+            @@ Printf.sprintf "always_comb begin: _thread_%d_event_%d_select_join_state"
+              g.thread_id e.id;
+          Printf.sprintf "%s = %s ? '0 : %s;" selected_n cn selected_q |> print_line;
+          Printf.sprintf "%s = %s ? '0 : %s;" done_n cn done_q |> print_line;
+          List.iteri (fun idx ((root, join_node) : EventGraph.event * EventGraph.event) ->
+            let root_current = EventStateFormatter.format_current g.thread_id root.id in
+            let join_current = join_node_current join_node in
+            Printf.sprintf "if (%s) %s[%d] = 1'b1;"
+              root_current
+              selected_n
+              idx
+            |> print_line;
+            Printf.sprintf "if (((%s ? 1'b0 : %s[%d]) || %s) && %s) %s[%d] = 1'b1;"
+              cn
+              selected_q
+              idx
+              root_current
+              join_current
+              done_n
+              idx
+            |> print_line
+          ) join_arms;
+          CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end"
       in
     gen_next e.source "" 
   in
@@ -543,6 +691,17 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     let print_send activated msg td =
       let msg_def = lookup_msg_def msg |> Option.get in
       let has_valid_port = CodegenPort.message_has_valid_port msg_def in
+      (* The parent Choice drives valid for offer sends; reusing an ack-gated
+         Select root here recreates a valid/ack combinational loop. *)
+      let select_valid_ack_send =
+        msg_def.handshake_mode = Lang.ValidAck
+        && (match e.source with
+            | `Select _ -> true
+            | _ -> false)
+      in
+      let valid_cond =
+        if select_valid_ack_send then None else Some activated
+      in
       if Option.is_some td.w then
         (* Non-void message: has data wire *)
         let w = Option.get td.w in
@@ -550,11 +709,12 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
           (CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
           has_valid_port
           (
+            valid_cond,
             activated,
             CodegenFormat.format_msg_data_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg 0,
             CodegenFormat.format_wirename w.thread_id w.id
           )
-      else
+      else if not select_valid_ack_send then
         (* Void message: no data wire, only valid signal *)
         insert_valid_only send_valid_only_assigns
           (CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
@@ -602,16 +762,18 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
 
     (* Handle Choice events: assert signals while waiting for handshake *)
     match e.source with
-    | `Seq (_, `Choice msg_groups) ->
+    | `Seq (choice_parent, `Choice msg_groups) ->
       let msg_list = flatten_choice_msg_groups msg_groups in
       let is_wildcard = is_wildcard_present msg_groups in
-      let activated = if not is_wildcard then (
-           Printf.sprintf "(%s || %s_q)"
-          (EventStateFormatter.format_current g.thread_id e.id)
-          (EventStateFormatter.format_syncstate g.thread_id e.id)
-      ) else (
-          EventStateFormatter.format_current g.thread_id e.id
-      ) in
+      let parent_current = EventStateFormatter.format_current g.thread_id choice_parent.id in
+      let activated =
+        if not is_wildcard then
+          Printf.sprintf "(%s || %s_q)"
+            parent_current
+            (EventStateFormatter.format_syncstate g.thread_id e.id)
+        else
+          parent_current
+      in
         List.iter (fun (msg : Lang.message_specifier) ->
           if msg.endpoint <> "*" || msg.msg <> "*" then
             let msg_def = lookup_msg_def msg |> Option.get in
@@ -655,7 +817,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
   Hashtbl.iter (fun w_name (has_sync_port, conds) ->
     if has_sync_port then (
       List.iter (fun cond ->
-        insert_to send_or_assigns w_name true (cond, "", "")
+        insert_to send_or_assigns w_name true (Some cond, "", "", "")
       ) !conds
     )
   ) choice_valid_asserts;
@@ -669,14 +831,21 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
 
   let send_data_selectors = ref [] in
   Hashtbl.iter (fun w_name (has_sync_port, conds_dw) ->
-    if has_sync_port then (
-      List.map (fun (c, _, _) -> c) !conds_dw
+    let valid_conditions =
+      List.filter_map (fun (valid_cond, _, _, _) -> valid_cond) !conds_dw
+    in
+    if has_sync_port && valid_conditions <> [] then (
+      valid_conditions
       |> String.concat " || "
       |> Printf.sprintf "assign %s = %s; // send valid" w_name
       |> print_line;
     );
     (* Filter out entries with empty data strings (from Choice assertions) *)
-    let conds_with_data = List.filter (fun (_, dw, vw) -> dw <> "" && vw <> "") !conds_dw in
+    let conds_with_data =
+      List.filter_map (fun (_, data_cond, dw, vw) ->
+        if dw <> "" && vw <> "" then Some (data_cond, dw, vw) else None
+      ) !conds_dw
+    in
     let n = List.length conds_with_data in
     if n = 1 then (
       let (_, dw, vw) = List.hd conds_with_data in
