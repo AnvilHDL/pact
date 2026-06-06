@@ -15,6 +15,15 @@ level before and after printing the line, respectively, and both default to [0].
 *)
 val print_line : ?lvl_delta_pre : int -> ?lvl_delta_post : int -> t -> string -> unit
 
+(** Print a blank line. *)
+val print_blank_line : t -> unit
+
+(** Print a sanitized single-line SystemVerilog comment. *)
+val print_comment : t -> string -> unit
+
+(** Print a section comment, optionally separated from previous code by a blank line. *)
+val print_section : ?blank_before : bool -> t -> string -> unit
+
 (** Similar to {!print_line} but prints out a list of lines instead of a single line. *)
 val print_lines : ?lvl_delta_pre : int -> ?lvl_delta_post : int -> t -> string list -> unit
 

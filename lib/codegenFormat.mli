@@ -3,6 +3,7 @@
 (** Sanitize an identifier for use in SystemVerilog signal names.
     Replaces '[' and ']' with '___' to avoid syntax errors. *)
 val sanitize_identifier : string -> string
+val sanitize_comment_text : string -> string
 
 val format_msg_prefix : string -> string -> string
 val format_msg_data_signal_name : string -> string -> int -> string
@@ -17,6 +18,7 @@ val format_unop : Lang.unop -> string
 val format_regname_current : string -> string
 val format_regname_next : string -> string
 val format_wire_maybe_const : WireCollection.wire MaybeConst.maybe_int_const -> string
+val format_wire_source_comment : WireCollection.wire -> string
 
 (** Extract the base name of an endpoint by removing array indices. *)
 val endpoint_base_name : Lang.identifier -> Lang.identifier

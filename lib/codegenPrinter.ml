@@ -30,6 +30,16 @@ let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) printer s =
   Printf.fprintf printer.out "%s%s\n" (Buffer.contents printer.cur_indent) s;
   adjust_level lvl_delta_post printer
 
+let print_blank_line printer =
+  Printf.fprintf printer.out "\n"
+
+let print_comment printer s =
+  print_line printer ("// " ^ CodegenFormat.sanitize_comment_text s)
+
+let print_section ?(blank_before = true) printer s =
+  if blank_before then print_blank_line printer;
+  print_comment printer s
+
 let print_lines ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) printer ss =
   adjust_level lvl_delta_pre printer;
   (* first line no extra indent *)
