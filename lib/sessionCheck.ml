@@ -76,6 +76,11 @@ let trigger_matches_msg trigger msg =
   | Some msgs -> List.exists (msg_spec_equal msg) msgs
   | None -> false
 
+let trigger_matches_msg_group trigger msg_group =
+  match trigger_msg_group trigger with
+  | Some trigger_group -> same_msg_spec_set trigger_group msg_group
+  | None -> false
+
 let session_of_atomic_actions actions =
   match actions with
   | [] -> StyTrue
@@ -89,6 +94,15 @@ let seq_if_needed head cont =
   | StyTrue, cont -> cont
   | head, StyTrue -> head
   | _ -> StySeq (head, cont)
+
+type session_residual = session_type option
+
+let residual_with_head head cont : session_residual =
+  match head, cont with
+  | StyTrue, None -> None
+  | StyTrue, Some cont -> Some cont
+  | head, Some cont -> Some (seq_if_needed head cont)
+  | head, None -> Some head
 
 let continuation_or_true = function
   | Some sty -> sty
@@ -107,10 +121,26 @@ let offering_body_session (offering : offering_session_type) =
   | Lang.AtomDelay _ | Lang.AtomTerminal _ ->
       continuation_or_true offering.continuation
 
-let is_message_offering (offering : offering_session_type) =
+let offering_session_after_msg (offering : offering_session_type) msg =
   match offering.trigger with
-  | Lang.AtomicAct _ | Lang.AtomConjunction _ -> true
-  | _ -> false
+  | Lang.AtomicAct act when msg_spec_equal (msg_spec_of_atomic_action act) msg ->
+      Some offering.continuation
+  | Lang.AtomConjunction actions ->
+      let matching, remaining =
+        List.partition
+          (fun act -> msg_spec_equal (msg_spec_of_atomic_action act) msg)
+          actions
+      in
+      if matching = [] then
+        None
+      else
+        let remaining_session =
+          match remaining with
+          | [] -> StyTrue
+          | _ -> session_of_atomic_actions remaining
+        in
+        Some (residual_with_head remaining_session offering.continuation)
+  | _ -> None
 
 (* Match offerings with messages *)
 let match_offerings_with_msgs
@@ -174,9 +204,6 @@ let event_has_immediate_session_action (ev : event) =
     | _ -> false
   ) ev.actions
 
-let msg_matches m1 m2 =
-  m1.endpoint = m2.endpoint && m1.msg = m2.msg
-
 let event_session_action_msgs (ev : event) =
   let immediate_msgs =
     List.filter_map (fun action ->
@@ -191,7 +218,12 @@ let event_session_action_msgs (ev : event) =
       | Send (msg, _) | Recv msg -> msg
     ) ev.sustained_actions
   in
-  immediate_msgs @ sustained_msgs
+  let source_msgs =
+    match ev.source with
+    | `Seq (_, `Send msg) | `Seq (_, `Recv msg) -> [msg]
+    | _ -> []
+  in
+  immediate_msgs @ sustained_msgs @ source_msgs
 
 (* Error handler that outputs the graph with session types before raising error *)
 let error_handler g err_msg err_span module_name  =
@@ -208,46 +240,12 @@ let error_handler g err_msg err_span module_name  =
   
     
 
-(* Build choice session type from list of offerings *)
-let rec build_choice_from_xofferings (offerings : offering_session_type list) =
-  match offerings with
-  | [] -> Lang.StyTrue
-  | [only] -> offering_body_session only
-  | first :: rest ->
-      Lang.StyChoice (offering_body_session first, build_choice_from_xofferings rest)
-  
-let  build_choice_from_offerings (offerings : offering_session_type list) =
-  let rec aux offings =
-    match offings with
-    | [] -> StyTrue
-    | [only] -> StyChoice (offering_body_session only, StyTrue)
-    | first :: rest ->
-        StyParallel (StyChoice (offering_body_session first, StyTrue), aux rest)
-  in
-
-  let offerings_list_filtered = List.filter is_message_offering offerings in 
-  let wildcard = List.filter (fun off ->
-    match off.trigger with
-    | Lang.AtomDelay _ -> true
-    | _ -> false
-  ) offerings in
-
-  let wildcard_cont = if List.length wildcard > 0 then Some (if Option.is_some ((List.hd wildcard).continuation) then Option.get ((List.hd wildcard).continuation) else StyTrue) else None in
-
-  match wildcard_cont with
-  | Some sty ->
-      StyChoice(sty, aux offerings_list_filtered)
-  | None -> aux offerings_list_filtered
-
-
 let seq_of_sty_opt sty_opt cont_opt =
   match sty_opt, cont_opt with
   | Some sty, Some cont -> Some (StySeq (sty, cont))
   | None, Some cont -> Some cont
   | Some sty, None -> Some sty
   | None, None -> None
-
-type session_residual = session_type option
 
 let string_of_residual = function
   | Some sty -> string_of_protocol sty
@@ -259,6 +257,64 @@ let residual_to_choice_arm = function
 
 let choice_of_residuals lhs rhs =
   Some (StyChoice (residual_to_choice_arm lhs, residual_to_choice_arm rhs))
+
+let residual_of_head_cont hc =
+  let head_sty =
+    match hc.head with
+    | Atom act -> Some (StyAtom act)
+    | Offers offerings -> Some (StyOffer offerings)
+    | XOffers offerings -> Some (StyXOffer offerings)
+    | Terminal ParallelDone -> Some StyTrue
+    | Terminal RecurseJump -> None
+  in
+  match head_sty, hc.cont with
+  | Some head, cont -> residual_with_head head cont
+  | None, cont -> cont
+
+let parallel_of_residuals residuals =
+  let sessions =
+    List.filter_map (function
+      | None -> None
+      | Some StyTrue -> None
+      | Some sty -> Some sty
+    ) residuals
+  in
+  match sessions with
+  | [] -> None
+  | first :: rest ->
+      Some (List.fold_left (fun acc sty -> StyParallel (acc, sty)) first rest)
+
+let offerings_of_head = function
+  | Offers offerings | XOffers offerings -> Some offerings
+  | _ -> None
+
+let head_matches_offer_choice msg_list hc =
+  match offerings_of_head hc.head with
+  | Some offerings -> match_offerings_with_msgs offerings msg_list
+  | None -> false
+
+let choice_msg_lists_of_children child_events =
+  List.filter_map (fun child_ev ->
+    match child_ev.source with
+    | `Seq (_, `Choice msg_list) -> Some msg_list
+    | _ -> None
+  ) child_events
+
+let residual_for_non_choice_heads current_residual recvars choice_msg_lists head_conts =
+  match choice_msg_lists with
+  | [] -> (current_residual, recvars)
+  | _ ->
+      let is_choice_head hc =
+        List.exists (fun msg_list -> head_matches_offer_choice msg_list hc)
+          choice_msg_lists
+      in
+      let non_choice_heads =
+        List.filter (fun hc ->
+          (not (is_choice_head hc)) && not (is_terminal_head hc.head)
+        ) head_conts
+      in
+      ( parallel_of_residuals (List.map residual_of_head_cont non_choice_heads),
+        List.concat (List.map (fun hc -> hc.recvar_map) non_choice_heads) )
 
 let rec normalize_residual_for_match recvar_map sty =
   let sty' = resolve_recvar recvar_map sty in
@@ -347,10 +403,8 @@ let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (r
     let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = Some (StyFuture s); is_choice = true; recvar_map = rec_var_context} in
     possible_delay :: head_conts
   | StyXOffer offerings ->
-      (* let continuation = build_choice_from_xofferings offerings in *)
       [{default_head_continuation_pair with head = XOffers offerings; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
-      (* let continuation = build_choice_from_offerings offerings in *)
       [{default_head_continuation_pair with head = Offers offerings; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyRec(id,s') -> get_head_continuation_pair s' sp ((id, sty_node)::rec_var_context)
@@ -504,6 +558,12 @@ let check_generalized_session
             ) head_conts
           );
 
+          let choice_msg_lists = choice_msg_lists_of_children child_events in
+          let structural_residual, structural_recvars =
+            residual_for_non_choice_heads
+              current_residual rec_var_cont choice_msg_lists head_conts
+          in
+
           let is_propogated = ref false in
           let mark_structural_propagation () = is_propogated := true in
           let enqueue_if_needed child_ev =
@@ -536,7 +596,7 @@ let check_generalized_session
           in
           let head_matches_msg msg = function
             | Atom (AtomicAct (AtomBMsg m))
-            | Atom (AtomicAct (AtomNBMsg m)) -> msg_matches m msg
+            | Atom (AtomicAct (AtomNBMsg m)) -> msg_spec_equal m msg
             | _ -> false
           in
           let assign_msg_from_heads child_ev msg err_label =
@@ -546,6 +606,22 @@ let check_generalized_session
                 matched := true;
                 hc.visited <- true;
                 assign_child_residual ~allow_choice:true child_ev hc.recvar_map hc.cont
+              end else begin
+                match offerings_of_head hc.head with
+                | Some offerings ->
+                    List.iter (fun offering ->
+                      match offering_session_after_msg offering msg with
+                      | Some offering_residual ->
+                          matched := true;
+                          hc.visited <- true;
+                          let residual =
+                            seq_of_sty_opt offering_residual hc.cont
+                          in
+                          assign_child_residual ~allow_choice:true
+                            child_ev hc.recvar_map residual
+                      | None -> ()
+                    ) offerings
+                | None -> ()
               end
             ) head_conts;
             if not !matched then
@@ -557,30 +633,43 @@ let check_generalized_session
                   (string_of_residual current_residual))
                 g.thread_codespan module_name
           in
+          let residual_after_msg recvars residual msg =
+            match residual with
+            | None -> None
+            | Some sty ->
+                get_head_continuation_pair sty g.thread_codespan recvars
+                |> List.find_map (fun hc ->
+                  if head_matches_msg msg hc.head then
+                    Some hc.cont
+                  else
+                    None
+                )
+          in
+          let rec residual_after_msgs recvars residual msgs =
+            match msgs with
+            | [] -> Some residual
+            | msg :: rest ->
+                (match residual_after_msg recvars residual msg with
+                | Some residual' -> residual_after_msgs recvars residual' rest
+                | None -> None)
+          in
           let assign_immediate_msg branches child_ev msg =
             let offering_matches_immediate_msg offering =
               trigger_matches_msg offering.trigger msg
             in
-            let offer_atoms = List.filter_map (fun hc ->
-              match hc.head with
-              | Offers _ | XOffers _ -> Some hc
-              | _ -> None
-            ) head_conts in
             let found_hc_opt =
               List.find_opt (fun hc ->
-                match hc.head with
-                | XOffers offerings | Offers offerings ->
+                match offerings_of_head hc.head with
+                | Some offerings ->
                     List.exists offering_matches_immediate_msg offerings
-                | _ -> false
-              ) offer_atoms
+                | None -> false
+              ) head_conts
             in
             match found_hc_opt with
             | Some hc ->
                 hc.visited <- true;
                 let offerings =
-                  match hc.head with
-                  | Offers offerings | XOffers offerings -> offerings
-                  | _ -> []
+                  Option.get (offerings_of_head hc.head)
                 in
                 let matching, remaining =
                   List.partition offering_matches_immediate_msg offerings
@@ -608,6 +697,31 @@ let check_generalized_session
                 | [] -> assign_msg_from_heads child_ev msg "Immediate")
             | None -> assign_msg_from_heads child_ev msg "Immediate"
           in
+          let assign_select_arm child_ev msg_group =
+            let matched = ref false in
+            List.iter (fun hc ->
+              match offerings_of_head hc.head with
+              | Some offerings ->
+                  List.iter (fun offering ->
+                    if trigger_matches_msg_group offering.trigger msg_group then begin
+                      matched := true;
+                      hc.visited <- true;
+                      let branch_residual =
+                        seq_of_sty_opt (Some (offering_body_session offering)) hc.cont
+                      in
+                      assign_child_residual child_ev hc.recvar_map branch_residual
+                    end
+                  ) offerings
+              | None -> ()
+            ) head_conts;
+            if not !matched then
+              error_handler g
+                (Printf.sprintf "Expected offer arm {%s} at event %d | However found %s"
+                  (String.concat ", " (List.map string_of_msg_spec msg_group))
+                  child_ev.id
+                  (string_of_residual current_residual))
+                g.thread_codespan module_name
+          in
 
           List.iter (fun child_ev ->
             let rec assign_session_type src =
@@ -615,32 +729,12 @@ let check_generalized_session
               | `Seq (_, `Choice msg_list) ->
                   let matched = ref false in
                   List.iter (fun hc ->
-                    match hc.head with
-                    | Offers offerings ->
-                        if match_offerings_with_msgs offerings msg_list then begin
-                          matched := true;
-                          hc.visited <- true;
-                          let residual =
-                            seq_of_sty_opt
-                              (Some (build_choice_from_offerings offerings))
-                              hc.cont
-                          in
-                          assign_child_residual ~allow_choice:true
-                            child_ev hc.recvar_map residual
-                        end
-                    | XOffers offerings ->
-                        if match_offerings_with_msgs offerings msg_list then begin
-                          matched := true;
-                          hc.visited <- true;
-                          let residual =
-                            seq_of_sty_opt
-                              (Some (build_choice_from_xofferings offerings))
-                              hc.cont
-                          in
-                          assign_child_residual ~allow_choice:true
-                            child_ev hc.recvar_map residual
-                        end
-                    | _ -> ()
+                    if head_matches_offer_choice msg_list hc then begin
+                      matched := true;
+                      hc.visited <- true;
+                      assign_child_residual child_ev hc.recvar_map
+                        (residual_of_head_cont hc)
+                    end
                   ) head_conts;
                   if not !matched then
                     error_handler g
@@ -667,18 +761,6 @@ let check_generalized_session
                         g.thread_codespan module_name)
 
               | `Root Some (_, branches) ->
-                  let is_empty_branch = List.for_all (fun e ->
-                    match e.source with
-                    | `Branch _ -> true
-                    | _ -> false
-                  ) child_ev.outs in
-                  let all_branches_empty = List.for_all (fun ex ->
-                    List.for_all (fun e ->
-                      match e.source with
-                      | `Branch _ -> true
-                      | _ -> false
-                    ) ex.outs
-                  ) branches.owner_branch.branches_to in
                   let has_immediate_actions =
                     List.filter (fun a ->
                       match a.d with
@@ -702,28 +784,39 @@ let check_generalized_session
                     ) has_immediate_actions
                   else if has_immediate_sibling then
                     mark_structural_propagation ()
-                  else if (not is_empty_branch) || all_branches_empty then begin
-                    mark_structural_propagation ();
-                    assign_child_residual child_ev rec_var_cont current_residual
-                  end
                   else begin
                     mark_structural_propagation ();
-                    assign_child_residual child_ev rec_var_cont current_residual
+                    assign_child_residual child_ev structural_recvars structural_residual
                   end
 
               | `Later (ev_a, ev_b) ->
                   (match get_event_residual ev_a, get_event_residual ev_b with
-                  | Some residual_a, Some residual_b ->
+                  | Some residual_a, Some residual_b -> begin
                       let recvars_a = get_event_recvars ev_a in
                       let recvars_b = get_event_recvars ev_b in
                       let merged_recvars = recvars_a @ recvars_b in
                       let next_a = strip_parallel_done_markers residual_a in
                       let next_b = strip_parallel_done_markers residual_b in
-                      if residual_matches merged_recvars next_a next_b then begin
-                        mark_structural_propagation ();
-                        assign_child_residual child_ev merged_recvars next_a
-                      end
-                      else
+                      let residual_pair =
+                        if residual_matches merged_recvars next_a next_b then
+                          Some next_a
+                        else
+                          let msgs_a = event_session_action_msgs ev_a in
+                          let msgs_b = event_session_action_msgs ev_b in
+                          match
+                            residual_after_msgs recvars_a next_a msgs_b,
+                            residual_after_msgs recvars_b next_b msgs_a
+                          with
+                          | Some next_a', Some next_b'
+                            when residual_matches merged_recvars next_a' next_b' ->
+                              Some next_a'
+                          | _ -> None
+                      in
+                      match residual_pair with
+                      | Some next_residual ->
+                          mark_structural_propagation ();
+                          assign_child_residual child_ev merged_recvars next_residual
+                      | None ->
                         error_handler g
                           (Printf.sprintf
                             "Mismatched session residuals at later event %d | Types: %s vs %s"
@@ -731,6 +824,7 @@ let check_generalized_session
                             (string_of_residual next_a)
                             (string_of_residual next_b))
                           g.thread_codespan module_name
+                  end
                   | _ ->
                       mark_structural_propagation ())
 
@@ -784,6 +878,48 @@ let check_generalized_session
                         else
                           error_handler g
                             (Printf.sprintf "Mismatched session residuals in branch event %d"
+                              child_ev.id)
+                            g.thread_codespan module_name
+                  end
+
+              | `Select (_, msg_group) ->
+                  assign_select_arm child_ev msg_group
+              | `SelectJoin join_info ->
+                  let join_residuals =
+                    List.filter_map (fun join_ev ->
+                      match get_event_residual join_ev with
+                      | Some residual -> Some (join_ev, residual)
+                      | None -> None
+                    ) join_info.join_nodes
+                  in
+                  if List.length join_residuals <> List.length join_info.join_nodes then
+                    mark_structural_propagation ()
+                  else begin
+                    match join_residuals with
+                    | [] ->
+                        mark_structural_propagation ();
+                        assign_child_residual child_ev rec_var_cont current_residual
+                    | (first_ev, first_residual) :: rest ->
+                        let merged_recvars =
+                          List.concat
+                            (List.map (fun (join_ev, _) ->
+                              get_event_recvars join_ev
+                            ) join_residuals)
+                        in
+                        let join_residuals_match =
+                          List.for_all (fun (join_ev, residual) ->
+                            residual_matches
+                              (get_event_recvars first_ev @ get_event_recvars join_ev)
+                              first_residual residual
+                          ) rest
+                        in
+                        if join_residuals_match then begin
+                          mark_structural_propagation ();
+                          assign_child_residual child_ev merged_recvars first_residual
+                        end
+                        else
+                          error_handler g
+                            (Printf.sprintf "Mismatched session residuals in select join event %d"
                               child_ev.id)
                             g.thread_codespan module_name
                   end

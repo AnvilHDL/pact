@@ -3,11 +3,11 @@ chan conj_ch {
     left ack : (logic@#1),
     left alt : (logic@#1)
 }
-interface conj_offer_xleft (ep : left conj_ch) = ^({ep.req, ep.ack} , ep.alt) ; #2
+interface conj_offer_xleft (ep : left conj_ch) = ^({ep.req, ep.ack} , ep.alt) ; #1
 
 proc offer_conj_worker(conj_offer_xleft) {
     loop {
-        xoffer {
+        offer {
             {x = recv ep.req; y = recv ep.ack} => (
                 dprint "offer conjunction %d %d" (x, y)
             ),

@@ -421,7 +421,7 @@ module CombSimplPass = struct
     let n = List.length graph.events in
     let out_deg = Array.make n 0 in
     List.iter (fun e ->
-      if out_deg.(e.id) = 0 && event_is_empty e && not (event_is_control_boundary e) then (
+      if out_deg.(e.id) = 0 && (event_is_empty e || event_is_branch_root e) && not (event_is_control_boundary e) then (
         (* remove *)
         union_ufs event_ufs e.id (-1);
         e.removed <- true;
