@@ -121,6 +121,13 @@ let offering_body_session (offering : offering_session_type) =
   | Lang.AtomDelay _ | Lang.AtomTerminal _ ->
       continuation_or_true offering.continuation
 
+let rec build_choice_from_xofferings offerings =
+  match offerings with
+  | [] -> StyTrue
+  | [only] -> offering_body_session only
+  | first :: rest ->
+      StyChoice (offering_body_session first, build_choice_from_xofferings rest)
+
 let offering_session_after_msg (offering : offering_session_type) msg =
   match offering.trigger with
   | Lang.AtomicAct act when msg_spec_equal (msg_spec_of_atomic_action act) msg ->
@@ -288,9 +295,17 @@ let offerings_of_head = function
   | Offers offerings | XOffers offerings -> Some offerings
   | _ -> None
 
+let choice_residual_for_head msg_list hc =
+  match hc.head with
+  | Offers offerings when match_offerings_with_msgs offerings msg_list ->
+      Some (residual_of_head_cont hc)
+  | XOffers offerings when match_offerings_with_msgs offerings msg_list ->
+      Some (seq_of_sty_opt (Some (build_choice_from_xofferings offerings)) hc.cont)
+  | _ -> None
+
 let head_matches_offer_choice msg_list hc =
-  match offerings_of_head hc.head with
-  | Some offerings -> match_offerings_with_msgs offerings msg_list
+  match choice_residual_for_head msg_list hc with
+  | Some _ -> true
   | None -> false
 
 let choice_msg_lists_of_children child_events =
@@ -729,12 +744,12 @@ let check_generalized_session
               | `Seq (_, `Choice msg_list) ->
                   let matched = ref false in
                   List.iter (fun hc ->
-                    if head_matches_offer_choice msg_list hc then begin
+                    match choice_residual_for_head msg_list hc with
+                    | Some residual ->
                       matched := true;
                       hc.visited <- true;
-                      assign_child_residual child_ev hc.recvar_map
-                        (residual_of_head_cont hc)
-                    end
+                      assign_child_residual child_ev hc.recvar_map residual
+                    | None -> ()
                   ) head_conts;
                   if not !matched then
                     error_handler g
