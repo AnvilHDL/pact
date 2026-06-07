@@ -19,6 +19,7 @@ type head_continuation_pair = {
   cont : session_type option;
   mutable visited : bool;
   is_choice : bool;
+  is_parallel : bool;
   recvar_map : (identifier * session_type) list;
 }
 let default_head_continuation_pair = {
@@ -26,6 +27,7 @@ let default_head_continuation_pair = {
   cont = None;
   visited = false;
   is_choice = false;
+  is_parallel = false;
   recvar_map = [];
 }
 
@@ -41,7 +43,16 @@ let print_string_of_head_cont_pair hc =
     | Some sty -> string_of_protocol sty
     | None -> "<>"
   in
-  Printf.sprintf "[Head: %s | Cont: %s]" head_str cont_str
+  let tags =
+    [ (hc.is_choice, "choice"); (hc.is_parallel, "parallel") ]
+    |> List.filter_map (fun (enabled, tag) -> if enabled then Some tag else None)
+  in
+  let tag_str =
+    match tags with
+    | [] -> ""
+    | _ -> Printf.sprintf " | Tags: %s" (String.concat "," tags)
+  in
+  Printf.sprintf "[Head: %s | Cont: %s%s]" head_str cont_str tag_str
 
 let is_terminal_head = function
   | Terminal _ -> true
@@ -383,13 +394,20 @@ let residual_matches recvar_map lhs rhs =
       = normalize_residual_for_match recvar_map rhs_sty
   | _ -> false
 
-let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (rec_var_context : (identifier*session_type) list) : head_continuation_pair list =
+let rec get_head_continuation_pair
+    ?(inside_parallel=false)
+    (sty_node : session_type)
+    (sp : code_span)
+    (rec_var_context : (identifier*session_type) list) : head_continuation_pair list =
   match sty_node with
-  | StyAtom (AtomicAct act) -> [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = None ; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
-  | StyAtom (AtomConjunction acts) -> [{default_head_continuation_pair with head = Atom (AtomConjunction acts); cont = None; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
-  | StyAtom (AtomDelay n) -> [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = None; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomicAct act) ->
+      [{default_head_continuation_pair with head = Atom (AtomicAct act); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomConjunction acts) ->
+      [{default_head_continuation_pair with head = Atom (AtomConjunction acts); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
+  | StyAtom (AtomDelay n) ->
+      [{default_head_continuation_pair with head = Atom (AtomDelay n); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map@rec_var_context}]
   | StySeq (s1, s2) -> (  
-    let head_conts = get_head_continuation_pair s1 sp rec_var_context in
+    let head_conts = get_head_continuation_pair ~inside_parallel s1 sp rec_var_context in
       List.map (fun hc ->
         {hc with cont = seq_of_sty_opt hc.cont (Some s2)}
       ) head_conts
@@ -400,33 +418,47 @@ let rec get_head_continuation_pair (sty_node : session_type) (sp : code_span) (r
     | StyTrue, StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = rec_var_context}]
     | _ ->
      (
-      let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
-      let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
+      let head_conts1 =
+        get_head_continuation_pair ~inside_parallel:true s1 sp rec_var_context
+      in
+      let head_conts2 =
+        get_head_continuation_pair ~inside_parallel:true s2 sp rec_var_context
+      in
       (* let has_same_hd hd_act other_pairs = List.exists (fun hc -> hc.head = hd_act) other_pairs in *)
-      let head_conts_transform_1 = List.map (fun hc -> {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)}) head_conts1 in
-      let head_conts_transform_2 = List.map (fun hc -> {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)}) head_conts2 in
+      let head_conts_transform_1 =
+        List.map
+          (fun hc ->
+            {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)})
+          head_conts1
+      in
+      let head_conts_transform_2 =
+        List.map
+          (fun hc ->
+            {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)})
+          head_conts2
+      in
       head_conts_transform_1 @ head_conts_transform_2
     )
   )
   | StyChoice (s1, s2) -> (
-      let head_conts1 = get_head_continuation_pair s1 sp rec_var_context in
-      let head_conts2 = get_head_continuation_pair s2 sp rec_var_context in
+      let head_conts1 = get_head_continuation_pair ~inside_parallel s1 sp rec_var_context in
+      let head_conts2 = get_head_continuation_pair ~inside_parallel s2 sp rec_var_context in
       List.map (fun hc -> {hc with is_choice = true}) (head_conts1 @ head_conts2)
     )
   | StyFuture s -> 
-    let head_conts = get_head_continuation_pair s sp rec_var_context in
-    let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = Some (StyFuture s); is_choice = true; recvar_map = rec_var_context} in
+    let head_conts = get_head_continuation_pair ~inside_parallel s sp rec_var_context in
+    let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = Some (StyFuture s); is_choice = true; is_parallel = inside_parallel; recvar_map = rec_var_context} in
     possible_delay :: head_conts
   | StyXOffer offerings ->
-      [{default_head_continuation_pair with head = XOffers offerings; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+      [{default_head_continuation_pair with head = XOffers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
-      [{default_head_continuation_pair with head = Offers offerings; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
-  | StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
-  | StyRec(id,s') -> get_head_continuation_pair s' sp ((id, sty_node)::rec_var_context)
+      [{default_head_continuation_pair with head = Offers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyRec(id,s') -> get_head_continuation_pair ~inside_parallel s' sp ((id, sty_node)::rec_var_context)
   | StyVar id -> 
     (
     match List.find_opt (fun (var_id, _) -> var_id = id) rec_var_context with
-    | Some (_, sty'') -> [{default_head_continuation_pair with head = Terminal RecurseJump; cont = Some sty''; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+    | Some (_, sty'') -> [{default_head_continuation_pair with head = Terminal RecurseJump; cont = Some sty''; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
     | _ -> raise (Except.TypeError [
         Text (Printf.sprintf "Unbound recursive variable %s in head-continuation extraction" id);
         Except.codespan_local sp
@@ -507,6 +539,9 @@ let check_generalized_session
     let event_recvars : ((identifier * session_type) list) IntHashtbl.t =
       IntHashtbl.create (List.length g.events)
     in
+    let event_from_structural_propagation : bool IntHashtbl.t =
+      IntHashtbl.create (List.length g.events)
+    in
 
     let get_event_residual ev =
       try Some (IntHashtbl.find event_residuals ev.id) with Not_found -> None
@@ -514,9 +549,15 @@ let check_generalized_session
     let get_event_recvars ev =
       try IntHashtbl.find event_recvars ev.id with Not_found -> []
     in
-    let set_event_residual ev recvars residual =
+    let get_event_from_structural_propagation ev =
+      try IntHashtbl.find event_from_structural_propagation ev.id
+      with Not_found -> false
+    in
+    let set_event_residual ?(from_structural=false) ev recvars residual =
       IntHashtbl.replace event_residuals ev.id residual;
       IntHashtbl.replace event_recvars ev.id recvars;
+      IntHashtbl.replace event_from_structural_propagation ev.id
+        (from_structural || get_event_from_structural_propagation ev);
       ev.session_type <- node_of_residual protocol_node residual
     in
 
@@ -545,6 +586,9 @@ let check_generalized_session
           IntHashtbl.replace processed_count ev.id (count + 1);
 
           let rec_var_cont = get_event_recvars ev in
+          let current_from_structural_propagation =
+            get_event_from_structural_propagation ev
+          in
           let current_residual =
             match get_event_residual ev with
             | Some residual -> residual
@@ -585,18 +629,25 @@ let check_generalized_session
             if not child_ev.is_recurse then
               Queue.add child_ev next_queue
           in
-          let assign_child_residual ?(allow_choice=false) child_ev recvars residual =
+          let assign_child_residual
+              ?(allow_choice=false)
+              ?(from_structural=false)
+              child_ev recvars residual =
             match get_event_residual child_ev with
             | None ->
-                set_event_residual child_ev recvars residual;
+                set_event_residual ~from_structural child_ev recvars residual;
                 enqueue_if_needed child_ev
             | Some existing ->
                 let merged_recvars = get_event_recvars child_ev @ recvars in
-                if residual_matches merged_recvars existing residual then
-                  ()
+                if residual_matches merged_recvars existing residual then begin
+                  if from_structural then
+                    IntHashtbl.replace
+                      event_from_structural_propagation child_ev.id true
+                end
                 else if allow_choice then begin
                   let merged_residual = choice_of_residuals existing residual in
-                  set_event_residual child_ev merged_recvars merged_residual;
+                  set_event_residual
+                    ~from_structural child_ev merged_recvars merged_residual;
                   enqueue_if_needed child_ev
                 end
                 else
@@ -801,7 +852,9 @@ let check_generalized_session
                     mark_structural_propagation ()
                   else begin
                     mark_structural_propagation ();
-                    assign_child_residual child_ev structural_recvars structural_residual
+                    assign_child_residual
+                      ~from_structural:true
+                      child_ev structural_recvars structural_residual
                   end
 
               | `Later (ev_a, ev_b) ->
@@ -830,7 +883,9 @@ let check_generalized_session
                       match residual_pair with
                       | Some next_residual ->
                           mark_structural_propagation ();
-                          assign_child_residual child_ev merged_recvars next_residual
+                          assign_child_residual
+                            ~from_structural:true
+                            child_ev merged_recvars next_residual
                       | None ->
                         error_handler g
                           (Printf.sprintf
@@ -871,7 +926,9 @@ let check_generalized_session
                     match branch_residuals with
                     | [] ->
                         mark_structural_propagation ();
-                        assign_child_residual child_ev rec_var_cont current_residual
+                        assign_child_residual
+                          ~from_structural:true
+                          child_ev rec_var_cont current_residual
                     | (first_ev, first_residual) :: rest ->
                         let merged_recvars =
                           List.concat
@@ -888,7 +945,9 @@ let check_generalized_session
                         in
                         if branches_match then begin
                           mark_structural_propagation ();
-                          assign_child_residual child_ev merged_recvars first_residual
+                          assign_child_residual
+                            ~from_structural:true
+                            child_ev merged_recvars first_residual
                         end
                         else
                           error_handler g
@@ -913,7 +972,9 @@ let check_generalized_session
                     match join_residuals with
                     | [] ->
                         mark_structural_propagation ();
-                        assign_child_residual child_ev rec_var_cont current_residual
+                        assign_child_residual
+                          ~from_structural:true
+                          child_ev rec_var_cont current_residual
                     | (first_ev, first_residual) :: rest ->
                         let merged_recvars =
                           List.concat
@@ -930,7 +991,9 @@ let check_generalized_session
                         in
                         if join_residuals_match then begin
                           mark_structural_propagation ();
-                          assign_child_residual child_ev merged_recvars first_residual
+                          assign_child_residual
+                            ~from_structural:true
+                            child_ev merged_recvars first_residual
                         end
                         else
                           error_handler g
@@ -953,7 +1016,10 @@ let check_generalized_session
           ) child_events;
 
           List.iter (fun hc ->
-            if not hc.visited && not hc.is_choice && not !is_propogated
+            if not hc.visited
+               && not hc.is_choice
+               && not (current_from_structural_propagation && hc.is_parallel)
+               && not !is_propogated
                && not (is_terminal_head hc.head) then
               error_handler g
                 (Printf.sprintf
@@ -974,7 +1040,7 @@ let check_generalized_session
 
     let processed_count_tbl = IntHashtbl.create (List.length g.events) in
     let q = Queue.create () in
-    let root_ev = List.find (fun e -> e.source = `Root None) g.events in
+    let root_ev = GraphAnalysis.find_graph_root g.events in
 
     set_event_residual root_ev [] (Some protocol_node.d);
     Queue.add root_ev q;

@@ -2,6 +2,11 @@
 
 val event_traverse : EventGraph.event -> ((EventGraph.event -> unit) -> EventGraph.event -> unit) -> EventGraph.event list
 
+val event_is_graph_root : EventGraph.event -> bool
+
+val find_graph_root_opt : EventGraph.event list -> EventGraph.event option
+
+val find_graph_root : EventGraph.event list -> EventGraph.event
 
 (** Compute predecessors of an event in the event graph.
     Does not include the event itself.

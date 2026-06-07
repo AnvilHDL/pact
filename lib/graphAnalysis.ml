@@ -22,6 +22,23 @@ let event_traverse (ev : event) visitor : event list =
   done;
   !res
 
+let rec source_starts_at_graph_root = function
+  | `Root None -> true
+  | `Recurse (src, _) -> source_starts_at_graph_root src
+  | _ -> false
+
+let event_is_graph_root ev =
+  source_starts_at_graph_root ev.source
+
+let find_graph_root_opt events =
+  List.find_opt event_is_graph_root events
+
+let find_graph_root events =
+  match find_graph_root_opt events with
+  | Some ev -> ev
+  | None ->
+      raise (Except.unknown_error_default "Event graph has no root event!")
+
 (* returns immediate predecessors *)
 let imm_preds_with_recurse include_recurse ev =
   let rec get_pred src =
@@ -357,8 +374,8 @@ let rec has_only_empty_path_to_recurse (target_event : EventGraph.event) (src_ev
 let make_branch_root_delay_checker events =
   events_prepare_outs events;
   (* let root_event = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in *)
-  let terminal_events = List.find (fun (ev : EventGraph.event) -> ev.is_loop_terminal) events in
-  let root_node = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in
+  let terminal_event = List.find_opt (fun (ev : EventGraph.event) -> ev.is_loop_terminal) events in
+  let root_node = find_graph_root_opt events in
   (* let dist = event_min_distance_with_later events root_event root_event in *)
 
   fun (e : EventGraph.event) ->
@@ -366,12 +383,17 @@ let make_branch_root_delay_checker events =
     if not (is_empty_true_false_branch_root e) then
       false
     else
-      let has_empty_path_to_terminal = has_only_empty_path_to_recurse e terminal_events  [] in
-      let has_empty_path_to_root = has_only_empty_path_to_recurse root_node e [] in
-      match (has_empty_path_to_terminal, has_empty_path_to_root) with
-      | (Reaches true, Reaches true) -> true
-      | (Reaches _ , Reaches _) -> false
-      | _ -> raise (Except.unknown_error_default "Unexpected case in branch root delay checker!")
+      match terminal_event, root_node with
+      | Some terminal_event, Some root_node ->
+          let has_empty_path_to_terminal =
+            has_only_empty_path_to_recurse e terminal_event  []
+          in
+          let has_empty_path_to_root = has_only_empty_path_to_recurse root_node e [] in
+          (match (has_empty_path_to_terminal, has_empty_path_to_root) with
+          | (Reaches true, Reaches true) -> true
+          | (Reaches _ , Reaches _) -> false
+          | _ -> raise (Except.unknown_error_default "Unexpected case in branch root delay checker!"))
+      | _ -> false
 
 let event_is_dominant e1 e2 =
   let preds = (event_predecessors e1) @ [e1] in
@@ -938,17 +960,22 @@ let recurse_unfold_for_checks construct_graphIR ci shared_vars_info graph (expr_
     (Typing.BuildContext.create_empty tmp_graph shared_vars_info true)
     expr_node in
   (* now just check the total *)
-  let root = List.find (fun e -> e.source = `Root None) tmp_graph.events in
-  let recurse = List.find (fun e -> e.is_loop_terminal) tmp_graph.events in
-  let dists = event_min_distance_with_later tmp_graph.events root root in
-  let full_dist = IntHashTbl.find dists td.ld.lt.live.id in
-  let recurse_dist = IntHashTbl.find dists recurse.id in
-  if recurse_dist = 0 then
-    raise (event_graph_error_default "Recurse delay must be greater than 0!" expr_node.span);
-  (* the number of times to unfold is minimum for the recurse time to first pass the end event *)
-  let unfold_times = full_dist / recurse_dist in
-  let cur_expr = ref expr_node in
-  for _ = 1 to unfold_times do
-    cur_expr := recurse_unfold !cur_expr expr_node
-  done;
-  !cur_expr
+  match
+    find_graph_root_opt tmp_graph.events,
+    List.find_opt (fun e -> e.is_loop_terminal) tmp_graph.events
+  with
+  | Some root, Some recurse ->
+      let dists = event_min_distance_with_later tmp_graph.events root root in
+      let full_dist = IntHashTbl.find dists td.ld.lt.live.id in
+      let recurse_dist = IntHashTbl.find dists recurse.id in
+      if recurse_dist = 0 then
+        raise (event_graph_error_default "Recurse delay must be greater than 0!" expr_node.span);
+      (* The number of unrolls needed for the recurse time to first pass the end event. *)
+      let unfold_times = full_dist / recurse_dist in
+      let cur_expr = ref expr_node in
+      for _ = 1 to unfold_times do
+        cur_expr := recurse_unfold !cur_expr expr_node
+      done;
+      !cur_expr
+  | _ ->
+      expr_node

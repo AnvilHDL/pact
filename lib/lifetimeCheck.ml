@@ -217,7 +217,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
   GraphAnalysis.events_prepare_outs g.events;
 
   (* check that it takes at least one cycle to execute *)
-  let root_ev = List.find (fun e -> e.source = `Root None) g.events in
+  let root_ev = GraphAnalysis.find_graph_root g.events in
   let last_ev = List.hd g.events in (* assuming reverse topo order *)
   let dist = event_min_distance g.events root_ev root_ev in
   if IntHashtbl.find dist last_ev.id = 0 then
@@ -548,8 +548,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
           | None -> ()
         ) g.events;
       if msg = relative_msg then (
-        let ev_root = (List.length g.events) - 1 |> List.nth g.events in
-        assert(ev_root.source = (`Root None));
+        let ev_root = GraphAnalysis.find_graph_root g.events in
         let slacks = GraphAnalysis.events_max_dist g.events lookup_message ev_root in
         List.iter (fun ev' ->
           if has_msg relative_msg ev' |> Option.is_none then
@@ -599,7 +598,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
               Array.iteri (fun idx sl -> Printf.eprintf "Sl %d = %d\n" idx sl) slacks
             );
             List.iter (fun ev' ->
-              if msg = relative_msg && !is_first && (ev'.source = `Root None) then
+              if msg = relative_msg && !is_first && GraphAnalysis.event_is_graph_root ev' then
                 slacks.(ev'.id) <- slacks.(ev'.id) + init_offset - gap
               else if has_msg_end relative_msg ev' |> Option.is_none then
                 slacks.(ev'.id) <- -event_distance_max
@@ -617,5 +616,4 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
    )
   in
   Utils.StringMap.iter check_msg_sync_mode !msg_to_check
-
 

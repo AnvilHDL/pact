@@ -671,7 +671,27 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
   let open Lang in
   let print_send_recv (e : EventGraph.event) =
     let open EventGraph in
-    let print_recv activated msg =
+    let true_branch_attempt_condition () =
+      let rec collect src extra_sources =
+        match src with
+        | `Root (Some (parent_event, br_side_info))
+            when br_side_info.owner_branch.branch_cond = TrueFalse
+                 && br_side_info.branch_side_sel = 0 ->
+            Some
+              (EventStateFormatter.format_current g.thread_id parent_event.id
+               :: extra_sources)
+        | `Recurse (src', trigger_event_id) ->
+            collect src'
+              (EventStateFormatter.format_current g.thread_id trigger_event_id
+               :: extra_sources)
+        | _ -> None
+      in
+      match collect e.source [] with
+      | Some [only] -> Some only
+      | Some sources -> Some (Printf.sprintf "(%s)" (String.concat " || " sources))
+      | None -> None
+    in
+    let print_recv ?attempt_cond activated msg =
         let msg_def = lookup_msg_def msg |> Option.get in
         let has_ack_port = CodegenPort.message_has_ack_port msg_def in
         let has_ready_port = CodegenPort.message_has_ready_port msg_def in
@@ -680,7 +700,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
           insert_to recv_or_assigns
             (CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
             has_ready_port
-            activated
+            (Option.value attempt_cond ~default:activated)
         else
         insert_to recv_or_assigns
           (CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
@@ -688,7 +708,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
           activated
         
     in
-    let print_send activated msg td =
+    let print_send ?attempt_cond activated msg td =
       let msg_def = lookup_msg_def msg |> Option.get in
       let has_valid_port = CodegenPort.message_has_valid_port msg_def in
       (* The parent Choice drives valid for offer sends; reusing an ack-gated
@@ -700,7 +720,15 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
             | _ -> false)
       in
       let valid_cond =
-        if select_valid_ack_send then None else Some activated
+        if select_valid_ack_send then
+          None
+        else if msg_def.handshake_mode = Lang.ValidAck then
+          Some (Option.value attempt_cond ~default:activated)
+        else
+          Some activated
+      in
+      let data_cond =
+        Option.value valid_cond ~default:activated
       in
       if Option.is_some td.w then
         (* Non-void message: has data wire *)
@@ -710,16 +738,16 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
           has_valid_port
           (
             valid_cond,
-            activated,
+            data_cond,
             CodegenFormat.format_msg_data_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg 0,
             CodegenFormat.format_wirename w.thread_id w.id
           )
-      else if not select_valid_ack_send then
+      else if Option.is_some valid_cond then
         (* Void message: no data wire, only valid signal *)
         insert_valid_only send_valid_only_assigns
           (CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
           has_valid_port
-          activated
+          (Option.get valid_cond)
     in
 
     List.iter (fun (sa : EventGraph.sustained_action Lang.ast_node) ->
@@ -753,10 +781,11 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     ) e.sustained_actions;
 
     let activated = (EventStateFormatter.format_current g.thread_id e.id) in
+    let attempt_cond = true_branch_attempt_condition () in
     List.iter (fun (ac : EventGraph.action Lang.ast_node) ->
       match ac.d with
-      | ImmediateSend (msg, td) -> print_send activated msg td
-      | ImmediateRecv msg -> print_recv activated msg
+      | ImmediateSend (msg, td) -> print_send ?attempt_cond activated msg td
+      | ImmediateRecv msg -> print_recv ?attempt_cond activated msg
       | _ -> ()
     ) e.actions;
 
