@@ -421,9 +421,9 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                 !offers
               )
             in
-              List.iteri (fun i t_set ->
+             let _ =  List.find_mapi (fun i t_set ->
                 let offers_for_this_state = offers_for_this_state_arr_from_others.(i) in
-                List.iter (fun t -> 
+                match List.find_opt (fun t -> 
                   let is_compatible =
                     List.for_all (fun msg_groups ->
                       check_no_complete_offer msg_groups offers_for_this_state
@@ -432,16 +432,22 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
                     (* Printf.eprintf "[Verdict = %s] [State %d] Considering conditional transition with delay compatibility from automaton %d with not_acts: %s\n" (string_of_bool is_compatible) prod_state_id i (String.concat "," (List.map Lang.string_of_msg_spec t_not_acts_flat));
                   Printf.eprintf "Offers for this state from others: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec offers_for_this_state));
                   Printf.eprintf "Others states: %s\n" (String.concat "," (List.map string_of_int current_states)); *)
-                  if is_compatible then (
+                  if is_compatible  then (
                     found := true;
                     let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
                     let next_prod_state = get_product_state next_states in
                     TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
                     if not (IntListSet.mem next_states !visited) then 
                         Queue.add next_states worklist
+                    ;
+                    true
                   )
-                )t_set
-              )conditional_trans
+                  else false
+                )t_set with 
+                | Some _ -> Some true
+                | None -> None
+              )conditional_trans in
+              ()
           );
           
           if not !found && not !found_epsilon then (
