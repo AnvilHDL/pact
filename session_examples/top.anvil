@@ -1,14 +1,5 @@
-chan ch {
-    left req : (logic@#1)
-}
-interface itf (ep : left ch) = ep.req;#1
-
-
-proc top(itf){
-    loop{
-        let _ = recv ep.req >>
-        cycle 1 >> 
-        let _ = recv ep.req >>
-        cycle 1
-    }
+pool eventual{
+    ;
+    i1 : F ep.m1; ep.m2,
+    i2 : ep.m1; F ep.m2
 }

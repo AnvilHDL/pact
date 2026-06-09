@@ -215,7 +215,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         (ctx_bindings, ntd.ld.lt.live, None)
     | OfferRecv (id, recv_pack) ->
         let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
-          |> unwrap_or_err "Invalid message specifier in offer receive" e.span in
+          |> unwrap_or_err (Printf.sprintf "Invalid message specifier %s in offer receive" (string_of_msg_spec recv_pack.recv_msg_spec)) e.span in
         if msg.dir <> Inp then
           raise (event_graph_error_default "Mismatching message direction!" e.span);
         let wires, w = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
@@ -275,7 +275,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
           raise (event_graph_error_default ("Conflicting Identifier " ^ ident ^ " declarations found") e.span)
         | Some binding, None -> Typing.use_binding binding |> Typing.sync_data  graph ctx.current
         | None, Some value ->
-          let sz = Utils.int_log2 (value + 1) in
+          let sz = 32 in
           let (wires', w) = WireCollection.add_literal graph.thread_id
               ci.typedefs ci.macro_defs
               (WithLength (sz, value)) graph.wires in
@@ -911,7 +911,8 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
 
     let find_wire_ctx ct id =
       let binding = Typing.context_lookup ct id in
-      let td = unwrap_or_err (Printf.sprintf "Could not find a binding for %s" id)  e.span binding in
+      let ctx_string = String.concat " , " (Utils.StringMap.fold (fun id _ acc -> id :: acc) ct []) in
+      let td = unwrap_or_err (Printf.sprintf "Could not find a binding for %s in context [%s]" id ctx_string)  e.span binding in
       let w = unwrap_or_err (Printf.sprintf "No wire associated with this binding %s" id)  e.span td.binding_val.w in
       let bit_leni = (Utils.int_log2 (List.length offer_arm_filtered)) in
       if w.size <> bit_leni then

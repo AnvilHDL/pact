@@ -448,7 +448,8 @@ let rec get_head_continuation_pair
   | StyFuture s -> 
     let head_conts = get_head_continuation_pair ~inside_parallel s sp rec_var_context in
     let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = Some (StyFuture s); is_choice = true; is_parallel = inside_parallel; recvar_map = rec_var_context} in
-    possible_delay :: head_conts
+    let head_conts_transform = List.map (fun hc -> {hc with is_choice = true}) head_conts in
+    possible_delay :: head_conts_transform
   | StyXOffer offerings ->
       [{default_head_continuation_pair with head = XOffers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
