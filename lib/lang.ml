@@ -286,6 +286,7 @@ and session_def = {
   name: identifier;
   body: session_type ast_node;
   params: endpoint_def ast_node list; (** list of session parameters *)
+  data_params : param list; (** list of data type parameters *)
 }
 
 (** Unit type. Basically an empty tuple. *)
@@ -618,7 +619,7 @@ type proc_def_body_maybe_extern =
 type proc_def = {
   name: string;
   (* arguments are endpoints passed from outside *)
-  interface : identifier ast_node option; (** optional interface name *)
+  interface : (identifier ast_node) list; (** optional interface name *)
   mutable args: endpoint_def ast_node list; (** endpoints passed from outside *)
   body: proc_def_body_maybe_extern; (** process body *)
   params: param list; (** compile-time parameters *)

@@ -43,9 +43,9 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
     let ctx = Typing.BuildContext.create_empty graph shared_vars_info false in
     let td  = construct_graphIR graph ci ctx e in
     graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
-    if not config.Config.disable_session_checks then begin
+    if not config.Config.disable_session_checks && Option.is_some graph.interface_protocol then begin
         SessionCheck.check_generalized_session config graph module_name;
-        Printf.eprintf "[Info] Session check passed for process %s\n" module_name
+        Printf.eprintf "[Info] Session check passed for process %s thread %d\n" module_name graph.thread_id
     end;
     graph.is_general_recursive <- graph.last_event_id <> td.ld.lt.live.id;
     let g' = GraphOpt.optimize config false ci graph in
@@ -127,19 +127,21 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       List.iter (fun (ep_name, proto) -> Hashtbl.add protocol_map ep_name proto) protocol_list_filtered;
       if (config.verbose) then Printf.eprintf "[Info] Protocol list for process %s: %s\n" module_name (String.concat ", " (List.map(fun f -> Lang.string_of_protocol (snd f).d) protocol_list_filtered));
       
-      let proc_interface_protocol = 
-        match proc.interface with
-        | Some intf ->
-          let session = List.find_opt (fun (s : session_def ast_node) -> s.d.name = intf.d) ci.session_defs
-            |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
-          Some (session.d.body)
-        | None -> None
-      in
+      let proc_interface_protocol = Array.init (List.length body.threads) (fun i ->
+        if i >= List.length proc.interface then None
+        else let intf = List.nth proc.interface i in
+        let session = SessionHelper.lookup_interface ci.session_defs intf.d
+          |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
+        Some session.d.body
+      ) in
+      if (List.length proc.interface > List.length body.threads) then
+        raise (Except.TypeError [Text (Printf.sprintf "Process %s has more interfaces than threads!" proc.name)]);
+
       if body.threads = [] then
         raise (Except.TypeError [Text (Printf.sprintf "Process %s must have at least one thread!" proc.name)]);
 
       let proc_threads = List.mapi (fun i ((e, reset_by) : expr_node * message_specifier option) ->
-        let protocol = if i = 0 then proc_interface_protocol else None in
+        let protocol = proc_interface_protocol.(i) in
         let graph = {
           thread_id = i;
           events = [];
@@ -184,13 +186,12 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
   } in
 
   let add_proc_args (proc : proc_def) =
-    if Option.is_some proc.interface then
-      let intf = Option.get proc.interface in
-      let session = SessionHelper.lookup_interface cunit.session_defs intf.d
-        |> unwrap_or_err ("Undefined interface " ^ intf.d) intf.span in
+    List.iter (fun (itf : identifier ast_node) ->
+      let session = SessionHelper.lookup_interface cunit.session_defs itf.d
+        |> unwrap_or_err ("Undefined interface " ^ itf.d) itf.span in
       let session_params = session.d.params in
-      proc.args <- session_params
-
+      proc.args <- session_params@proc.args
+    ) proc.interface
     in
 
   List.iter add_proc_args cunit.procs;

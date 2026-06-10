@@ -163,7 +163,7 @@ proc_def:
   {
     {
       name = ident;
-      interface = None;
+      interface = [];
       args = [];
       params = [];
       body = let open Lang in Native body
@@ -175,7 +175,7 @@ proc_def:
   {
     {
       name = ident;
-      interface = None;
+      interface = [];
       args = args;
       params = [];
       body = let open Lang in Native body
@@ -187,7 +187,7 @@ proc_def:
   {
     {
       name = ident;
-      interface = None;
+      interface = [];
       args = [];
       params = params;
       body = let open Lang in Native body
@@ -199,7 +199,7 @@ proc_def:
   {
     {
       name = ident;
-      interface = None;
+      interface = [];
       args = args;
       params = params;
       body = let open Lang in Native body
@@ -212,31 +212,31 @@ proc_def:
   {
     {
       name = ident;
-      interface = None;
+      interface = [];
       args = args;
       params = [];
       body = let open Lang in Extern (mod_name, body)
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
-  LEFT_PAREN; intf = node(IDENT); RIGHT_PAREN;
+  LEFT_PAREN; intf = separated_list(COMMA, node(IDENT)); RIGHT_PAREN;
   LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
   {
     {
       name = ident;
-      interface = Some intf;
+      interface = intf;
       args = [];
       params = params;
       body = let open Lang in Native body
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT;
-  LEFT_PAREN; intf = node(IDENT); RIGHT_PAREN;
+  LEFT_PAREN; intf = separated_list(COMMA, node(IDENT)); RIGHT_PAREN;
   LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
   {
     {
       name = ident;
-      interface = Some intf;
+      interface = intf;
       args = [];
       params = [];
       body = let open Lang in Native body
@@ -388,7 +388,11 @@ interface_members_def:
 session_def:
 | KEYWORD_INTERFACE; name = IDENT; LEFT_PAREN; params = proc_def_arg_list; RIGHT_PAREN; EQUAL ; body = node(local_session_type);
   {
-    { name = name; body = body; params = params } : Lang.session_def
+    { name = name; body = body; params = params; data_params = [] } : Lang.session_def
+  }
+| KEYWORD_INTERFACE; data_params = param_list; name = IDENT; LEFT_PAREN; params = proc_def_arg_list; RIGHT_PAREN; EQUAL ; body = node(local_session_type);
+  {
+    { name = name; body = body; params = params; data_params = data_params } : Lang.session_def
   }
 ;
   

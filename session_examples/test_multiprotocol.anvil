@@ -1,0 +1,21 @@
+chan ch{
+    left req : (logic@#1)
+}
+
+interface it1 (ep1 : left ch) = ep1.req;#1
+
+interface it2 (ep2 : left ch) = #1;ep2.req
+
+
+
+proc p1 (it1, it2){
+    loop{
+        let _  = recv ep1.req >>
+        cycle 1
+    }
+    loop{
+        cycle 1 >> 
+        let _  = recv ep2.req >>
+        ()
+    }
+}

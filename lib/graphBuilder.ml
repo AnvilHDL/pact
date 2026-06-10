@@ -570,7 +570,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
 
     (* message *)
     let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
-      |> unwrap_or_err "Invalid message specifier in try receive" e.span in
+      |> unwrap_or_err ("Invalid message specifier in try receive "^(string_of_msg_spec recv_pack.recv_msg_spec)) e.span in
     let (wires', w_recv) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
     graph.wires <- wires';
     let stype = List.hd msg.sig_types in
