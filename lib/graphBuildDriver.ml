@@ -190,7 +190,17 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
       let session = SessionHelper.lookup_interface cunit.session_defs itf.d
         |> unwrap_or_err ("Undefined interface " ^ itf.d) itf.span in
       let session_params = session.d.params in
-      proc.args <- session_params@proc.args
+      let existing_arg_names =
+        List.map (fun (arg : endpoint_def ast_node) -> arg.d.name) proc.args
+        |> Utils.StringSet.of_list
+      in
+      let new_session_params =
+        List.filter
+          (fun (arg : endpoint_def ast_node) ->
+            Utils.StringSet.mem arg.d.name existing_arg_names |> not)
+          session_params
+      in
+      proc.args <- proc.args @ new_session_params
     ) proc.interface
     in
 

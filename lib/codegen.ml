@@ -101,7 +101,7 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
     in
     let param_count = List.fold_left (fun acc p -> match p with Lang.SingleEp _ -> acc + 1 | Lang.IndexedEp (_,idx) -> acc + (Lang.calculate_array_index_concrete_size idx)) 0 spawn.d.params in
     if List.length spawned_proc.messages.args <> param_count then
-      raise (Failure (Printf.sprintf "Invalid number of arguments for spawn of proc %s | Expected %d"  spawned_proc.name param_count));
+      raise (Failure (Printf.sprintf "Invalid number of arguments for spawn of proc %s | Expected %d | Got %d %s"  spawned_proc.name param_count (List.length spawned_proc.messages.args) (String.concat ", " (List.map (fun (ep : endpoint_def) -> ep.name) spawned_proc.messages.args) )));
     let clock_connections = if spawn_is_comb then [] else [".clk_i"; ".rst_ni"] in
     let message_connections =
       List.map2 endpoint_connections spawned_proc.messages.args (Lang.preprocess_ep_spawn_args spawn.d.params)
