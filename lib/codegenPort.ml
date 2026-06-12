@@ -14,7 +14,11 @@ let message_has_ready_port (msg : message_def) : bool = (msg.recv_sync = Dynamic
 
 let message_has_data_port (msg : message_def) (idx : int) : bool = (List.nth msg.sig_types idx).dtype <> unit_dtype
 let gather_ports_from_endpoint (channel_classes : channel_class_def list) (endpoint : endpoint_def) : t list =
-  let cc = Option.get (MessageCollection.lookup_channel_class channel_classes endpoint.channel_class) in
+  let cc = (MessageCollection.lookup_channel_class channel_classes endpoint.channel_class) in
+  let cc = match cc with
+    | Some cc -> cc
+    | None -> raise (Except.CodegenError [Text ("Channel class " ^ endpoint.channel_class ^ " not found for endpoint " ^ endpoint.name)])
+   in
   let gen_endpoint_ports = fun (msg : message_def) ->
     let msg = ParamConcretise.concretise_message cc.params endpoint.channel_params msg in
     let folder_inner = fun fmt msg_dir (n, port_list) (stype : sig_type_chan_local) ->

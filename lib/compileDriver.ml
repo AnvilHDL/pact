@@ -118,8 +118,18 @@ let compile out config =
     let all_collections = Queue.to_seq graph_collection_queue |> List.of_seq in
     let all_event_graphs = List.concat_map (fun collection -> let open EventGraph in collection.event_graphs) all_collections in
     List.iter (fun graphs ->
-      Codegen.generate out config
-       {graphs with EventGraph.external_event_graphs = all_event_graphs}) all_collections
+      try Codegen.generate out config
+       {graphs with EventGraph.external_event_graphs = all_event_graphs}with
+      | Except.CodegenError msg ->
+        (Text "Code generation error:")::msg
+          |> raise_compile_error None
+      | Except.UnknownError msg ->
+        (Text "Unknown error during code generation:")::msg
+          |> raise_compile_error None
+      | Except.TypeError msg ->
+        (Text "Type error during code generation:")::msg
+          |> raise_compile_error None
+          ) all_collections 
   end
 
   )
