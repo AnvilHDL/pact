@@ -386,12 +386,14 @@ let rec strip_parallel_done_markers residual =
   | Some next_residual -> strip_parallel_done_markers next_residual
   | None -> residual
 
-let residual_matches recvar_map lhs rhs =
+let residual_matches recvar_map lhs rhs init_ty =
   match strip_parallel_done_markers lhs, strip_parallel_done_markers rhs with
   | None, None -> true
   | Some lhs_sty, Some rhs_sty ->
       normalize_residual_for_match recvar_map lhs_sty
       = normalize_residual_for_match recvar_map rhs_sty
+  | Some lhs_sty, None when lhs_sty = init_ty  -> true
+  | None, Some rhs_sty when rhs_sty = init_ty -> true
   | _ -> false
 
 let rec get_head_continuation_pair
@@ -475,6 +477,95 @@ let restart_head_continuation_pairs protocol_sty sp =
   get_head_continuation_pair protocol_sty sp []
   |> List.map (fun hc -> {hc with is_choice = true})
 
+
+let add_delay n_opt offset=
+  match n_opt,offset with
+  | Some n, Some o -> Some (n + o)
+  | _ -> None
+
+
+
+let gt n1_opt n2_opt =
+  match n1_opt, n2_opt with
+  | Some n1, Some n2 -> n1 > n2
+  | None , _ -> true
+  | _ , None -> false
+
+let get_max n1_opt n2_opt =
+  match n1_opt, n2_opt with
+  | Some n1, Some n2 -> Some (max n1 n2)
+  |_ -> None
+
+let get_min n1_opt n2_opt =
+  match n1_opt, n2_opt with
+  | Some n1, Some n2 -> Some (min n1 n2)
+  | Some n, None | None, Some n -> Some n
+  | None, None -> None
+
+let lt n1_opt n2_opt =
+  match n1_opt, n2_opt with
+  | Some n1, Some n2 -> n1 < n2
+  | None , _ -> false
+  | _ , None -> true
+
+
+let create_cont del bound cont =
+  match del, bound with
+  | Some d, Some b when d < b -> seq_of_sty_opt (Some (StyAtom (AtomDelay (b - d)))) cont
+  | Some _, None -> cont
+  | None, None -> cont
+  | _ -> raise (Except.TypeError [Text "Invalid delay comparison in continuation creation"])
+
+let choice_of_sty_opt sty_opt cont_opt =
+  match sty_opt, cont_opt with
+  | Some sty, Some cont -> Some (StyChoice (sty, cont))
+  | Some sty, None -> Some sty
+  | None, Some cont -> Some cont
+  | None, None -> None
+
+let extract_delay_continuation n' hc =
+  let rec extract_delay st' acc =
+  match st' with
+  |Some st -> (
+    match st with
+    | StyAtom(AtomDelay n) ->  ((add_delay (Some n) acc),None)
+    | StyAtom(_) ->  (acc, Some st)
+    | StySeq(s1,s2) -> (
+      match extract_delay (Some s1) acc with
+      | (acc', None) -> let del, cont = extract_delay (Some s2) acc' in (del, cont)
+      | (acc', cont) -> (acc', seq_of_sty_opt cont (Some s2))
+    )
+    | StyParallel(s1,s2) -> (
+      let del1, cont1 = extract_delay (Some s1) acc in
+      let del2, cont2 = extract_delay (Some s2) acc in
+      match cont1, cont2 with
+      | None, None -> (get_max del1 del2, None)
+      | Some c1, None -> (add_delay del2 del1, Some c1)
+      | None, Some c2 -> (add_delay del1 del2, Some c2)
+      | Some c1, Some c2 -> (get_max del1 del2, Some (StyParallel(c1, c2)))
+    )
+    | StyChoice(s1,s2) -> (
+      let del1, cont1 = extract_delay (Some s1) acc in
+      let del2, cont2 = extract_delay (Some s2) acc in
+      let max_del = get_min del1 del2 in
+      let cont1' = if gt del1 max_del then create_cont max_del del1 cont1 else cont1 in
+      let cont2' = if gt del2 max_del then create_cont max_del del2 cont2 else cont2 in
+      (max_del, (choice_of_sty_opt cont1' cont2')) 
+    )
+    | StyFuture _ ->
+        (None, st')
+    | StyXOffer _ ->
+        (acc, st')
+    | StyOffer _ ->
+        (acc, st')
+    | StyTrue -> (acc, st')
+    | _ -> raise (Except.TypeError [Text "Unsupported session type for delay extraction"])
+  )
+  | _ -> (acc, None)
+  in
+  extract_delay (hc.cont) (Some n')
+
+    
 let delay_continuation_after_terminal_closure n sp head_conts =
   let rec search seen hcs =
     List.find_map (fun hc ->
@@ -489,7 +580,19 @@ let delay_continuation_after_terminal_closure n sp head_conts =
             hc.visited <- true;
             Some (new_cont, hc.recvar_map)
           end
-          else None
+          else(
+            let delay,cont = extract_delay_continuation m hc in
+            match delay with
+            | Some d when d > n -> 
+                let remaining_delay = StyAtom (AtomDelay (d - n)) in
+                let new_cont = seq_of_sty_opt (Some remaining_delay) cont in
+                hc.visited <- true;
+                Some (new_cont, hc.recvar_map)
+            | None -> 
+                hc.visited <- true;
+                Some (cont, hc.recvar_map)
+            | _ -> None
+          )
       | Terminal terminal_kind ->
           (match hc.cont with
           | None -> None
@@ -640,7 +743,7 @@ let check_generalized_session
                 enqueue_if_needed child_ev
             | Some existing ->
                 let merged_recvars = get_event_recvars child_ev @ recvars in
-                if residual_matches merged_recvars existing residual then begin
+                if residual_matches merged_recvars existing residual protocol_node.d then begin
                   if from_structural then
                     IntHashtbl.replace
                       event_from_structural_propagation child_ev.id true
@@ -823,8 +926,8 @@ let check_generalized_session
                         child_ev found_map new_cont
                   | None ->
                       error_handler g
-                        (Printf.sprintf "Expected Delay at event %d | However found %s"
-                          child_ev.id (string_of_residual current_residual))
+                        (Printf.sprintf "Expected Delay (%d) at event %d | However found %s"
+                          n child_ev.id (string_of_residual current_residual))
                         g.thread_codespan module_name)
 
               | `Root Some (_, branches) ->
@@ -867,7 +970,7 @@ let check_generalized_session
                       let next_a = strip_parallel_done_markers residual_a in
                       let next_b = strip_parallel_done_markers residual_b in
                       let residual_pair =
-                        if residual_matches merged_recvars next_a next_b then
+                        if residual_matches merged_recvars next_a next_b protocol_node.d then
                           Some next_a
                         else
                           let msgs_a = event_session_action_msgs ev_a in
@@ -877,7 +980,7 @@ let check_generalized_session
                             residual_after_msgs recvars_b next_b msgs_a
                           with
                           | Some next_a', Some next_b'
-                            when residual_matches merged_recvars next_a' next_b' ->
+                            when residual_matches merged_recvars next_a' next_b' protocol_node.d ->
                               Some next_a'
                           | _ -> None
                       in
@@ -941,7 +1044,7 @@ let check_generalized_session
                           List.for_all (fun (branch_ev, residual) ->
                             residual_matches
                               (get_event_recvars first_ev @ get_event_recvars branch_ev)
-                              first_residual residual
+                              first_residual residual protocol_node.d
                           ) rest
                         in
                         if branches_match then begin
@@ -951,8 +1054,10 @@ let check_generalized_session
                             child_ev merged_recvars first_residual
                         end
                         else
+                          let branch_residual_str = String.concat "," (List.map(fun (_,res) -> string_of_residual res)rest) in
                           error_handler g
-                            (Printf.sprintf "Mismatched session residuals in branch event %d"
+                            (Printf.sprintf "Mismatched session residuals {%s} in branch event %d"
+                              branch_residual_str
                               child_ev.id)
                             g.thread_codespan module_name
                   end
@@ -987,7 +1092,7 @@ let check_generalized_session
                           List.for_all (fun (join_ev, residual) ->
                             residual_matches
                               (get_event_recvars first_ev @ get_event_recvars join_ev)
-                              first_residual residual
+                              first_residual residual protocol_node.d
                           ) rest
                         in
                         if join_residuals_match then begin
@@ -1068,7 +1173,7 @@ let check_generalized_session
     | Some ev ->
         (
         match ev.session_type with
-        | Some residual ->
+        | Some residual when residual <> protocol_node->
             error_handler g
               (Printf.sprintf "Terminal event %d has non-empty residual %s at end of generalized session type check"
                 ev.id (string_of_protocol residual.d))
