@@ -1,5 +1,14 @@
-pool eventual{
-    ;
-    i1 : F ep.m1; ep.m2,
-    i2 : ep.m1; F ep.m2
+
+chan ch{
+    left req : (logic@#1)
+}
+interface itfc(ep : left ch) = F ep.req; #1
+proc top(itfc){
+    loop{
+        cycle 5 >>
+        let _ = recv ep.req >>
+        cycle 10 >>
+        let _ = recv ep.req >>
+        cycle 1
+    }
 }

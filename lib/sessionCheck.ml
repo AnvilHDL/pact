@@ -523,7 +523,7 @@ let choice_of_sty_opt sty_opt cont_opt =
   | None, Some cont -> Some cont
   | None, None -> None
 
-let extract_delay_continuation n' hc =
+let extract_delay_continuation init n' hc =
   let rec extract_delay st' acc =
   match st' with
   |Some st -> (
@@ -561,12 +561,12 @@ let extract_delay_continuation n' hc =
     | StyTrue -> (acc, st')
     | _ -> raise (Except.TypeError [Text "Unsupported session type for delay extraction"])
   )
-  | _ -> (acc, None)
+  | _ -> extract_delay (Some init) acc
   in
   extract_delay (hc.cont) (Some n')
 
     
-let delay_continuation_after_terminal_closure n sp head_conts =
+let delay_continuation_after_terminal_closure n sp head_conts init =
   let rec search seen hcs =
     List.find_map (fun hc ->
       match hc.head with
@@ -581,7 +581,7 @@ let delay_continuation_after_terminal_closure n sp head_conts =
             Some (new_cont, hc.recvar_map)
           end
           else(
-            let delay,cont = extract_delay_continuation m hc in
+            let delay,cont = extract_delay_continuation init m hc in
             match delay with
             | Some d when d > n -> 
                 let remaining_delay = StyAtom (AtomDelay (d - n)) in
@@ -920,7 +920,7 @@ let check_generalized_session
 
               | `Seq (_, `Cycles n) ->
                   (match delay_continuation_after_terminal_closure
-                      n g.thread_codespan head_conts with
+                      n g.thread_codespan head_conts protocol_node.d with
                   | Some (new_cont, found_map) ->
                       assign_child_residual ~allow_choice:true
                         child_ev found_map new_cont
