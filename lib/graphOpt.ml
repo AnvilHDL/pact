@@ -53,6 +53,7 @@ module CombSimplPass = struct
       match src with
       | `Branch (ev', {branches_val; _}) -> (
         let can_merge =
+          not (event_is_control_boundary ev') &&
           List.for_all (fun e ->
             let e = Dynarray.get event_arr_old @@ find_ufs event_ufs e.id in
             let check_src src =
@@ -227,7 +228,7 @@ module CombSimplPass = struct
         (
           match new_branch_vals with
           | [] -> failwith "Something went wrong!"
-          | [e_root] ->
+          | [e_root] when not (event_is_control_boundary e_root) ->
             (* can merge *)
             union_ufs event_ufs ev.id e_root.id;
             changed := true

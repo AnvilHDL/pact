@@ -475,7 +475,7 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           )
         | `Recurse (source, trig_id) ->
           let cn' = EventStateFormatter.format_current g.thread_id trig_id in
-          let trigger_string = Printf.sprintf "|| %s" cn' in
+          let trigger_string = Printf.sprintf "%s || %s" trigger cn' in
           gen_next source trigger_string
         | `Select (parent_event, msg_group) ->
           let parent_current = EventStateFormatter.format_current g.thread_id parent_event.id in
