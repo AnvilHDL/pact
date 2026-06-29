@@ -12,13 +12,13 @@ pool p2 { // true
 
 pool p3 { // true
     ep_le -- ep_ri : ch;
-    ip31 : #ep.req  + #ep.ack ,
-    ip32 : ^( #ep.req , #ep.ack) 
+    ip31 : (#ep.req  + #ep.ack) ;#1,
+    ip32 : (^( #ep.req , #ep.ack) );#1
 }
 pool p4 { // true
     ep_le -- ep_ri : ch;
-    ip41 : #ep.req  + #ep.ack ,
-    ip42 : &(#ep.req , #ep.ack) 
+    ip41 : ((#ep.req  + #ep.ack) ;#1) ,
+    ip42 : (&(#ep.req , #ep.ack);#1) 
 }
 
 pool p5 { // true
@@ -40,8 +40,8 @@ pool p7 { // true
 }
 pool p8 { // false
     ep_le -- ep_ri : ch;
-    ip81 : #ep.m1 + #ep.m2 ,
-    ip82 : ^( #ep.m1, * : #ep.m2 ) 
+    ip81 : (#ep.m1 + #ep.m2);#1 ,
+    ip82 : ^( #ep.m1, * : #ep.m2 );#1
 }
 pool p9 { // true
     ep_le -- ep_ri : ch;

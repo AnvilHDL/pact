@@ -1,14 +1,11 @@
+interface i1 (ep : left ch) = #ep.m1 ; #ep.m2 ; #1
 
-chan ch{
-    left req : (logic@#1)
-}
-interface itfc(ep : left ch) = F ep.req; #1
-proc top(itfc){
-    loop{
-        cycle 5 >>
-        let _ = recv ep.req >>
-        cycle 10 >>
-        let _ = recv ep.req >>
-        cycle 1
-    }
-}
+interface i2 (ep : right ch) = (#ep.m1 + #ep.m2);#1
+
+interface i3 (ep : left ch) = (#ep.m1 || #ep.m2);#1
+
+interface i4 (ep : right ch) = ^( #ep.m1 , #ep.m2 ) ;#1
+
+interface i5 (ep : left ch) = &( #ep.m1 , #ep.m2 ) ;#1
+
+interface i6 (ep : right ch) = ep.m1 ; #1

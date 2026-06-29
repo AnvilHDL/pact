@@ -68,6 +68,59 @@ if config.verbose then
   ) pool_defs;
   Printf.eprintf "\n"
 
+let generalized_type_v2_debug _out config =
+  let toplevel_filename = List.hd config.Config.input_filenames in
+  let cunits = ref [] in
+  (
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    with
+      | Except.TypeError msg ->
+        (Except.Text "Type error:")::msg
+          |> raise_compile_error None
+  );
+  let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
+  let open Lang in
+  if config.verbose then Printf.eprintf "\nGeneralized Type v2:\n\n";
+  if config.verbose then
+    List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
+      let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
+      Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol preprocess);
+    ) session_type_defs;
+
+  if config.verbose then Printf.eprintf "\nGenerating Generalized Types (v2) as DOT files...\n\n";
+  List.iter(
+    fun (sdef :Lang.session_def Lang.ast_node) ->
+    try
+      let gen_type = SessionBuildAutomaton2.build_automaton None sdef.d.body.d sdef.d.body.span in
+      let out_channel = Printf.sprintf "generalizedv2_type_%s.dot" sdef.d.name in
+      let out = open_out out_channel in
+      SessionAutomaton2.print_automaton_dot gen_type out;
+      close_out out
+    with
+    | Except.TypeError msg ->
+      let err_msg = List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; " in
+      Printf.eprintf "Error generating generalized type (v2) for %s: %s\n" sdef.d.name err_msg
+    | Failure msg ->
+      Printf.eprintf "Error generating generalized type (v2) for %s: %s\n" sdef.d.name msg
+  ) session_type_defs;
+
+  let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
+  if config.verbose then Printf.eprintf "\nGeneralized Type v2 Pool Compatiblity Checks:\n\n";
+  List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
+    if config.verbose then
+      Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
+    let session_ids = SessionHelper.preprocess_pool_for_compatibility
+        pool session_type_defs in
+    let compat, err = try SessionCompatiblity2.check_compatibility_multiparty session_ids pool.d.pool_id config.verbose
+      with
+      | Except.TypeError msg ->
+        (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
+      | Failure msg -> (false, msg)
+    in
+    Printf.eprintf "Generalized Type v2 Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
+  ) pool_defs;
+  Printf.eprintf "\n"
+
 let profile_compatibility_checks _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
@@ -195,4 +248,5 @@ match config.debug_choice with
 | 0 -> generalized_type_debug out config
 | 1 -> profile_compatibility_checks out config
 | 2 -> generalized_type_debug out config
+| 3 -> generalized_type_v2_debug out config
 | _ -> raise (Failure "Unknown debug choice")
