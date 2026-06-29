@@ -37,3 +37,10 @@ pool n6 { // false
     in62 : #ep.m1;#ep.m3,
     in63 : #ep.m2
 }
+
+
+pool n7 { // false
+    ep_le -- ep_ri : ch;
+    in71 : ^(#ep.m1, #ep.m2) ,
+    in72 : #ep.m1;#ep.m2
+}

@@ -100,11 +100,7 @@ pool p17 { // true
     ip171 : &(ep.m1,ep.m2),
     ip172 : ep.m1
 }
-pool p18 { // false
-    ep_le -- ep_ri : ch;
-    in101 : ^(#ep.m1, #ep.m2) ,
-    in182 : #ep.m1;#ep.m2
-}
+
 pool p19 { // true
     ep_le -- ep_ri : ch;
     ip191 : &(ep.m1, ep.m2,*);#1,
@@ -112,8 +108,8 @@ pool p19 { // true
 }
 pool p20{
     ep_le -- ep_ri : ch;
-    in201 : ^(#ep.m1, #ep.m2),
-    in202 : ^(#ep.m1, * ) || ^( #ep.m2, * )
+    in201 : ^(#ep.m1, #ep.m2);#1,
+    in202 : (^(#ep.m1, * ) || ^(#ep.m2, * )) ; #1
 } 
 pool p21 {
     ep_le -- ep_ri : ch;

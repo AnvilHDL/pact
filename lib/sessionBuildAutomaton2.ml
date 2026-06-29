@@ -48,11 +48,10 @@ let continuation_or_true (offering : offering_session_type) =
   | Some cont -> cont
   | None -> StyTrue
 
-let wildcard_continuation offerings =
+let wildcard_continuation_opt offerings =
   offerings
   |> List.find_opt (fun off -> trigger_is_wildcard off.trigger)
   |> Option.map continuation_or_true
-  |> Option.value ~default:StyTrue
 
 let parallel_of_list = function
   | [] -> StyTrue
@@ -66,6 +65,21 @@ let powerset xs =
         tail @ List.map (fun ys -> x :: ys) tail
   in
   aux xs
+
+let xoffer_else_guard ?(require_clock = false) branch_groups head_set =
+  (* Else resolves only after branch heads are absent now and later this cycle. *)
+  {
+    any_guard with
+    missing_now_groups = branch_groups;
+    future_disjoint = head_set;
+    require_clock;
+    forbid_clock = not require_clock;
+  }
+
+let add_blocking_retry auto current branch_groups head_set =
+  (* Missing wildcard on blocking offers means wait one clock and retry. *)
+  TypeAutomaton.add_transition auto current current Clock
+    (xoffer_else_guard ~require_clock:true branch_groups head_set)
 
 let infer_fair_choice left right =
   (* The parser has only StyChoice, so infer the fair-choice cases v3 recognizes. *)
@@ -202,11 +216,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
         if action_is_blocking act then
           (* Blocking messages may wait for a clock only while the peer is absent. *)
           TypeAutomaton.add_transition auto current current Clock
-            {
-              any_guard with
-              missing_now_groups = [ msg_set ];
-              require_clock = true;
-            };
+            (xoffer_else_guard ~require_clock:true [ msg_set ] msg_set);
         [ next ]
     | StyAtom (AtomConjunction acts) ->
         mark_nonfinal ();
@@ -224,11 +234,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
         if all_blocking then
           (* Blocking conjunctions wait as a unit until the whole group is ready. *)
           TypeAutomaton.add_transition auto current current Clock
-            {
-              any_guard with
-              missing_now_groups = [ msg_set ];
-              require_clock = true;
-            };
+            (xoffer_else_guard ~require_clock:true [ msg_set ] msg_set);
         [ next ]
     | StyAtom (AtomDelay n) ->
         mark_nonfinal ();
@@ -340,6 +346,11 @@ let rec build_automaton (name : identifier option) (st : session_type)
         (fun acc (_, group) -> MsgSet.union acc group)
         MsgSet.empty msg_branches
     in
+    let all_blocking =
+      msg_branches <> []
+      && List.for_all (fun (off, _) -> trigger_is_blocking off.trigger) msg_branches
+    in
+    let branch_groups = List.map snd msg_branches in
     let finals = ref [] in
     List.iter
       (fun (off, group) ->
@@ -355,23 +366,21 @@ let rec build_automaton (name : identifier option) (st : session_type)
       msg_branches;
     if not (MsgSet.is_empty head_set) then
       (* If any branch head may still arrive this cycle, xoffer keeps waiting. *)
-      TypeAutomaton.add_transition auto current current Epsilon
+      (* TypeAutomaton.add_transition auto current current Epsilon
         {
           any_guard with
           future_intersects = head_set;
           forbid_clock = true;
-        };
-    let else_ty = wildcard_continuation offerings in
-    let else_target = TypeAutomaton.new_state auto false in
-    TypeAutomaton.add_transition auto current else_target Epsilon
-      {
-        (* Else is available only when no branch is immediate or future-possible. *)
-        any_guard with
-        missing_now_groups = List.map snd msg_branches;
-        future_disjoint = head_set;
-        forbid_clock = true;
-      };
-    finals := build else_ty else_target rec_env let_env @ !finals;
+        }; *)
+    (match wildcard_continuation_opt offerings with
+    | Some else_ty ->
+        let else_target = TypeAutomaton.new_state auto false in
+        TypeAutomaton.add_transition auto current else_target Epsilon
+          (xoffer_else_guard branch_groups head_set);
+        finals := build else_ty else_target rec_env let_env @ !finals
+    | None ->
+        if all_blocking && not (MsgSet.is_empty head_set) then
+          add_blocking_retry auto current branch_groups head_set);
     !finals
 
   and build_offer offerings current rec_env let_env =
@@ -389,6 +398,11 @@ let rec build_automaton (name : identifier option) (st : session_type)
         (fun acc (_, group) -> MsgSet.union acc group)
         MsgSet.empty msg_branches
     in
+    let all_blocking =
+      msg_branches <> []
+      && List.for_all (fun (off, _) -> trigger_is_blocking off.trigger) msg_branches
+    in
+    let branch_groups = List.map snd msg_branches in
     let finals = ref [] in
     let branch_subsets =
       powerset msg_branches |> List.filter (fun subset -> subset <> [])
@@ -436,16 +450,15 @@ let rec build_automaton (name : identifier option) (st : session_type)
           future_intersects = head_set;
           forbid_clock = true;
         };
-    let else_ty = wildcard_continuation offerings in
-    let else_target = TypeAutomaton.new_state auto false in
-    TypeAutomaton.add_transition auto current else_target Epsilon
-      {
-        any_guard with
-        missing_now_groups = List.map snd msg_branches;
-        future_disjoint = head_set;
-        forbid_clock = true;
-      };
-    finals := build else_ty else_target rec_env let_env @ !finals;
+    (match wildcard_continuation_opt offerings with
+    | Some else_ty ->
+        let else_target = TypeAutomaton.new_state auto false in
+        TypeAutomaton.add_transition auto current else_target Epsilon
+          (xoffer_else_guard branch_groups head_set);
+        finals := build else_ty else_target rec_env let_env @ !finals
+    | None ->
+        if all_blocking && not (MsgSet.is_empty head_set) then
+          add_blocking_retry auto current branch_groups head_set);
     !finals
   in
   ignore (build st auto.start_state [] [] : int list);

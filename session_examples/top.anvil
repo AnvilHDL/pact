@@ -9,3 +9,27 @@ interface i4 (ep : right ch) = ^( #ep.m1 , #ep.m2 ) ;#1
 interface i5 (ep : left ch) = &( #ep.m1 , #ep.m2 ) ;#1
 
 interface i6 (ep : right ch) = ep.m1 ; #1
+
+
+
+
+pool p1 { // true
+    ep_le -- ep_ri : ch;
+    in1 : ^(#ep.m1, #ep.m2);#1 ,
+    in2 : ^(#ep.m1, *);#1 ,
+    in3 : #ep.m3;^(#ep.m2,*);#1 ,
+    in4 : #ep.m3;#1
+}
+
+
+pool p16{
+    ep_le -- ep_ri : ch;
+    ip161 : ep.m1;^(ep.m2,ep.m3);#1,
+    ip162 : ^(ep.m1,*);#2,
+    ip163 : ^(ep.m2,*);#3,
+    ip164 : ^(ep.m3,*);#4
+
+}
+
+
+interface i1 (ep : left ch) = ^(ep.m1, ep.m2);#1

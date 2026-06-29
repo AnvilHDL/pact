@@ -142,6 +142,11 @@ let collect_dead_ends_paths_indexed auto outgoing_index dead_ends =
               current := t.to_state)
             (build_path dead_end);
           Printf.bprintf buffer "  State %d: DEAD END\n" dead_end;
+          let dead_state = Hashtbl.find auto.states dead_end in
+          (match dead_state.debug_info with
+          | Some info ->
+              Printf.bprintf buffer "  Dead-end diagnostics:\n%s\n" info
+          | None -> ());
           Buffer.contents buffer
         else
           Printf.sprintf "Dead-end state %d is not reachable from start state %d"

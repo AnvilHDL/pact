@@ -79,7 +79,9 @@ type env = {
 
 let empty_env = { imm = MsgSet.empty; future = MsgSet.empty; clock = false }
 
-let clock_env = { empty_env with clock = true }
+let clock_guard_env env =
+  (* Clock actions still inspect the resolved message/future side conditions. *)
+  { env with clock = true }
 
 (* A transition is enabled exactly when its symbolic guard matches the local view. *)
 let guard_satisfied env g =
@@ -129,6 +131,7 @@ type state = {
   mutable adversary : bool;
   mutable head : MsgSet.t;
   mutable maybe_ready : MsgSet.t;
+  mutable debug_info : string option;
 }
 
 type transition = {
@@ -137,6 +140,12 @@ type transition = {
   action : action;
   guard : guard;
   mutable in_winning : bool;
+}
+
+type message_choice = {
+  mc_to_state : int;
+  mc_actions : MsgSet.t;
+  mc_changed : bool;
 }
 
 type transition_outgoing_index = (int, transition list) Hashtbl.t
@@ -201,6 +210,7 @@ module TypeAutomaton = struct
         adversary = false;
         head = MsgSet.empty;
         maybe_ready = MsgSet.empty;
+        debug_info = None;
       };
     {
       name = "";
@@ -224,6 +234,7 @@ module TypeAutomaton = struct
         adversary = false;
         head = MsgSet.empty;
         maybe_ready = MsgSet.empty;
+        debug_info = None;
       };
     id
 
@@ -318,7 +329,8 @@ let import_automaton_into ~dst ~src ~at_start =
       dst_st.is_fair <- src_st.is_fair;
       dst_st.adversary <- src_st.adversary;
       dst_st.head <- src_st.head;
-      dst_st.maybe_ready <- src_st.maybe_ready)
+      dst_st.maybe_ready <- src_st.maybe_ready;
+      dst_st.debug_info <- src_st.debug_info)
     src.states;
   List.iter
     (fun t ->
@@ -436,7 +448,16 @@ let closed_product ?progress_ids automata sync_messages =
         (Hashtbl.find prod.states prod_state).accepting <- true;
         match progress_ids with
         | Some ids -> add_progress_transition prod prod_state prod.start_state ids
-        | None -> ())
+        | None ->
+            if
+              not
+                (List.exists
+                   (fun t -> t.from_state = prod_state)
+                   prod.transitions)
+            then
+              prod_state_info.debug_info <-
+                Some
+                  "All components are accepting, but no product progress transition was configured.")
       else (
         Array.iteri
           (fun i st_id ->
@@ -485,31 +506,31 @@ let closed_product ?progress_ids automata sync_messages =
         let env_choices =
           Array.mapi
             (fun i st_id ->
-              let st = Hashtbl.find automata.(i).states st_id in
               let outs = get_outgoing_from_index outgoing.(i) st_id in
-              let enabled =
-                List.filter
-                  (fun t ->
-                    match t.action with
-                    | Messages _ | Epsilon ->
-                        (not (guard_is_any t.guard))
-                        && guard_satisfied local_envs.(i) t.guard
-                    | _ -> false)
-                  outs
+              let passive =
+                {
+                  mc_to_state = st_id;
+                  mc_actions = MsgSet.empty;
+                  mc_changed = false;
+                }
               in
               let transition_choices =
-                List.map
-                  (fun t ->
-                    ( t.to_state,
-                      action_messages t.action,
-                      t.to_state <> st_id || t.action <> Epsilon ))
-                  enabled
+                outs
+                |> List.filter_map (fun t ->
+                       match t.action with
+                       | Messages _ | Epsilon
+                         when (not (guard_is_any t.guard))
+                              && guard_satisfied local_envs.(i) t.guard ->
+                           Some
+                             {
+                               mc_to_state = t.to_state;
+                               mc_actions = action_messages t.action;
+                               mc_changed =
+                                 t.to_state <> st_id || t.action <> Epsilon;
+                             }
+                       | _ -> None)
               in
-              if transition_choices = [] then
-                if MsgSet.disjoint st.head local_envs.(i).imm then
-                  [ (st_id, MsgSet.empty, false) ]
-                else []
-              else transition_choices)
+              passive :: transition_choices)
             current_arr
           |> Array.to_list
         in
@@ -517,14 +538,14 @@ let closed_product ?progress_ids automata sync_messages =
           env_choices
           |> cartesian_product
           |> List.iter (fun combo ->
-                 let next = List.map (fun (st, _, _) -> st) combo in
+                 let next = List.map (fun choice -> choice.mc_to_state) combo in
                  let component_msgs =
-                   combo |> List.map (fun (_, msgs, _) -> msgs) |> Array.of_list
+                   combo |> List.map (fun choice -> choice.mc_actions) |> Array.of_list
                  in
                  let combined =
                    Array.fold_left MsgSet.union MsgSet.empty component_msgs
                  in
-                 let changed = List.exists (fun (_, _, c) -> c) combo in
+                 let changed = List.exists (fun choice -> choice.mc_changed) combo in
                  if
                    (changed || not (MsgSet.is_empty combined))
                    && (MsgSet.is_empty combined || sync_ok component_msgs combined)
@@ -536,35 +557,26 @@ let closed_product ?progress_ids automata sync_messages =
 
         let clock_choices =
           let clock_envs =
-            Array.map
-              (fun env -> { env with clock = true; future = MsgSet.empty })
-              local_envs
+            Array.map clock_guard_env local_envs
           in
           Array.mapi
             (fun i st_id ->
-              let st = Hashtbl.find automata.(i).states st_id in
               let outs = get_outgoing_from_index outgoing.(i) st_id in
-              let clocks =
-                outs
-                |> List.filter (fun t ->
-                       match t.action with
-                       | Clock -> guard_satisfied clock_envs.(i) t.guard
-                       | _ -> false)
-                |> List.map (fun t -> (t.to_state, true))
-              in
-              if clocks <> [] then clocks
-              else if st.accepting then [ (st_id, false) ]
-              else [])
+              (* A product clock round exists only when every component clocks. *)
+              outs
+              |> List.filter (fun t ->
+                     match t.action with
+                     | Clock -> guard_satisfied clock_envs.(i) t.guard
+                     | _ -> false)
+              |> List.map (fun t -> t.to_state))
             current_arr
           |> Array.to_list
         in
         if List.for_all (fun choices -> choices <> []) clock_choices then
           clock_choices
           |> cartesian_product
-          |> List.iter (fun combo ->
-                 let next = List.map fst combo in
-                 let emits_clock = List.exists snd combo in
-                 if emits_clock then add_product_transition current next Clock any_guard)))
+          |> List.iter (fun next ->
+                 add_product_transition current next Clock any_guard)))
   done;
   recompute_state_summaries prod;
   prod
@@ -680,19 +692,14 @@ let async_product automata =
       let clock_choices =
         Array.mapi
           (fun i st_id ->
-            let st = Hashtbl.find automata.(i).states st_id in
             let outs = get_outgoing_from_index outgoing.(i) st_id in
-            let clocks =
-              outs
-              |> List.filter (fun t ->
-                     match t.action with
-                     | Clock -> true
-                     | _ -> false)
-              |> List.map (fun t -> (t.to_state, true, t.guard))
-            in
-            if clocks <> [] then clocks
-            else if st.accepting then [ (st_id, false, any_guard) ]
-            else [])
+            (* A product clock round exists only when every component clocks. *)
+            outs
+            |> List.filter (fun t ->
+                   match t.action with
+                   | Clock -> true
+                   | _ -> false)
+            |> List.map (fun t -> (t.to_state, t.guard)))
           current_arr
         |> Array.to_list
       in
@@ -700,16 +707,9 @@ let async_product automata =
         clock_choices
         |> cartesian_product
         |> List.iter (fun combo ->
-               let next = List.map (fun (state, _, _) -> state) combo in
-               let selected =
-                 List.filter (fun (_, emits, _) -> emits) combo
-               in
-               if selected <> [] then
-                 let guard =
-                   merge_guards
-                     (List.map (fun (_, _, guard) -> guard) selected)
-                 in
-                 add_product_transition current next Clock guard))
+               let next = List.map fst combo in
+               let guard = merge_guards (List.map snd combo) in
+               add_product_transition current next Clock guard))
   done;
   recompute_state_summaries prod;
   prod
