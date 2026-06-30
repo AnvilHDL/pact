@@ -1,0 +1,16 @@
+chan ch{
+    left req : (logic@#1),
+    right ack : (logic@#1)
+}
+
+interface left_if (ep : left ch) = ep.req ; ep.ack ; #1
+interface relay_if (ep_ab : right ch, ep_bc : left ch) = ep_ab.req ; ep_bc.req ; ep_bc.ack ; ep_ab.ack ; #1
+interface right_if (ep : right ch) = ep.req ; ep.ack ; #1
+
+pool open_phase_channel_params {
+    ep_ab_l -- ep_ab_r : ch,
+    ep_bc_l -- ep_bc_r : ch;
+    a : left_if(ep_ab_l),
+    b : relay_if(ep_ab_r, ep_bc_l),
+    c : right_if(ep_bc_r)
+}

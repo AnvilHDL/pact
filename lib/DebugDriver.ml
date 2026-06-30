@@ -121,6 +121,53 @@ let generalized_type_v2_debug _out config =
   ) pool_defs;
   Printf.eprintf "\n"
 
+let open_compatibility_v2_debug _out config =
+  let toplevel_filename = List.hd config.Config.input_filenames in
+  let cunits = ref [] in
+  (
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    with
+      | Except.TypeError msg ->
+        (Except.Text "Type error:")::msg
+          |> raise_compile_error None
+  );
+  let session_type_defs =
+    List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs)
+      !cunits
+  in
+  let channel_classes =
+    List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes)
+      !cunits
+  in
+  let pool_defs =
+    List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits
+  in
+  Printf.eprintf "\nOpen Compatibility:\n\n";
+  List.iter
+    (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
+      let compat, err =
+        try
+          let context, compat, err =
+            SessionOpenCompatiblity2.check_open_compatibility_multiparty
+              channel_classes session_type_defs pool config.verbose
+          in
+          SessionOpenCompatiblity2.print_context stderr context;
+          (compat, err)
+        with
+        | Except.TypeError msg ->
+            ( false,
+              List.filter_map
+                (fun x -> match x with Except.Text msg -> Some msg | _ -> None)
+                msg
+              |> String.concat "; " )
+        | Failure msg -> (false, msg)
+      in
+      Printf.eprintf
+        "[Open] Pool %s Compatibility: %b | err_msg = %s \n"
+        pool.d.pool_id compat err)
+    pool_defs;
+  Printf.eprintf "\n"
+
 let profile_compatibility_checks _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
@@ -249,4 +296,5 @@ match config.debug_choice with
 | 1 -> profile_compatibility_checks out config
 | 2 -> generalized_type_debug out config
 | 3 -> generalized_type_v2_debug out config
+| 4 -> open_compatibility_v2_debug out config
 | _ -> raise (Failure "Unknown debug choice")

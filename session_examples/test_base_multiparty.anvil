@@ -4,9 +4,9 @@ chan ch{
 }
 
 
-interface foo1_intfc (ep12 : left ch, ep13 : right ch) =  ep12.req ; ep13.req ; ep13.ack ; ep12.ack ; #1;
-interface foo2_intfc (ep12 : right ch, ep23 : left ch) =  ep12.req ; ep23.req ; ep23.ack ; ep12.ack ; #1; 
-interface foo3_intfc (ep13 : left ch, ep23 :right ch)  = ep13.req ; ep23.req ; ep23.ack ; ep13.ack ; #1;
+interface foo1_intfc (ep12 : left ch, ep13 : right ch) =  ep12.req ; ep13.req ; ep13.ack ; ep12.ack ; #1
+interface foo2_intfc (ep12 : right ch, ep23 : left ch) =  ep12.req ; ep23.req ; ep23.ack ; ep12.ack ; #1
+interface foo3_intfc (ep13 : left ch, ep23 :right ch)  = ep13.req ; ep23.req ; ep23.ack ; ep13.ack ; #1
 
 
 
@@ -62,8 +62,8 @@ pool base_multiparty_pool {
     ep_12_le -- ep_12_ri : ch,
     ep_13_le -- ep_13_ri : ch,
     ep_23_le -- ep_23_ri : ch;
-    i1 : foo1_intfc(ep_12_le, ep_13_ri);
-    i2 : foo2_intfc(ep_12_ri, ep_23_le);
+    i1 : foo1_intfc(ep_12_le, ep_13_ri),
+    i2 : foo2_intfc(ep_12_ri, ep_23_le),
     i3 : foo3_intfc(ep_13_le, ep_23_ri)
 }
 
