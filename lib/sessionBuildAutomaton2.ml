@@ -78,8 +78,11 @@ let xoffer_else_guard ?(require_clock = false) branch_groups head_set =
 
 let add_blocking_retry auto current branch_groups head_set =
   (* Missing wildcard on blocking offers means wait one clock and retry. *)
-  TypeAutomaton.add_transition auto current current Clock
-    (xoffer_else_guard ~require_clock:true branch_groups head_set)
+  let next_i = TypeAutomaton.new_state auto false in
+  TypeAutomaton.add_transition auto current next_i Epsilon
+    (xoffer_else_guard ~require_clock:false branch_groups head_set);
+  TypeAutomaton.add_transition auto next_i current Clock
+  { any_guard with require_clock = true; forbid_clock = false }
 
 let infer_fair_choice left right =
   (* The parser has only StyChoice, so infer the fair-choice cases v3 recognizes. *)
@@ -213,10 +216,14 @@ let rec build_automaton (name : identifier option) (st : session_type)
         let next = TypeAutomaton.new_state auto true in
         TypeAutomaton.add_transition auto current next (Messages msg_set)
           { any_guard with require_now = msg_set; forbid_clock = true };
-        if action_is_blocking act then
+        if action_is_blocking act then begin
           (* Blocking messages may wait for a clock only while the peer is absent. *)
-          TypeAutomaton.add_transition auto current current Clock
-            (xoffer_else_guard ~require_clock:true [ msg_set ] msg_set);
+          let next_i = TypeAutomaton.new_state auto false in
+          TypeAutomaton.add_transition auto current next_i Epsilon
+            (xoffer_else_guard ~require_clock:false [ msg_set ] msg_set);
+          TypeAutomaton.add_transition auto next_i current Clock
+            { any_guard with require_clock = true; forbid_clock = false }
+        end;
         [ next ]
     | StyAtom (AtomConjunction acts) ->
         mark_nonfinal ();
@@ -231,10 +238,14 @@ let rec build_automaton (name : identifier option) (st : session_type)
         let next = TypeAutomaton.new_state auto true in
         TypeAutomaton.add_transition auto current next (Messages msg_set)
           { any_guard with require_now = msg_set; forbid_clock = true };
-        if all_blocking then
+        if all_blocking then begin
           (* Blocking conjunctions wait as a unit until the whole group is ready. *)
-          TypeAutomaton.add_transition auto current current Clock
-            (xoffer_else_guard ~require_clock:true [ msg_set ] msg_set);
+          let next_i = TypeAutomaton.new_state auto false in
+          TypeAutomaton.add_transition auto current next_i Epsilon
+            (xoffer_else_guard ~require_clock:false [ msg_set ] msg_set);
+          TypeAutomaton.add_transition auto next_i current Clock
+            { any_guard with require_clock = true; forbid_clock = false }
+        end;
         [ next ]
     | StyAtom (AtomDelay n) ->
         mark_nonfinal ();
@@ -442,14 +453,14 @@ let rec build_automaton (name : identifier option) (st : session_type)
           };
         finals := build target_ty target rec_env let_env @ !finals)
       branch_subsets;
-    if not (MsgSet.is_empty head_set) then
+    (* if not (MsgSet.is_empty head_set) then
       TypeAutomaton.add_transition auto current current Epsilon
         {
           any_guard with
           missing_now_groups = List.map snd msg_branches;
           future_intersects = head_set;
           forbid_clock = true;
-        };
+        }; *)
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in

@@ -42,13 +42,12 @@ let string_of_action = function
 
 (* Symbolic one-step environment constraints for a transition. *)
 type guard = {
-  require_now : MsgSet.t;
-  forbid_now : MsgSet.t;
-  missing_now_groups : MsgSet.t list;
-  require_clock : bool;
-  forbid_clock : bool;
-  future_disjoint : MsgSet.t;
-  future_intersects : MsgSet.t;
+  require_now : MsgSet.t; (* require_now ⊆ Imm(E) *)
+  forbid_now : MsgSet.t; (* forbid_now ∩ Imm(E) = ∅ *)
+  missing_now_groups : MsgSet.t list; (* ∀G. G ∈ missing_now_groups ⇒ G ⊄ Imm(E) *)
+  require_clock : bool; (* require_clock ⇒ # ∈ Imm(E) *)
+  forbid_clock : bool; (* forbid_clock ⇒ # ∉ Imm(E) *)
+  future_disjoint : MsgSet.t; (* future_disjoint ∩ F = ∅ *)
 }
 
 let any_guard = {
@@ -58,7 +57,6 @@ let any_guard = {
   require_clock = false;
   forbid_clock = false;
   future_disjoint = MsgSet.empty;
-  future_intersects = MsgSet.empty;
 }
 
 let guard_is_any g =
@@ -68,7 +66,6 @@ let guard_is_any g =
   && not g.require_clock
   && not g.forbid_clock
   && MsgSet.is_empty g.future_disjoint
-  && MsgSet.is_empty g.future_intersects
 
 (* Local view of what is immediate now and possible later in this cycle. *)
 type env = {
@@ -92,8 +89,6 @@ let guard_satisfied env g =
   && ((not g.require_clock) || env.clock)
   && ((not g.forbid_clock) || not env.clock)
   && MsgSet.disjoint g.future_disjoint env.future
-  && (MsgSet.is_empty g.future_intersects
-      || not (MsgSet.disjoint g.future_intersects env.future))
 
 let string_of_guard g =
   let parts = ref [] in
@@ -117,7 +112,6 @@ let string_of_guard g =
   if g.require_clock then add "# in Imm(E)";
   if g.forbid_clock then add "# notin Imm(E)";
   add_msg (fun s -> s ^ " cap F = empty") g.future_disjoint;
-  add_msg (fun s -> s ^ " cap F != empty") g.future_intersects;
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat " && " xs
@@ -139,6 +133,7 @@ type transition = {
   to_state : int;
   action : action;
   guard : guard;
+  mutable maybe_offers : MsgSet.t;
   mutable in_winning : bool;
 }
 
@@ -248,7 +243,16 @@ module TypeAutomaton = struct
     (Hashtbl.find auto.states state_id).adversary <- true
 
   let add_transition auto from_state to_state action guard =
-    let trans = { from_state; to_state; action; guard; in_winning = false } in
+    let trans =
+      {
+        from_state;
+        to_state;
+        action;
+        guard;
+        maybe_offers = MsgSet.empty;
+        in_winning = false;
+      }
+    in
     if not (List.exists (( = ) trans) auto.transitions) then
       auto.transitions <- trans :: auto.transitions
 
@@ -287,13 +291,16 @@ let recompute_state_summaries auto =
             from_st.maybe_ready <- next_ready;
             changed := true)))
       auto.transitions
-  done
+  done;
+  List.iter
+    (fun t ->
+      let to_st = Hashtbl.find auto.states t.to_state in
+      t.maybe_offers <- to_st.maybe_ready)
+    auto.transitions
 
 let messages_of_transition t =
   MsgSet.union (action_messages t.action)
-    (MsgSet.union t.guard.require_now
-       (MsgSet.union t.guard.forbid_now
-          (MsgSet.union t.guard.future_disjoint t.guard.future_intersects)))
+    (MsgSet.union t.guard.require_now t.guard.forbid_now)
   |> fun acc ->
   List.fold_left MsgSet.union acc t.guard.missing_now_groups
 
@@ -365,8 +372,6 @@ let merge_guards guards =
         require_clock = acc.require_clock || guard.require_clock;
         forbid_clock = acc.forbid_clock || guard.forbid_clock;
         future_disjoint = MsgSet.union acc.future_disjoint guard.future_disjoint;
-        future_intersects =
-          MsgSet.union acc.future_intersects guard.future_intersects;
       })
     any_guard guards
 
@@ -778,7 +783,6 @@ let html_of_guard g =
   if g.require_clock then add "# &#8712; Imm(E)";
   if g.forbid_clock then add "# &#8713; Imm(E)";
   add_msg (fun s -> s ^ " &#8745; F = &#8709;") g.future_disjoint;
-  add_msg (fun s -> s ^ " &#8745; F &#8800; &#8709;") g.future_intersects;
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat "<BR/>" xs

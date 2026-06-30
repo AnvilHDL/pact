@@ -32,4 +32,6 @@ pool p16{
 }
 
 
-interface i1 (ep : left ch) = ^(ep.m1, ep.m2);#1
+interface i7 (ep : left ch) = ^(ep.m1, ep.m2);#1
+
+interface i8 (ep : right ch) = ep.m1;ep.m2;#1
