@@ -14,6 +14,13 @@ interface i7 (ep : left ch) = ^(ep.m1, ep.m2);#1
 
 interface i8 (ep : right ch) = ep.m1;ep.m2;#1
 
+pool p0 {
+    ep_le -- ep_ri : ch;
+    ip01 : ep.m1 ; ep.m2 ; #1,
+    ip02 : ep.m1 ; #1,
+    ip03 : ep.m3 ; #1,
+    ip04 : ep.m2;ep.m3;#1
+}
 
 pool p1 { // true
     ep_le -- ep_ri : ch;
@@ -24,15 +31,23 @@ pool p1 { // true
 }
 
 
-pool p17 { 
+pool p2 { 
     ep_le -- ep_ri : ch;
-    ip171 : ep.m1;ep.m2;#1,
-    ip172 : #1;#ep.m1;#1,
-    ip173 : ^(#ep.m2,*);#1
+    ip21 : ep.m1;ep.m2;#1,
+    ip22 : #1;#ep.m1;#1,
+    ip23 : ^(#ep.m2,*);#1
 }
 
-pool p18 { 
+pool p3 { 
     ep_le -- ep_ri : ch;
-    ip181 : ep.m1;#1,
-    ip182 : #1
+    ip31 : ep.m1;#1,
+    ip32 : #1
 }
+
+pool p1 { // true
+    ep_le -- ep_ri : ch;
+    ip11 : #ep.m1 ; #1,
+    ip12 : #ep.m3 ; #1
+}
+
+interface i1 (ep : left ch) = (#ep.m1 || #ep.m3);#1

@@ -141,8 +141,11 @@ type transition = {
   to_state : int;
   action : action;
   guard : guard;
+  boundary_now : MsgSet.t;
+  boundary_future : MsgSet.t;
   mutable maybe_offers : MsgSet.t;
   mutable in_winning : bool;
+  transition_debug_info : string option;
 }
 
 type message_choice = {
@@ -254,19 +257,27 @@ module TypeAutomaton = struct
   let make_adversary auto state_id =
     (Hashtbl.find auto.states state_id).adversary <- true
 
-  let add_transition auto from_state to_state action guard =
+  let add_transition_full ?(boundary_now = MsgSet.empty)
+      ?(boundary_future = MsgSet.empty) ?transition_debug_info auto from_state
+      to_state action guard =
     let trans =
       {
         from_state;
         to_state;
         action;
         guard;
+        boundary_now;
+        boundary_future;
         maybe_offers = MsgSet.empty;
         in_winning = false;
+        transition_debug_info;
       }
     in
     if not (List.exists (( = ) trans) auto.transitions) then
       auto.transitions <- trans :: auto.transitions
+
+  let add_transition auto from_state to_state action guard =
+    add_transition_full auto from_state to_state action guard
 
   let accepting_states auto =
     Hashtbl.fold
@@ -433,7 +444,10 @@ let import_automaton_into ~dst ~src ~at_start =
     src.states;
   List.iter
     (fun t ->
-      TypeAutomaton.add_transition dst
+      TypeAutomaton.add_transition_full
+        ~boundary_now:t.boundary_now
+        ~boundary_future:t.boundary_future
+        ?transition_debug_info:t.transition_debug_info dst
         (Hashtbl.find state_map t.from_state)
         (Hashtbl.find state_map t.to_state)
         t.action t.guard)
@@ -878,14 +892,19 @@ let html_of_string_set set =
 let html_of_residual residual =
   residual_debug_text residual |> escape_html
 
+let html_of_text_block text =
+  text
+  |> String.split_on_char '\n'
+  |> List.map escape_html
+  |> String.concat "<BR/>"
+
 let html_of_action = function
-  | Epsilon -> "&#945; = &#949;"
-  | Messages msgs -> "&#945; = " ^ html_of_msgset msgs
-  | Clock -> "&#945; = {#}"
-  | Progress ids -> "&#945; = " ^ html_of_string_set ids
+  | Epsilon -> "α = ε"
+  | Messages msgs -> "α = " ^ html_of_msgset msgs
+  | Clock -> "α = {#}"
+  | Progress ids -> "α = " ^ html_of_string_set ids
   | FairBranch (id, branch) ->
-      "&#945; = {" ^ escape_html id ^ (if branch then "_true" else "_false")
-      ^ "}"
+      "α = {" ^ escape_html id ^ (if branch then "_true" else "_false") ^ "}"
 
 let html_of_guard g =
   let parts = ref [] in
@@ -893,22 +912,34 @@ let html_of_guard g =
   let add_msg pred msgs =
     if not (MsgSet.is_empty msgs) then add (pred (html_of_msgset msgs))
   in
-  add_msg (fun s -> s ^ " &#8838; Imm(E)") g.require_now;
-  add_msg (fun s -> s ^ " &#8745; Imm(E) = &#8709;") g.forbid_now;
+  add_msg (fun s -> s ^ " ⊆ Imm(E)") g.require_now;
+  add_msg (fun s -> s ^ " ∩ Imm(E) = ∅") g.forbid_now;
   if g.missing_now_groups <> [] then
     add
-      ("&#8704;G &#8712; ["
+      ("∀G ∈ ["
        ^ (g.missing_now_groups |> List.map html_of_msgset |> String.concat "; ")
-       ^ "]. &#172;(G &#8838; Imm(E))");
-  if g.require_clock then add "# &#8712; Imm(E)";
-  if g.forbid_clock then add "# &#8713; Imm(E)";
-  add_msg (fun s -> s ^ " &#8745; F = &#8709;") g.future_disjoint;
+       ^ "]. ¬(G ⊆ Imm(E))");
+  if g.require_clock then add "# ∈ Imm(E)";
+  if g.forbid_clock then add "# ∉ Imm(E)";
+  add_msg (fun s -> s ^ " ∩ F = ∅") g.future_disjoint;
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat "<BR/>" xs
 
+let html_of_boundary_projection ?(show_empty = false) t =
+  if
+    (not show_empty)
+    && MsgSet.is_empty t.boundary_now
+    && MsgSet.is_empty t.boundary_future
+  then
+    ""
+  else
+    "<BR/>E_B: U = " ^ html_of_msgset t.boundary_now ^ "; F = "
+    ^ html_of_msgset t.boundary_future
+
 (* Render the v2 metadata directly in DOT for debugging the formal construction. *)
-let print_automaton_dot auto out =
+let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
+    ?(show_empty_boundary = false) auto out =
   recompute_state_summaries auto;
   Printf.fprintf out "digraph TypeAutomaton2 {\n";
   Printf.fprintf out "  rankdir=LR;\n";
@@ -943,8 +974,21 @@ let print_automaton_dot auto out =
   List.iter
     (fun t ->
       let label =
-        if guard_is_any t.guard then html_of_action t.action
-        else html_of_action t.action ^ "<BR/>" ^ html_of_guard t.guard
+        let base =
+          if (not show_guards) || guard_is_any t.guard then
+            html_of_action t.action
+          else html_of_action t.action ^ "<BR/>" ^ html_of_guard t.guard
+        in
+        let boundary =
+          html_of_boundary_projection ~show_empty:show_empty_boundary t
+        in
+        let debug =
+          match show_transition_debug, t.transition_debug_info with
+          | false, _ -> ""
+          | true, None -> ""
+          | true, Some info -> "<BR/>" ^ html_of_text_block info
+        in
+        base ^ boundary ^ debug
       in
       Printf.fprintf out "  %d -> %d [label=<%s>];\n" t.from_state
         t.to_state label)
