@@ -2,6 +2,7 @@ open Lang
 open Except
 open SessionAutomaton2
 open SessionBuildAutomaton2
+open SessionOpenGame2
 
 type open_member_source =
   | Direct
@@ -21,12 +22,28 @@ type open_pair_intersection = {
   shared_messages : MsgSet.t;
 }
 
+(* One incremental composition step: compose the running composite with the
+   next member, solve the game, and (on success) hide the just-checked
+   interface to form the residual used by the next step. *)
+type open_step_result = {
+  composition_name : string;
+  residual_name : string;
+  step_progress_ids : string list;
+  step_internal_messages : MsgSet.t;
+  step_boundary_messages : MsgSet.t;
+  step_product_dot_path : string;
+  step_arena_dot_path : string;
+  step_residual_dot_path : string option;
+  step_game_result : open_game_result;
+}
+
 type open_pool_context = {
   pool_id : identifier;
   members : open_member_context list;
   pairwise_intersections : open_pair_intersection list;
   mutable product_dot_paths : string list;
   mutable arena_dot_path : string option;
+  mutable step_results : open_step_result list;
 }
 
 let source_kind_string = function
@@ -203,6 +220,7 @@ let create_context channel_classes session_defs
     pairwise_intersections = pairwise_intersections members;
     product_dot_paths = [];
     arena_dot_path = None;
+    step_results = [];
   }
 
 let msgset_union_list sets =
@@ -230,26 +248,7 @@ let write_automaton_dot ?(verbose = false) path auto =
     close_out_noerr out;
     raise exn
 
-type boundary_env = {
-  be_now : MsgSet.t;
-  be_future : MsgSet.t;
-}
-
-let empty_boundary_env = { be_now = MsgSet.empty; be_future = MsgSet.empty }
-
-let string_of_boundary_env env =
-  Printf.sprintf "U=%s; F=%s" (format_msgset env.be_now)
-    (format_msgset env.be_future)
-
-let html_of_boundary_env env =
-  "U = " ^ html_of_msgset env.be_now ^ "; F = " ^ html_of_msgset env.be_future
-
-let boundary_env_equal lhs rhs =
-  MsgSet.equal lhs.be_now rhs.be_now
-  && MsgSet.equal lhs.be_future rhs.be_future
-
-let boundary_env_nonempty env =
-  msgset_nonempty env.be_now || msgset_nonempty env.be_future
+(* boundary_env and its helpers are provided by SessionOpenGame2. *)
 
 type open_product_input = {
   op_member_id : identifier;
@@ -443,7 +442,20 @@ let boundary_env_of_choices boundary_messages choices =
     |> msgset_union_list
     |> MsgSet.inter boundary_messages
   in
-  { be_now = required_now; be_future = MsgSet.empty }
+  (* Boundary heads that may still arrive this cycle: the offer/xoffer waiting
+     guard records them in future_intersects, and any boundary message a
+     component may still offer lives in cc_maybe_offers. These are the F-side
+     availabilities the environment (player node) controls. *)
+  let possible_future =
+    choices |> Array.to_list
+    |> List.concat_map (fun choice ->
+           choice.cc_guard.future_intersects
+           @ [ choice.cc_maybe_offers ])
+    |> msgset_union_list
+    |> MsgSet.inter boundary_messages
+    |> fun set -> MsgSet.diff set required_now
+  in
+  { be_now = required_now; be_future = possible_future; be_clock = false }
 
 let product_transition_debug internal_messages boundary choices envs =
   let component_lines =
@@ -705,32 +717,15 @@ let build_open_product name progress_ids inputs =
   recompute_state_summaries product;
   (product, internal_messages, boundary_messages)
 
-type arena_node_kind =
-  | ArenaPlayer
-  | ArenaAdversary
-  | ArenaFail
-
-type arena_node = {
-  arena_node_id : string;
-  arena_node_label : string;
-  arena_node_kind : arena_node_kind;
-}
-
-type arena_edge = {
-  arena_edge_from : string;
-  arena_edge_to : string;
-  arena_edge_label : string;
-}
-
-type open_game_arena = {
-  arena_name : string;
-  arena_start : string;
-  arena_nodes : arena_node list;
-  arena_edges : arena_edge list;
-}
+(* arena_node_kind, arena_node, arena_edge, edge_label, and open_game_arena are
+   provided by SessionOpenGame2. *)
 
 let boundary_of_transition t =
-  { be_now = t.boundary_now; be_future = t.boundary_future }
+  {
+    be_now = t.boundary_now;
+    be_future = t.boundary_future;
+    be_clock = transition_is_clock t;
+  }
 
 let unique_boundary_moves moves =
   List.fold_left
@@ -778,12 +773,13 @@ let build_open_arena name product =
     if not (Hashtbl.mem nodes node.arena_node_id) then
       Hashtbl.add nodes node.arena_node_id node
   in
-  let add_edge from_node to_node label =
+  let add_edge ?action from_node to_node label =
     edges :=
       {
         arena_edge_from = from_node;
         arena_edge_to = to_node;
         arena_edge_label = label;
+        arena_edge_action = action;
       }
       :: !edges
   in
@@ -795,15 +791,24 @@ let build_open_arena name product =
     if has_player_state state_id then arena_player_id state_id
     else arena_adversary_id state_id 0
   in
+  let state_flags state_id =
+    let st = Hashtbl.find product.states state_id in
+    (st.is_fair, st.adversary)
+  in
   List.iter
     (fun state_id ->
       let moves = Hashtbl.find moves_by_state state_id in
+      let is_fair, is_adversary = state_flags state_id in
       if has_player_state state_id then
         add_node
           {
             arena_node_id = arena_player_id state_id;
             arena_node_label = Printf.sprintf "q%dP" state_id;
             arena_node_kind = ArenaPlayer;
+            arena_product_state = Some state_id;
+            arena_boundary = None;
+            arena_is_fair = is_fair;
+            arena_is_adversary = is_adversary;
           };
       List.iteri
         (fun index move ->
@@ -815,10 +820,13 @@ let build_open_arena name product =
                 Printf.sprintf "q%d\n%s" state_id
                   (string_of_boundary_env move);
               arena_node_kind = ArenaAdversary;
+              arena_product_state = Some state_id;
+              arena_boundary = Some move;
+              arena_is_fair = is_fair;
+              arena_is_adversary = is_adversary;
             };
           if has_player_state state_id then
-            add_edge (arena_player_id state_id) adv_id
-              ("θ: " ^ html_of_boundary_env move))
+            add_edge (arena_player_id state_id) adv_id (BoundaryChoice move))
         moves)
     state_ids;
   add_node
@@ -826,6 +834,10 @@ let build_open_arena name product =
       arena_node_id = arena_fail_id;
       arena_node_label = "bottom";
       arena_node_kind = ArenaFail;
+      arena_product_state = None;
+      arena_boundary = None;
+      arena_is_fair = false;
+      arena_is_adversary = true;
     };
   List.iter
     (fun state_id ->
@@ -841,15 +853,16 @@ let build_open_arena name product =
               transitions
           in
           match matching with
-          | [] -> add_edge adv_id arena_fail_id "ε"
+          | [] -> add_edge adv_id arena_fail_id EpsilonLabel
           | _ ->
               List.iter
                 (fun t ->
-                  add_edge adv_id (entry t.to_state) (html_of_action t.action))
+                  add_edge ~action:t.action adv_id (entry t.to_state)
+                    (ActionLabel t.action))
                 matching)
         moves)
     state_ids;
-  add_edge arena_fail_id arena_fail_id "ε";
+  add_edge arena_fail_id arena_fail_id EpsilonLabel;
   {
     arena_name = name;
     arena_start = entry product.start_state;
@@ -888,7 +901,7 @@ let print_open_arena_dot path arena =
         Printf.fprintf out "  %s -> %s [label=<%s>];\n"
           (dot_id edge.arena_edge_from)
           (dot_id edge.arena_edge_to)
-          edge.arena_edge_label)
+          (html_of_edge_label edge.arena_edge_label))
       arena.arena_edges;
     Printf.fprintf out "}\n";
     close_out out
@@ -896,80 +909,315 @@ let print_open_arena_dot path arena =
     close_out_noerr out;
     raise exn
 
-let product_dot_path pool_id step =
-  Printf.sprintf "open_product_%s_step%d.dot"
-    (sanitize_filename_component pool_id) step
+(* Composition names follow the PDF: composite ids are joined with '-', and the
+   newly added member is appended with '_': i1_i2, then i1-i2_i3, etc. *)
+let compose_name left right = left ^ "_" ^ right
 
-let arena_dot_path pool_id =
-  Printf.sprintf "open_arena_%s.dot" (sanitize_filename_component pool_id)
+let residual_name left right = left ^ "-" ^ right
 
+let product_dot_path composition_name =
+  Printf.sprintf "open_product_%s.dot"
+    (sanitize_filename_component composition_name)
+
+let arena_dot_path composition_name =
+  Printf.sprintf "open_arena_%s.dot"
+    (sanitize_filename_component composition_name)
+
+let residual_dot_path residual_name =
+  Printf.sprintf "open_residual_%s.dot"
+    (sanitize_filename_component residual_name)
+
+(* hide_I (PDF §6.8): internal messages disappear from the boundary; a purely
+   internal message step becomes ε; #, $id, and fair markers are preserved. *)
+let hide_internal_action internal_messages = function
+  | Messages msgs ->
+      let visible = MsgSet.diff msgs internal_messages in
+      if MsgSet.is_empty visible then Epsilon else Messages visible
+  | (Epsilon | Clock | Progress _ | FairBranch _) as action -> action
+
+(* Residual guards keep the boundary projection of the source guard so the next
+   composition step still tests genuine boundary availability. *)
+let residual_guard boundary_messages boundary source_guard =
+  let project_groups groups =
+    groups
+    |> List.map (fun group -> MsgSet.inter boundary_messages group)
+    |> List.filter (fun group -> not (MsgSet.is_empty group))
+  in
+  {
+    require_now = boundary.be_now;
+    forbid_now = MsgSet.inter boundary_messages source_guard.forbid_now;
+    missing_now_groups = project_groups source_guard.missing_now_groups;
+    future_intersects = project_groups source_guard.future_intersects;
+    future_disjoint = MsgSet.inter boundary_messages source_guard.future_disjoint;
+    require_clock = source_guard.require_clock;
+    forbid_clock = source_guard.forbid_clock;
+  }
+
+(* Map each product state to its arena entry node (player node if the state has
+   boundary moves, else its single q_e0 adversary node). *)
+let entry_nodes_by_product_state arena =
+  let table = Hashtbl.create 32 in
+  List.iter
+    (fun node ->
+      match (node.arena_node_kind, node.arena_product_state) with
+      | ArenaPlayer, Some state_id -> Hashtbl.replace table state_id node.arena_node_id
+      | ArenaAdversary, Some state_id ->
+          if not (Hashtbl.mem table state_id) then
+            Hashtbl.replace table state_id node.arena_node_id
+      | _ -> ())
+    arena.arena_nodes;
+  table
+
+(* Phase 5: keep the winning behaviour of the product and hide the interface we
+   just checked. The result is the open type of the composed subsystem. *)
+let build_residual_automaton residual_nm product internal_messages
+    boundary_messages arena game_result =
+  let residual = TypeAutomaton.create () in
+  TypeAutomaton.change_name residual_nm residual;
+  let entry_of_state = entry_nodes_by_product_state arena in
+  let state_is_winning state_id =
+    match Hashtbl.find_opt entry_of_state state_id with
+    | Some node_id -> StringSet.mem node_id game_result.winning_nodes
+    | None -> false
+  in
+  (* Player states retain only the boundary moves the player actually selected. *)
+  let selected_boundaries = Hashtbl.create 16 in
+  List.iter
+    (fun (edge : arena_edge) ->
+      match edge.arena_edge_label with
+      | BoundaryChoice boundary ->
+          Hashtbl.replace selected_boundaries (edge.arena_edge_from, boundary) ()
+      | ActionLabel _ | EpsilonLabel -> ())
+    game_result.selected_player_edges;
+  let player_state state_id =
+    match Hashtbl.find_opt entry_of_state state_id with
+    | Some node_id ->
+        (match (Hashtbl.find (node_table arena) node_id).arena_node_kind with
+        | ArenaPlayer -> Some node_id
+        | _ -> None)
+    | None -> None
+  in
+  let boundary_selected_for player_node boundary =
+    Hashtbl.mem selected_boundaries (player_node, boundary)
+  in
+  let state_map = Hashtbl.create 32 in
+  let copy_state product_state =
+    match Hashtbl.find_opt state_map product_state with
+    | Some residual_state -> residual_state
+    | None ->
+        let src = Hashtbl.find product.states product_state in
+        let residual_state =
+          if product_state = product.start_state then residual.start_state
+          else TypeAutomaton.new_state residual src.accepting
+        in
+        Hashtbl.add state_map product_state residual_state;
+        let dst = Hashtbl.find residual.states residual_state in
+        dst.accepting <- src.accepting;
+        dst.is_fair <- src.is_fair;
+        dst.adversary <- src.adversary;
+        dst.is_winning <- true;
+        dst.residual_type <- src.residual_type;
+        dst.product_components <- src.product_components;
+        dst.debug_info <- src.debug_info;
+        residual_state
+  in
+  ignore (copy_state product.start_state);
+  List.iter
+    (fun (t : transition) ->
+      let keep_endpoints =
+        state_is_winning t.from_state && state_is_winning t.to_state
+      in
+      let keep_player_choice =
+        match player_state t.from_state with
+        | Some player_node ->
+            boundary_selected_for player_node (boundary_of_transition t)
+        | None -> true
+      in
+      if keep_endpoints && keep_player_choice then (
+        let boundary = boundary_of_transition t in
+        let from_state = copy_state t.from_state in
+        let to_state = copy_state t.to_state in
+        let action = hide_internal_action internal_messages t.action in
+        let guard = residual_guard boundary_messages boundary t.guard in
+        TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
+          ~boundary_future:boundary.be_future
+          ?transition_debug_info:t.transition_debug_info residual from_state
+          to_state action guard))
+    product.transitions;
+  recompute_state_summaries residual;
+  List.iter (fun (t : transition) -> t.in_winning <- true) residual.transitions;
+  residual
+
+(* One incremental composition step: compose, build the arena, solve the game,
+   and on success hide the internal interface to form the residual input for the
+   next step. *)
+let build_composition_step ?(verbose = false) composition_name residual_nm
+    progress_ids inputs =
+  let product, internal_messages, boundary_messages =
+    build_open_product composition_name progress_ids inputs
+  in
+  let product_path = product_dot_path composition_name in
+  write_automaton_dot ~verbose product_path product;
+  let arena = build_open_arena composition_name product in
+  let arena_path = arena_dot_path composition_name in
+  print_open_arena_dot arena_path arena;
+  let game_result = play_open_game arena ~progress_ids in
+  let residual_dot, residual_input =
+    if game_result.compatible then (
+      let residual =
+        build_residual_automaton residual_nm product internal_messages
+          boundary_messages arena game_result
+      in
+      let path = residual_dot_path residual_nm in
+      write_automaton_dot ~verbose path residual;
+      ( Some path,
+        Some
+          {
+            op_member_id = residual_nm;
+            op_automaton = residual;
+            op_messages = boundary_messages;
+          } ))
+    else (None, None)
+  in
+  ( {
+      composition_name;
+      residual_name = residual_nm;
+      step_progress_ids = progress_ids;
+      step_internal_messages = internal_messages;
+      step_boundary_messages = boundary_messages;
+      step_product_dot_path = product_path;
+      step_arena_dot_path = arena_path;
+      step_residual_dot_path = residual_dot;
+      step_game_result = game_result;
+    },
+    residual_input )
+
+(* Incremental composition: build i1_i2, solve, residual i1-i2, then compose
+   that residual with i3, and so on. Stop at the first failed step. *)
 let build_open_artifacts ?(verbose = false) context =
   match context.members with
   | [] ->
       raise
         (TypeError
            [ Text ("Pool " ^ context.pool_id ^ " has no interface members") ])
-  | members ->
-      let inputs =
-        members |> List.map product_input_of_member |> Array.of_list
-      in
-      let final_product = ref None in
-      let product_paths = ref [] in
-      for prefix_len = 1 to Array.length inputs do
-        let prefix_inputs = Array.sub inputs 0 prefix_len in
-        let progress_ids =
-          prefix_inputs |> Array.to_list
-          |> List.map (fun input -> input.op_member_id)
+  | first :: rest ->
+      let steps = ref [] in
+      let composite_name = ref first.member_id in
+      let composite_input = ref (product_input_of_member first) in
+      let progress_ids = ref [ first.member_id ] in
+      let failed = ref false in
+      List.iter
+        (fun member ->
+          if not !failed then (
+            let next_input = product_input_of_member member in
+            let composition_name =
+              compose_name !composite_name member.member_id
+            in
+            let res_name = residual_name !composite_name member.member_id in
+            let new_progress = !progress_ids @ [ member.member_id ] in
+            let step, residual_input =
+              build_composition_step ~verbose composition_name res_name
+                new_progress
+                [| !composite_input; next_input |]
+            in
+            steps := !steps @ [ step ];
+            match residual_input with
+            | Some residual_input ->
+                composite_name := res_name;
+                composite_input := residual_input;
+                progress_ids := new_progress
+            | None -> failed := true))
+        rest;
+      (* A single-member pool has nothing to compose; still build its product. *)
+      if rest = [] then (
+        let product, internal_messages, boundary_messages =
+          build_open_product first.member_id !progress_ids
+            [| !composite_input |]
         in
-        let product, _internal_messages, _boundary_messages =
-          build_open_product
-            (Printf.sprintf "%s_prefix%d" context.pool_id prefix_len)
-            progress_ids prefix_inputs
-        in
-        if prefix_len >= 2 || Array.length inputs = 1 then (
-          let path = product_dot_path context.pool_id prefix_len in
-          write_automaton_dot ~verbose path product;
-          product_paths := !product_paths @ [ path ]);
-        if prefix_len = Array.length inputs then final_product := Some product
-      done;
-      let product =
-        match !final_product with
-        | Some product -> product
-        | None -> raise (Failure "Open product construction produced no product")
-      in
-      let arena = build_open_arena context.pool_id product in
-      let arena_path = arena_dot_path context.pool_id in
-      print_open_arena_dot arena_path arena;
-      context.product_dot_paths <- !product_paths;
-      context.arena_dot_path <- Some arena_path;
-      (product, arena)
+        let product_path = product_dot_path first.member_id in
+        write_automaton_dot ~verbose product_path product;
+        let arena = build_open_arena first.member_id product in
+        let arena_path = arena_dot_path first.member_id in
+        print_open_arena_dot arena_path arena;
+        let game_result = play_open_game arena ~progress_ids:!progress_ids in
+        steps :=
+          [
+            {
+              composition_name = first.member_id;
+              residual_name = first.member_id;
+              step_progress_ids = !progress_ids;
+              step_internal_messages = internal_messages;
+              step_boundary_messages = boundary_messages;
+              step_product_dot_path = product_path;
+              step_arena_dot_path = arena_path;
+              step_residual_dot_path = None;
+              step_game_result = game_result;
+            };
+          ]);
+      context.step_results <- !steps;
+      context.product_dot_paths <-
+        List.map (fun step -> step.step_product_dot_path) !steps;
+      context.arena_dot_path <-
+        (match List.rev !steps with
+        | step :: _ -> Some step.step_arena_dot_path
+        | [] -> None)
 
-let print_context out context =
+let first_line text =
+  match String.split_on_char '\n' text with line :: _ -> line | [] -> text
+
+let print_context ?(verbose = false) out context =
   Printf.fprintf out "Open Compatibility v2 Context for pool %s\n"
     context.pool_id;
+  if verbose then (
+    List.iter
+      (fun member ->
+        Printf.fprintf out "[%s] %s msgs = %s\n"
+          (source_kind_string member.source_kind) member.member_id
+          (format_msgset member.message_set))
+      context.members;
+    List.iter
+      (fun pair ->
+        Printf.fprintf out "%s ∩ %s = %s\n" pair.left_member_id
+          pair.right_member_id (format_msgset pair.shared_messages))
+      context.pairwise_intersections);
   List.iter
-    (fun member ->
-      Printf.fprintf out "[%s] %s msgs = %s\n"
-        (source_kind_string member.source_kind) member.member_id
-        (format_msgset member.message_set))
-    context.members;
-  List.iter
-    (fun pair ->
-      Printf.fprintf out "%s ∩ %s = %s\n" pair.left_member_id
-        pair.right_member_id (format_msgset pair.shared_messages))
-    context.pairwise_intersections;
-  List.iter
-    (fun path -> Printf.fprintf out "product DOT = %s\n" path)
-    context.product_dot_paths;
-  (match context.arena_dot_path with
-  | Some path -> Printf.fprintf out "arena DOT = %s\n" path
-  | None -> ());
+    (fun step ->
+      Printf.fprintf out "step %s: %s (I = %s; B = %s)\n" step.composition_name
+        (if step.step_game_result.compatible then "compatible"
+         else "incompatible")
+        (format_msgset step.step_internal_messages)
+        (format_msgset step.step_boundary_messages);
+      Printf.fprintf out "  game = %s\n"
+        (first_line step.step_game_result.summary);
+      Printf.fprintf out "  product DOT = %s\n" step.step_product_dot_path;
+      Printf.fprintf out "  arena DOT = %s\n" step.step_arena_dot_path;
+      (match step.step_residual_dot_path with
+      | Some path -> Printf.fprintf out "  residual DOT = %s\n" path
+      | None -> ());
+      match step.step_game_result.counterexample_trace with
+      | Some trace -> Printf.fprintf out "  trace:%s\n" trace
+      | None -> ())
+    context.step_results;
   Printf.fprintf out "\n"
 
 let check_open_compatibility_multiparty channel_classes session_defs pool_def
     verbose =
   let context = create_context channel_classes session_defs pool_def in
-  ignore (build_open_artifacts ~verbose context);
-  ( context,
-    false,
-    "Open compatibility arena built; open game not implemented." )
+  build_open_artifacts ~verbose context;
+  match
+    List.find_opt
+      (fun step -> not step.step_game_result.compatible)
+      context.step_results
+  with
+  | Some step ->
+      ( context,
+        false,
+        Printf.sprintf "Open compatibility failed at %s. %s" step.composition_name
+          step.step_game_result.summary )
+  | None ->
+      let compatible = context.step_results <> [] in
+      ( context,
+        compatible,
+        if compatible then
+          "Compatible: open winning strategy found for all composition steps."
+        else "Open compatibility built no composition steps." )

@@ -389,12 +389,12 @@ let rec build_automaton (name : identifier option) (st : session_type)
       msg_branches;
     if not (MsgSet.is_empty head_set) then
       (* If any branch head may still arrive this cycle, xoffer keeps waiting. *)
-      (* TypeAutomaton.add_transition auto current current Epsilon
+      TypeAutomaton.add_transition auto current current Epsilon
         {
           any_guard with
-          future_intersects = head_set;
+          future_intersects = [ head_set ];
           forbid_clock = true;
-        }; *)
+        };
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in
@@ -466,14 +466,15 @@ let rec build_automaton (name : identifier option) (st : session_type)
           };
         finals := build target_ty target rec_env let_env @ !finals)
       branch_subsets;
-    (* if not (MsgSet.is_empty head_set) then
+    if not (MsgSet.is_empty head_set) then
+      (* While some branch head may still arrive this cycle, the offer keeps waiting. *)
       TypeAutomaton.add_transition auto current current Epsilon
         {
           any_guard with
           missing_now_groups = List.map snd msg_branches;
-          future_intersects = head_set;
+          future_intersects = [ head_set ];
           forbid_clock = true;
-        }; *)
+        };
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in

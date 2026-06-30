@@ -48,6 +48,7 @@ type guard = {
   require_clock : bool; (* require_clock ⇒ # ∈ Imm(E) *)
   forbid_clock : bool; (* forbid_clock ⇒ # ∉ Imm(E) *)
   future_disjoint : MsgSet.t; (* future_disjoint ∩ F = ∅ *)
+  future_intersects : MsgSet.t list; (* ∀G ∈ future_intersects. G ∩ F ≠ ∅ *)
 }
 
 let any_guard = {
@@ -57,6 +58,7 @@ let any_guard = {
   require_clock = false;
   forbid_clock = false;
   future_disjoint = MsgSet.empty;
+  future_intersects = [];
 }
 
 let guard_is_any g =
@@ -66,6 +68,7 @@ let guard_is_any g =
   && not g.require_clock
   && not g.forbid_clock
   && MsgSet.is_empty g.future_disjoint
+  && g.future_intersects = []
 
 (* Local view of what is immediate now and possible later in this cycle. *)
 type env = {
@@ -83,12 +86,14 @@ let clock_guard_env env =
 (* A transition is enabled exactly when its symbolic guard matches the local view. *)
 let guard_satisfied env g =
   let missing_group group = not (MsgSet.subset group env.imm) in
+  let future_group group = not (MsgSet.disjoint group env.future) in
   MsgSet.subset g.require_now env.imm
   && MsgSet.disjoint g.forbid_now env.imm
   && List.for_all missing_group g.missing_now_groups
   && ((not g.require_clock) || env.clock)
   && ((not g.forbid_clock) || not env.clock)
   && MsgSet.disjoint g.future_disjoint env.future
+  && List.for_all future_group g.future_intersects
 
 let string_of_guard g =
   let parts = ref [] in
@@ -112,6 +117,13 @@ let string_of_guard g =
   if g.require_clock then add "# in Imm(E)";
   if g.forbid_clock then add "# notin Imm(E)";
   add_msg (fun s -> s ^ " cap F = empty") g.future_disjoint;
+  if g.future_intersects <> [] then
+    add
+      ("forall G in ["
+       ^ (g.future_intersects
+          |> List.map fmt_msgset
+          |> String.concat ";")
+       ^ "]. G cap F <> empty");
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat " && " xs
@@ -478,6 +490,7 @@ let merge_guards guards =
         require_clock = acc.require_clock || guard.require_clock;
         forbid_clock = acc.forbid_clock || guard.forbid_clock;
         future_disjoint = MsgSet.union acc.future_disjoint guard.future_disjoint;
+        future_intersects = acc.future_intersects @ guard.future_intersects;
       })
     any_guard guards
 
@@ -922,6 +935,11 @@ let html_of_guard g =
   if g.require_clock then add "# ∈ Imm(E)";
   if g.forbid_clock then add "# ∉ Imm(E)";
   add_msg (fun s -> s ^ " ∩ F = ∅") g.future_disjoint;
+  if g.future_intersects <> [] then
+    add
+      ("∀G ∈ ["
+       ^ (g.future_intersects |> List.map html_of_msgset |> String.concat "; ")
+       ^ "]. G ∩ F ≠ ∅");
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat "<BR/>" xs

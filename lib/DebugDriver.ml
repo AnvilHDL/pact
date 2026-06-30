@@ -151,7 +151,8 @@ let open_compatibility_v2_debug _out config =
             SessionOpenCompatiblity2.check_open_compatibility_multiparty
               channel_classes session_type_defs pool config.verbose
           in
-          SessionOpenCompatiblity2.print_context stderr context;
+          SessionOpenCompatiblity2.print_context ~verbose:config.verbose stderr
+            context;
           (compat, err)
         with
         | Except.TypeError msg ->
