@@ -116,6 +116,12 @@ let string_of_guard g =
   | [] -> "true"
   | xs -> String.concat " && " xs
 
+type product_component = {
+  pc_name : identifier;
+  pc_state : int;
+  pc_residual : string option;
+}
+
 (* Head and maybe_ready cache the formal Head/MaybeReady sets. *)
 type state = {
   id : int;
@@ -125,6 +131,8 @@ type state = {
   mutable adversary : bool;
   mutable head : MsgSet.t;
   mutable maybe_ready : MsgSet.t;
+  mutable residual_type : string option;
+  mutable product_components : product_component list;
   mutable debug_info : string option;
 }
 
@@ -205,6 +213,8 @@ module TypeAutomaton = struct
         adversary = false;
         head = MsgSet.empty;
         maybe_ready = MsgSet.empty;
+        residual_type = None;
+        product_components = [];
         debug_info = None;
       };
     {
@@ -229,6 +239,8 @@ module TypeAutomaton = struct
         adversary = false;
         head = MsgSet.empty;
         maybe_ready = MsgSet.empty;
+        residual_type = None;
+        product_components = [];
         debug_info = None;
       };
     id
@@ -261,6 +273,84 @@ module TypeAutomaton = struct
       (fun id st acc -> if st.accepting then id :: acc else acc)
       auto.states []
 end
+
+let set_residual_type auto state_id residual =
+  (* Residual metadata is debug-only; it does not participate in transitions. *)
+  let st = Hashtbl.find auto.states state_id in
+  st.residual_type <- Some (string_of_protocol residual)
+
+let residual_debug_text = function
+  | Some residual -> residual
+  | None -> "?"
+
+let string_of_product_component component =
+  Printf.sprintf "%s:s%d = %s" component.pc_name component.pc_state
+    (residual_debug_text component.pc_residual)
+
+let string_of_product_components components =
+  components
+  |> List.map string_of_product_component
+  |> String.concat "\n"
+
+let state_debug_summary state =
+  if state.product_components <> [] then
+    "Product state map:\n" ^ string_of_product_components state.product_components
+  else
+    "Residual type: " ^ residual_debug_text state.residual_type
+
+let component_name index auto =
+  if auto.name = "" then Printf.sprintf "component%d" index else auto.name
+
+let product_components_for_vector automata current_arr =
+  Array.mapi
+    (fun i state_id ->
+      let component_state = Hashtbl.find automata.(i).states state_id in
+      {
+        pc_name = component_name i automata.(i);
+        pc_state = state_id;
+        pc_residual = component_state.residual_type;
+      })
+    current_arr
+  |> Array.to_list
+
+let product_residual_from_components components =
+  let residuals =
+    components
+    |> List.filter_map (fun component -> component.pc_residual)
+  in
+  match residuals with
+  | [] -> None
+  | [ only ] -> Some only
+  | _ -> Some ("(" ^ String.concat " || " residuals ^ ")")
+
+let set_product_state_debug prod state_id components =
+  let state = Hashtbl.find prod.states state_id in
+  state.product_components <- components;
+  state.residual_type <- product_residual_from_components components;
+  state.debug_info <- Some (state_debug_summary state)
+
+let append_state_debug state text =
+  state.debug_info <-
+    Some
+      (match state.debug_info with
+      | None -> text
+      | Some existing -> existing ^ "\n" ^ text)
+
+let product_state_map_debug auto =
+  let ids =
+    Hashtbl.fold (fun id _ acc -> id :: acc) auto.states []
+    |> List.sort compare
+  in
+  ids
+  |> List.map (fun id ->
+         let st = Hashtbl.find auto.states id in
+         if st.product_components = [] then
+           Printf.sprintf "State %d: %s" id
+             (residual_debug_text st.residual_type)
+         else
+           Printf.sprintf "State %d:\n%s" id
+             (string_of_product_components st.product_components))
+  |> String.concat "\n"
 
 (* Recompute Head and MaybeReady from outgoing non-clock paths. *)
 let recompute_state_summaries auto =
@@ -337,6 +427,8 @@ let import_automaton_into ~dst ~src ~at_start =
       dst_st.adversary <- src_st.adversary;
       dst_st.head <- src_st.head;
       dst_st.maybe_ready <- src_st.maybe_ready;
+      dst_st.residual_type <- src_st.residual_type;
+      dst_st.product_components <- src_st.product_components;
       dst_st.debug_info <- src_st.debug_info)
     src.states;
   List.iter
@@ -379,7 +471,8 @@ let add_progress_transition auto from_state to_state ids =
   let id_set =
     List.fold_left (fun acc id -> StringSet.add id acc) StringSet.empty ids
   in
-  TypeAutomaton.add_transition auto from_state to_state (Progress id_set) any_guard
+  TypeAutomaton.add_transition auto from_state to_state (Progress id_set)
+    { any_guard with forbid_clock = true }
 
 (* Closed product: all sync_messages must be consumed internally. *)
 let closed_product ?progress_ids automata sync_messages =
@@ -430,6 +523,8 @@ let closed_product ?progress_ids automata sync_messages =
       let prod_state = get_product_state current in
       let current_arr = Array.of_list current in
       let prod_state_info = Hashtbl.find prod.states prod_state in
+      set_product_state_debug prod prod_state
+        (product_components_for_vector automata current_arr);
       prod_state_info.is_fair <-
         Array.mapi
           (fun i st_id -> (Hashtbl.find automata.(i).states st_id).is_fair)
@@ -460,9 +555,8 @@ let closed_product ?progress_ids automata sync_messages =
                    (fun t -> t.from_state = prod_state)
                    prod.transitions)
             then
-              prod_state_info.debug_info <-
-                Some
-                  "All components are accepting, but no product progress transition was configured.")
+              append_state_debug prod_state_info
+                "All components are accepting, but no product progress transition was configured.")
       else (
         Array.iteri
           (fun i st_id ->
@@ -470,7 +564,7 @@ let closed_product ?progress_ids automata sync_messages =
             List.iter
               (fun t ->
                 match t.action with
-                | Epsilon | Progress _ | FairBranch _ when guard_is_any t.guard ->
+                | Epsilon | FairBranch _ when guard_is_any t.guard ->
                     let next =
                       List.mapi
                         (fun j s -> if i = j then t.to_state else s)
@@ -560,6 +654,27 @@ let closed_product ?progress_ids automata sync_messages =
                    in
                    add_product_transition current next action any_guard);
 
+        let has_ordinary_non_clock_move =
+          List.exists (fun t -> t.from_state = prod_state) prod.transitions
+        in
+        if not has_ordinary_non_clock_move then
+          Array.iteri
+            (fun i st_id ->
+              let outs = get_outgoing_from_index outgoing.(i) st_id in
+              List.iter
+                (fun t ->
+                  match t.action with
+                  | Progress _ when guard_satisfied local_envs.(i) t.guard ->
+                      let next =
+                        List.mapi
+                          (fun j s -> if i = j then t.to_state else s)
+                          current
+                      in
+                      add_product_transition current next t.action t.guard
+                  | _ -> ())
+                outs)
+            current_arr;
+
         let clock_choices =
           let clock_envs =
             Array.map clock_guard_env local_envs
@@ -623,6 +738,8 @@ let async_product automata =
       let prod_state = get_product_state current in
       let current_arr = Array.of_list current in
       let prod_state_info = Hashtbl.find prod.states prod_state in
+      set_product_state_debug prod prod_state
+        (product_components_for_vector automata current_arr);
       prod_state_info.is_fair <-
         Array.mapi
           (fun i st_id -> (Hashtbl.find automata.(i).states st_id).is_fair)
@@ -758,6 +875,9 @@ let html_of_string_set set =
     |> String.concat ", ")
   ^ "}"
 
+let html_of_residual residual =
+  residual_debug_text residual |> escape_html
+
 let html_of_action = function
   | Epsilon -> "&#945; = &#949;"
   | Messages msgs -> "&#945; = " ^ html_of_msgset msgs
@@ -812,9 +932,10 @@ let print_automaton_dot auto out =
         else "black"
       in
       let label =
-        Printf.sprintf "%d<BR/>H = %s<BR/>F = %s" id
+        Printf.sprintf "%d<BR/>H = %s<BR/>F = %s<BR/>R = %s" id
           (html_of_msgset st.head)
           (html_of_msgset st.maybe_ready)
+          (html_of_residual st.residual_type)
       in
       Printf.fprintf out "  %d [shape=%s,color=%s,label=<%s>];\n" id shape
         color label)

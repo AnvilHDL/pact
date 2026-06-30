@@ -25,7 +25,7 @@ let create_product
                (* Each member emits its interface ID when one protocol iteration ends. *)
                TypeAutomaton.add_transition auto final_state auto.start_state
                  (Progress (StringSet.singleton intf_id))
-                 any_guard);
+                 { any_guard with forbid_clock = true });
         recompute_state_summaries auto;
         if verbose then (
           let out = open_out (intf_id ^ "_generalized_v2_automaton.dot") in

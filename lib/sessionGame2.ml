@@ -5,6 +5,12 @@ module IntSet = Set.Make (Int)
 let transition_has_id (t : transition) (req_id : string) =
   transition_has_progress t req_id
 
+let indent_block prefix text =
+  text
+  |> String.split_on_char '\n'
+  |> List.map (fun line -> prefix ^ line)
+  |> String.concat "\n"
+
 let get_unreachable_ids outgoing_index req_ids start_node =
   (* Explain liveness failures by finding progress IDs absent from the suffix. *)
   let visited = Hashtbl.create 16 in
@@ -145,7 +151,8 @@ let collect_dead_ends_paths_indexed auto outgoing_index dead_ends =
           let dead_state = Hashtbl.find auto.states dead_end in
           (match dead_state.debug_info with
           | Some info ->
-              Printf.bprintf buffer "  Dead-end diagnostics:\n%s\n" info
+              Printf.bprintf buffer "  Dead-end diagnostics:\n%s\n"
+                (indent_block "    " info)
           | None -> ());
           Buffer.contents buffer
         else
@@ -165,18 +172,22 @@ let find_counterexample_indexed auto outgoing_index start winning_set req_ids =
     else (
       Hashtbl.add visited state_id ();
       let st = Hashtbl.find auto.states state_id in
-      Printf.bprintf buffer "\nState %d [head={%s}, future={%s}]"
-        state_id (string_of_msgset st.head) (string_of_msgset st.maybe_ready);
-      if IntSet.mem state_id winning_set then Printf.bprintf buffer " (WIN)\n"
-      else (
-        Printf.bprintf buffer " (LOSE)\n";
+      let winning = IntSet.mem state_id winning_set in
+      Printf.bprintf buffer "\nState %d [head={%s}, future={%s}] %s\n"
+        state_id (string_of_msgset st.head) (string_of_msgset st.maybe_ready)
+        (if winning then "(WIN)" else "(LOSE)");
+      (match st.debug_info with
+      | Some info ->
+          Printf.bprintf buffer "%s\n" (indent_block "    " info)
+      | None -> ());
+      if not winning then (
         let unreachable = get_unreachable_ids outgoing_index req_ids state_id in
         if unreachable <> [] then
           Printf.bprintf buffer "    Structurally unreachable targets: %s\n"
             (String.concat ", " unreachable));
       let outgoing = get_outgoing_from_index outgoing_index state_id in
       let losing =
-        if IntSet.mem state_id winning_set then []
+        if winning then []
         else List.filter (fun t -> not (IntSet.mem t.to_state winning_set)) outgoing
       in
       match losing with

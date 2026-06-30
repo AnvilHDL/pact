@@ -57,6 +57,9 @@ let parallel_of_list = function
   | [] -> StyTrue
   | first :: rest -> List.fold_left (fun acc ty -> StyParallel (acc, ty)) first rest
 
+let delay_then ticks residual =
+  if ticks <= 0 then residual else StySeq (StyAtom (AtomDelay ticks), residual)
+
 let powerset xs =
   let rec aux = function
     | [] -> [ [] ]
@@ -76,9 +79,10 @@ let xoffer_else_guard ?(require_clock = false) branch_groups head_set =
     forbid_clock = not require_clock;
   }
 
-let add_blocking_retry auto current branch_groups head_set =
+let add_blocking_retry auto current branch_groups head_set retry_ty =
   (* Missing wildcard on blocking offers means wait one clock and retry. *)
   let next_i = TypeAutomaton.new_state auto false in
+  set_residual_type auto next_i (delay_then 1 retry_ty);
   TypeAutomaton.add_transition auto current next_i Epsilon
     (xoffer_else_guard ~require_clock:false branch_groups head_set);
   TypeAutomaton.add_transition auto next_i current Clock
@@ -204,6 +208,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
   let st = SessionHelper.expand_session_type_quantifiers st in
 
   let rec build sty current rec_env let_env =
+    set_residual_type auto current sty;
     let mark_nonfinal () = TypeAutomaton.set_accepting auto current false in
     match sty with
     | StyTrue ->
@@ -214,11 +219,13 @@ let rec build_automaton (name : identifier option) (st : session_type)
         let msg = msg_of_action act in
         let msg_set = MsgSet.singleton msg in
         let next = TypeAutomaton.new_state auto true in
+        set_residual_type auto next StyTrue;
         TypeAutomaton.add_transition auto current next (Messages msg_set)
           { any_guard with require_now = msg_set; forbid_clock = true };
         if action_is_blocking act then begin
           (* Blocking messages may wait for a clock only while the peer is absent. *)
           let next_i = TypeAutomaton.new_state auto false in
+          set_residual_type auto next_i (delay_then 1 sty);
           TypeAutomaton.add_transition auto current next_i Epsilon
             (xoffer_else_guard ~require_clock:false [ msg_set ] msg_set);
           TypeAutomaton.add_transition auto next_i current Clock
@@ -236,11 +243,13 @@ let rec build_automaton (name : identifier option) (st : session_type)
             MsgSet.empty acts
         in
         let next = TypeAutomaton.new_state auto true in
+        set_residual_type auto next StyTrue;
         TypeAutomaton.add_transition auto current next (Messages msg_set)
           { any_guard with require_now = msg_set; forbid_clock = true };
         if all_blocking then begin
           (* Blocking conjunctions wait as a unit until the whole group is ready. *)
           let next_i = TypeAutomaton.new_state auto false in
+          set_residual_type auto next_i (delay_then 1 sty);
           TypeAutomaton.add_transition auto current next_i Epsilon
             (xoffer_else_guard ~require_clock:false [ msg_set ] msg_set);
           TypeAutomaton.add_transition auto next_i current Clock
@@ -254,8 +263,9 @@ let rec build_automaton (name : identifier option) (st : session_type)
           [ current ])
         else
           let last = ref current in
-          for _ = 1 to n do
+          for i = 1 to n do
             let next = TypeAutomaton.new_state auto false in
+            set_residual_type auto next (delay_then (n - i) StyTrue);
             TypeAutomaton.add_transition auto !last next Clock
               { any_guard with require_clock = true };
             last := next
@@ -284,12 +294,14 @@ let rec build_automaton (name : identifier option) (st : session_type)
         @ build right right_start rec_env let_env
     | StyFuture body ->
         mark_nonfinal ();
-        (* Future represents a fair delay choice between waiting and entering body. *)
         TypeAutomaton.make_fair auto current;
         TypeAutomaton.make_adversary auto current;
         let body_start = TypeAutomaton.new_state auto false in
         TypeAutomaton.add_transition auto current body_start Epsilon any_guard;
-        TypeAutomaton.add_transition auto current current Clock
+        let next_i = TypeAutomaton.new_state auto false in
+        set_residual_type auto next_i (delay_then 1 sty);
+        TypeAutomaton.add_transition auto current next_i Epsilon any_guard;
+        TypeAutomaton.add_transition auto next_i current Clock
           { any_guard with require_clock = true };
         build body body_start rec_env let_env
     | StyXOffer offerings ->
@@ -391,7 +403,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
         finals := build else_ty else_target rec_env let_env @ !finals
     | None ->
         if all_blocking && not (MsgSet.is_empty head_set) then
-          add_blocking_retry auto current branch_groups head_set);
+          add_blocking_retry auto current branch_groups head_set
+            (StyXOffer offerings));
     !finals
 
   and build_offer offerings current rec_env let_env =
@@ -469,7 +482,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
         finals := build else_ty else_target rec_env let_env @ !finals
     | None ->
         if all_blocking && not (MsgSet.is_empty head_set) then
-          add_blocking_retry auto current branch_groups head_set);
+          add_blocking_retry auto current branch_groups head_set
+            (StyOffer offerings));
     !finals
   in
   ignore (build st auto.start_state [] [] : int list);
