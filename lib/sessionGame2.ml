@@ -162,42 +162,161 @@ let collect_dead_ends_paths_indexed auto outgoing_index dead_ends =
       (dead_end, trace))
     dead_ends
 
-let find_counterexample_indexed auto outgoing_index start winning_set req_ids =
-  (* Follow a losing edge to produce a compact liveness counterexample. *)
-  let buffer = Buffer.create 256 in
-  let visited = Hashtbl.create 16 in
-  let rec dfs state_id =
-    if Hashtbl.mem visited state_id then
-      Printf.bprintf buffer " -> Loop at %d" state_id
-    else (
-      Hashtbl.add visited state_id ();
-      let st = Hashtbl.find auto.states state_id in
-      let winning = IntSet.mem state_id winning_set in
-      Printf.bprintf buffer "\nState %d [head={%s}, future={%s}] %s\n"
-        state_id (string_of_msgset st.head) (string_of_msgset st.maybe_ready)
-        (if winning then "(WIN)" else "(LOSE)");
-      (match st.debug_info with
-      | Some info ->
-          Printf.bprintf buffer "%s\n" (indent_block "    " info)
-      | None -> ());
-      if not winning then (
-        let unreachable = get_unreachable_ids outgoing_index req_ids state_id in
-        if unreachable <> [] then
-          Printf.bprintf buffer "    Structurally unreachable targets: %s\n"
-            (String.concat ", " unreachable));
-      let outgoing = get_outgoing_from_index outgoing_index state_id in
-      let losing =
-        if winning then []
-        else List.filter (fun t -> not (IntSet.mem t.to_state winning_set)) outgoing
-      in
-      match losing with
-      | [] -> Printf.bprintf buffer " -> Deadlock / End of Trace"
-      | t :: _ ->
-          Printf.bprintf buffer " --[%s]--> " (string_of_action t.action);
-          dfs t.to_state)
+let list_drop n xs =
+  let rec aux n xs =
+    match n, xs with
+    | n, xs when n <= 0 -> xs
+    | _, [] -> []
+    | n, _ :: rest -> aux (n - 1) rest
   in
-  dfs start;
-  Buffer.contents buffer
+  aux n xs
+
+let reachable_parent_map outgoing_index start can_visit =
+  let parent = Hashtbl.create 16 in
+  let queue = Queue.create () in
+  if can_visit start then (
+    Hashtbl.add parent start None;
+    Queue.add start queue);
+  while not (Queue.is_empty queue) do
+    let state_id = Queue.take queue in
+    get_outgoing_from_index outgoing_index state_id
+    |> List.iter (fun t ->
+           if can_visit t.to_state && not (Hashtbl.mem parent t.to_state) then (
+             Hashtbl.add parent t.to_state (Some (state_id, t));
+             Queue.add t.to_state queue))
+  done;
+  parent
+
+let path_from_parent_map parent state_id =
+  let rec aux state_id =
+    match Hashtbl.find_opt parent state_id with
+    | None | Some None -> []
+    | Some (Some (prev, t)) -> aux prev @ [ t ]
+  in
+  aux state_id
+
+let find_cycle_avoiding_id outgoing_index reachable req_id =
+  let visited = Hashtbl.create 16 in
+  let visiting = Hashtbl.create 16 in
+  let result = ref None in
+  let rec dfs state_id path =
+    if Option.is_none !result then (
+      Hashtbl.replace visiting state_id (List.length path);
+      get_outgoing_from_index outgoing_index state_id
+      |> List.filter (fun t ->
+             (not (transition_has_id t req_id))
+             && Hashtbl.mem reachable t.to_state)
+      |> List.iter (fun t ->
+             if Option.is_none !result then
+               match Hashtbl.find_opt visiting t.to_state with
+               | Some index ->
+                   result :=
+                     Some
+                       ( t.to_state,
+                         list_drop index path @ [ t ] )
+               | None ->
+                   if not (Hashtbl.mem visited t.to_state) then
+                     dfs t.to_state (path @ [ t ]));
+      Hashtbl.remove visiting state_id;
+      Hashtbl.replace visited state_id ())
+  in
+  let states =
+    Hashtbl.fold (fun state_id _ acc -> state_id :: acc) reachable []
+    |> List.sort compare
+  in
+  List.iter
+    (fun state_id ->
+      if Option.is_none !result && not (Hashtbl.mem visited state_id) then
+        dfs state_id [])
+    states;
+  !result
+
+let find_progress_avoiding_lasso outgoing_index start winning_set req_ids =
+  let losing state_id = not (IntSet.mem state_id winning_set) in
+  let reachable = reachable_parent_map outgoing_index start losing in
+  req_ids
+  |> List.find_map (fun req_id ->
+         match find_cycle_avoiding_id outgoing_index reachable req_id with
+         | None -> None
+         | Some (cycle_start, cycle) ->
+             Some
+               ( req_id,
+                 path_from_parent_map reachable cycle_start,
+                 cycle_start,
+                 cycle ))
+
+let print_state_context buffer auto winning_set state_id =
+  let st = Hashtbl.find auto.states state_id in
+  let winning = IntSet.mem state_id winning_set in
+  Printf.bprintf buffer "State %d [head={%s}, future={%s}] %s\n" state_id
+    (string_of_msgset st.head) (string_of_msgset st.maybe_ready)
+    (if winning then "(WIN)" else "(LOSE)");
+  match st.debug_info with
+  | Some info -> Printf.bprintf buffer "%s\n" (indent_block "    " info)
+  | None -> ()
+
+let print_transition_step buffer auto winning_set current t =
+  print_state_context buffer auto winning_set current;
+  Printf.bprintf buffer " --[%s]--> State %d\n" (string_of_action t.action)
+    t.to_state;
+  t.to_state
+
+let find_counterexample_indexed auto outgoing_index start winning_set req_ids =
+  (* Prefer a real liveness witness: a reachable losing lasso avoiding one progress ID. *)
+  match find_progress_avoiding_lasso outgoing_index start winning_set req_ids with
+  | Some (req_id, prefix, cycle_start, cycle) ->
+      let buffer = Buffer.create 512 in
+      Printf.bprintf buffer
+        "Liveness counterexample: repeat the cycle below forever to avoid progress $%s.\n"
+        req_id;
+      let current = ref start in
+      if prefix <> [] then
+        Printf.bprintf buffer "\nPrefix to the avoiding cycle:\n";
+      List.iter
+        (fun t -> current := print_transition_step buffer auto winning_set !current t)
+        prefix;
+      Printf.bprintf buffer "\nCycle avoiding $%s starts at state %d:\n" req_id
+        cycle_start;
+      current := cycle_start;
+      List.iter
+        (fun t -> current := print_transition_step buffer auto winning_set !current t)
+        cycle;
+      Printf.bprintf buffer "Back to state %d without taking $%s.\n" cycle_start
+        req_id;
+      Buffer.contents buffer
+  | None ->
+      let buffer = Buffer.create 256 in
+      let visited = Hashtbl.create 16 in
+      let rec dfs state_id =
+        if Hashtbl.mem visited state_id then
+          Printf.bprintf buffer " -> Loop at %d" state_id
+        else (
+          Hashtbl.add visited state_id ();
+          Printf.bprintf buffer "\n";
+          print_state_context buffer auto winning_set state_id;
+          if not (IntSet.mem state_id winning_set) then (
+            let unreachable =
+              get_unreachable_ids outgoing_index req_ids state_id
+            in
+            if unreachable <> [] then
+              Printf.bprintf buffer "    Structurally unreachable targets: %s\n"
+                (String.concat ", " unreachable));
+          let outgoing = get_outgoing_from_index outgoing_index state_id in
+          let losing =
+            if IntSet.mem state_id winning_set then []
+            else
+              List.filter
+                (fun t -> not (IntSet.mem t.to_state winning_set))
+                outgoing
+          in
+          match losing with
+          | [] -> Printf.bprintf buffer " -> Deadlock / End of Trace"
+          | t :: _ ->
+              Printf.bprintf buffer " --[%s]--> " (string_of_action t.action);
+              dfs t.to_state)
+      in
+      dfs start;
+      Buffer.contents buffer
 
 let find_counterexample auto start winning_set req_ids =
   let outgoing_index = build_outgoing_index auto.transitions in

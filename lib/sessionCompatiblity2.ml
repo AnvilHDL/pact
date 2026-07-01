@@ -25,7 +25,7 @@ let create_product
                (* Each member emits its interface ID when one protocol iteration ends. *)
                TypeAutomaton.add_transition auto final_state auto.start_state
                  (Progress (StringSet.singleton intf_id))
-                 { any_guard with forbid_clock = true });
+                 { any_guard with forbid_clock = false } MsgSet.empty);
         recompute_state_summaries auto;
         if verbose then (
           let out = open_out (intf_id ^ "_generalized_v2_automaton.dot") in
@@ -47,7 +47,7 @@ let create_product
       automata_with_ids);
   let automata = automata_with_ids |> List.map fst |> Array.of_list in
   let ids = List.map snd automata_with_ids in
-  let product = closed_product ~progress_ids:ids automata sync_messages in
+  let product = closed_product ~progress_ids:ids ~verbose automata sync_messages in
   if verbose then (
     Printf.eprintf
       "Generalized Type v2 product construction completed for pool %s: states=%d transitions=%d\n"

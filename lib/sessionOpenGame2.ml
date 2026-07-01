@@ -254,8 +254,7 @@ let drop_fail_when_required node_by_id req_ids winning =
         | _ -> true)
       winning
 
-(* Record every player boundary choice that stays winning (PDF §6.8: "from
-   player nodes, keep player moves that have a winning continuation"). The
+(* Record every player boundary choice that stays winning. The
    residual exposes all of these so it remains the full open type. *)
 let select_player_edges arena outgoing winning =
   List.concat_map

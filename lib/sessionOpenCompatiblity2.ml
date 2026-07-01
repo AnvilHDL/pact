@@ -131,7 +131,7 @@ let add_member_progress_loop member_id auto =
   |> List.iter (fun final_state ->
          TypeAutomaton.add_transition auto final_state auto.start_state
            (Progress (StringSet.singleton member_id))
-           { any_guard with forbid_clock = true });
+           { any_guard with forbid_clock = false } MsgSet.empty);
   recompute_state_summaries auto
 
 let create_member_context channel_classes session_defs
@@ -909,7 +909,7 @@ let print_open_arena_dot path arena =
     close_out_noerr out;
     raise exn
 
-(* Composition names follow the PDF: composite ids are joined with '-', and the
+(* composite ids are joined with '-', and the
    newly added member is appended with '_': i1_i2, then i1-i2_i3, etc. *)
 let compose_name left right = left ^ "_" ^ right
 
@@ -927,7 +927,7 @@ let residual_dot_path residual_name =
   Printf.sprintf "open_residual_%s.dot"
     (sanitize_filename_component residual_name)
 
-(* hide_I (PDF §6.8): internal messages disappear from the boundary; a purely
+(* hide_I : internal messages disappear from the boundary; a purely
    internal message step becomes ε; #, $id, and fair markers are preserved. *)
 let hide_internal_action internal_messages = function
   | Messages msgs ->
