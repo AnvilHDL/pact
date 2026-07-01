@@ -85,11 +85,11 @@
 //     ip12 : (ep.req ; ep.ack);#1
 // }
 
-pool p2 { // true
-    ep_le -- ep_ri : ch;
-    ip21 : #1,
-    ip22 : #2
-}
+// pool p2 { // true
+//     ep_le -- ep_ri : ch;
+//     ip21 : #1,
+//     ip22 : #2
+// }
 
 
 // pool n4 { // false
@@ -97,3 +97,33 @@ pool p2 { // true
 //     in41 : F #ep.m1;#1,
 //     in42 : #ep.m1;#1 
 // }
+
+// pool p12 {
+//     ep_le -- ep_ri : ch;
+//     in121 : ((ep.m1;ep.m2) + (ep.m2;ep.m1));#1,
+//     in122 : ep.m1;#1,
+//     in123 : ep.m2;#1
+// }
+
+// pool p13 {
+//     ep_le -- ep_ri : ch;
+//     in131 : (ep.m1 + ep.m2);#1,
+//     in132 : ep.m1;#1,
+//     in133 : ep.m2;#1
+// }
+// pool p10 { // true
+//     ep_le -- ep_ri : ch;
+//     ip101 : (#ep.m1 || #ep.m2);#1,
+//     ip102 : #ep.m1;#1,
+//     ip103 : #ep.m2;#1
+// }
+
+
+pool p16{
+    ep_le -- ep_ri : ch;
+    ip161 : ep.m1;^(ep.m2,ep.m3);#1,
+    ip162 : ^(ep.m1,*);#2,
+    ip163 : ^(ep.m2,*);#3,
+    ip164 : ^(ep.m3,*);#4
+
+}

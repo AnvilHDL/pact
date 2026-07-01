@@ -256,17 +256,6 @@ type open_product_input = {
   op_messages : MsgSet.t;
 }
 
-type component_choice = {
-  cc_to_state : int;
-  cc_action : action;
-  cc_messages : MsgSet.t;
-  cc_guard : guard;
-  cc_maybe_offers : MsgSet.t;
-  cc_changed : bool;
-  cc_debug : string;
-  cc_transition : transition option;
-}
-
 let product_input_of_member member =
   {
     op_member_id = member.member_id;
@@ -274,6 +263,8 @@ let product_input_of_member member =
     op_messages = member.message_set;
   }
 
+(* Internal messages are those owned by at least two members: they must
+   synchronize. Everything else is boundary (relies on the environment). *)
 let internal_messages_of_inputs inputs =
   let all_messages =
     inputs |> Array.to_list |> List.map (fun input -> input.op_messages)
@@ -292,428 +283,21 @@ let all_messages_of_inputs inputs =
   inputs |> Array.to_list |> List.map (fun input -> input.op_messages)
   |> msgset_union_list
 
-let choice_of_transition component_name (t : transition) =
-  {
-    cc_to_state = t.to_state;
-    cc_action = t.action;
-    cc_messages = action_messages t.action;
-    cc_guard = t.guard;
-    cc_maybe_offers = t.maybe_offers;
-    cc_changed = t.to_state <> t.from_state || t.action <> Epsilon;
-    cc_debug =
-      Printf.sprintf "%s:s%d --[%s]--> s%d" component_name t.from_state
-        (html_of_action t.action) t.to_state;
-    cc_transition = Some t;
-  }
-
-let passive_choice input state_id =
-  let st = Hashtbl.find input.op_automaton.states state_id in
-  {
-    cc_to_state = state_id;
-    cc_action = Epsilon;
-    cc_messages = MsgSet.empty;
-    cc_guard = any_guard;
-    cc_maybe_offers = st.maybe_ready;
-    cc_changed = false;
-    cc_debug = Printf.sprintf "%s:s%d stays" input.op_member_id state_id;
-    cc_transition = None;
-  }
-
-let reaction_transition (t : transition) =
-  match t.action with
-  | Messages _ -> true
-  | Epsilon -> not (guard_is_any t.guard)
-  | _ -> false
-
-let reaction_choices outgoing input state_id =
-  passive_choice input state_id
-  :: (get_outgoing_from_index outgoing state_id
-     |> List.filter reaction_transition
-     |> List.map (choice_of_transition input.op_member_id))
-
-let silent_transition (t : transition) =
-  match t.action with
-  | Epsilon | FairBranch _ -> guard_is_any t.guard
-  | _ -> false
-
-let env_debug env =
-  Printf.sprintf "Imm=%s; F=%s; clock=%b" (format_msgset env.imm)
-    (format_msgset env.future) env.clock
-
-let local_env_for_reaction inputs internal_messages boundary current_arr choices i =
-  let own_messages = inputs.(i).op_messages in
-  let partner_now =
-    Array.mapi
-      (fun j state_id ->
-        if i = j then MsgSet.empty
-        else
-          let st = Hashtbl.find inputs.(j).op_automaton.states state_id in
-          MsgSet.inter internal_messages st.head)
-      current_arr
-    |> Array.to_list |> msgset_union_list
-  in
-  let partner_future =
-    Array.mapi
-      (fun j choice ->
-        if i = j then MsgSet.empty
-        else MsgSet.inter internal_messages choice.cc_maybe_offers)
-      choices
-    |> Array.to_list |> msgset_union_list
-  in
-  let imm =
-    MsgSet.union (MsgSet.inter boundary.be_now own_messages) partner_now
-    |> MsgSet.inter own_messages
-  in
-  let future =
-    MsgSet.union (MsgSet.inter boundary.be_future own_messages) partner_future
-    |> fun set -> MsgSet.diff set imm
-    |> MsgSet.inter own_messages
-  in
-  { imm; future; clock = false }
-
-let local_env_for_clock inputs internal_messages boundary current_arr i =
-  let own_messages = inputs.(i).op_messages in
-  let partner_now =
-    Array.mapi
-      (fun j state_id ->
-        if i = j then MsgSet.empty
-        else
-          let st = Hashtbl.find inputs.(j).op_automaton.states state_id in
-          MsgSet.inter internal_messages st.head)
-      current_arr
-    |> Array.to_list |> msgset_union_list
-  in
-  let partner_future =
-    Array.mapi
-      (fun j state_id ->
-        if i = j then MsgSet.empty
-        else
-          let st = Hashtbl.find inputs.(j).op_automaton.states state_id in
-          MsgSet.inter internal_messages st.maybe_ready)
-      current_arr
-    |> Array.to_list |> msgset_union_list
-  in
-  let imm =
-    MsgSet.union (MsgSet.inter boundary.be_now own_messages) partner_now
-    |> MsgSet.inter own_messages
-  in
-  let future =
-    MsgSet.union (MsgSet.inter boundary.be_future own_messages) partner_future
-    |> fun set -> MsgSet.diff set imm
-    |> MsgSet.inter own_messages
-  in
-  { imm; future; clock = true }
-
-let local_env_for_progress inputs internal_messages boundary current_arr i =
-  let env =
-    local_env_for_clock inputs internal_messages boundary current_arr i
-  in
-  { env with clock = false }
-
-let choice_enabled inputs current_arr env i choice =
-  match choice.cc_transition with
-  | Some _ -> guard_satisfied env choice.cc_guard
-  | None ->
-      let st = Hashtbl.find inputs.(i).op_automaton.states current_arr.(i) in
-      MsgSet.disjoint st.head env.imm
-
-let sync_ok internal_messages choices =
-  let internal_actions =
-    choices |> Array.to_list |> List.map (fun choice -> choice.cc_messages)
-    |> msgset_union_list |> MsgSet.inter internal_messages
-  in
-  MsgSet.for_all
-    (fun msg ->
-      Array.fold_left
-        (fun count choice ->
-          if MsgSet.mem msg choice.cc_messages then count + 1 else count)
-        0 choices
-      >= 2)
-    internal_actions
-
-let boundary_env_of_choices boundary_messages choices =
-  (* SyncEdges uses the union of component transition environments. *)
-  let required_now =
-    choices |> Array.to_list
-    |> List.filter_map (fun choice ->
-           match choice.cc_transition with
-           | Some _ -> Some choice.cc_guard.require_now
-           | None -> None)
-    |> msgset_union_list
-    |> MsgSet.inter boundary_messages
-  in
-  (* Boundary heads that may still arrive this cycle: the offer/xoffer waiting
-     guard records them in future_intersects, and any boundary message a
-     component may still offer lives in cc_maybe_offers. These are the F-side
-     availabilities the environment (player node) controls. *)
-  let possible_future =
-    choices |> Array.to_list
-    |> List.concat_map (fun choice ->
-           choice.cc_guard.future_intersects
-           @ [ choice.cc_maybe_offers ])
-    |> msgset_union_list
-    |> MsgSet.inter boundary_messages
-    |> fun set -> MsgSet.diff set required_now
-  in
-  { be_now = required_now; be_future = possible_future; be_clock = false }
-
-let product_transition_debug internal_messages boundary choices envs =
-  let component_lines =
-    Array.mapi
-      (fun i choice ->
-        Printf.sprintf "%s | %s" choice.cc_debug (env_debug envs.(i)))
-      choices
-    |> Array.to_list
-  in
-  String.concat "\n"
-    ([
-       "I = " ^ format_msgset internal_messages;
-       "Boundary " ^ string_of_boundary_env boundary;
-     ]
-    @ component_lines)
-
-let build_open_product name progress_ids inputs =
-  Array.iter (fun input -> recompute_state_summaries input.op_automaton) inputs;
-  let product = TypeAutomaton.create () in
-  TypeAutomaton.change_name name product;
+(* Open product = the SAME unified synchronous product used by the closed/internal
+   cases, driven with the open interface as its boundary. The internal messages
+   (owned by ≥2 members) are synchronized; the rest are boundary, and
+   unified_product records each transition's boundary projection E_B = (U, F) in
+   boundary_now/boundary_future (plus the pending boundary guard) for the arena. *)
+let build_open_product ?(verbose = false) name progress_ids inputs =
+  let automata = Array.map (fun input -> input.op_automaton) inputs in
   let internal_messages = internal_messages_of_inputs inputs in
   let all_messages = all_messages_of_inputs inputs in
   let boundary_messages = MsgSet.diff all_messages internal_messages in
-  let state_map = Hashtbl.create 32 in
-  let start_vector =
-    Array.to_list (Array.map (fun input -> input.op_automaton.start_state) inputs)
+  let product =
+    unified_product ~progress_ids ~verbose automata ~boundary_messages
+      ~use_env:true
   in
-  Hashtbl.add state_map start_vector product.start_state;
-  let outgoing =
-    Array.map
-      (fun input -> build_outgoing_index input.op_automaton.transitions)
-      inputs
-  in
-  let get_product_state states =
-    match Hashtbl.find_opt state_map states with
-    | Some id -> id
-    | None ->
-        let id = TypeAutomaton.new_state product false in
-        Hashtbl.add state_map states id;
-        id
-  in
-  let queue = Queue.create () in
-  let visited = Hashtbl.create 32 in
-  Queue.add start_vector queue;
-  let enqueue states =
-    if not (Hashtbl.mem visited states) then Queue.add states queue
-  in
-  let product_components current_arr =
-    Array.mapi
-      (fun i state_id ->
-        let st = Hashtbl.find inputs.(i).op_automaton.states state_id in
-        {
-          pc_name = inputs.(i).op_member_id;
-          pc_state = state_id;
-          pc_residual = st.residual_type;
-        })
-      current_arr
-    |> Array.to_list
-  in
-  let add_product_transition ?(guard = any_guard) ?(boundary = empty_boundary_env)
-      ?transition_debug_info from_vec to_vec action =
-    let from_id = get_product_state from_vec in
-    let to_id = get_product_state to_vec in
-    TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
-      ~boundary_future:boundary.be_future ?transition_debug_info product from_id
-      to_id action guard;
-    if to_vec <> from_vec then enqueue to_vec
-  in
-  while not (Queue.is_empty queue) do
-    let current = Queue.take queue in
-    if not (Hashtbl.mem visited current) then (
-      Hashtbl.add visited current ();
-      let product_state = get_product_state current in
-      let current_arr = Array.of_list current in
-      let product_state_info = Hashtbl.find product.states product_state in
-      set_product_state_debug product product_state
-        (product_components current_arr);
-      product_state_info.is_fair <-
-        Array.mapi
-          (fun i state_id ->
-            (Hashtbl.find inputs.(i).op_automaton.states state_id).is_fair)
-          current_arr
-        |> Array.to_list |> List.exists (fun x -> x);
-      product_state_info.adversary <-
-        Array.mapi
-          (fun i state_id ->
-            (Hashtbl.find inputs.(i).op_automaton.states state_id).adversary)
-          current_arr
-        |> Array.to_list |> List.exists (fun x -> x);
-      let all_accepting =
-        Array.mapi
-          (fun i state_id ->
-            (Hashtbl.find inputs.(i).op_automaton.states state_id).accepting)
-          current_arr
-        |> Array.to_list |> List.for_all (fun x -> x)
-      in
-      if all_accepting then (
-        product_state_info.accepting <- true;
-        add_progress_transition product product_state product.start_state
-          progress_ids)
-      else (
-        Array.iteri
-          (fun i state_id ->
-            get_outgoing_from_index outgoing.(i) state_id
-            |> List.filter silent_transition
-            |> List.iter (fun t ->
-                   let next =
-                     List.mapi
-                       (fun j state -> if i = j then t.to_state else state)
-                       current
-                   in
-                   add_product_transition current next t.action))
-          current_arr;
-        let choices_by_component =
-          Array.mapi
-            (fun i state_id -> reaction_choices outgoing.(i) inputs.(i) state_id)
-          current_arr
-          |> Array.to_list
-        in
-        choices_by_component |> cartesian_product
-        |> List.iter (fun combo ->
-               let choices = Array.of_list combo in
-               let changed =
-                 Array.exists (fun choice -> choice.cc_changed) choices
-               in
-               let combined_messages =
-                 choices |> Array.to_list
-                 |> List.map (fun choice -> choice.cc_messages)
-                 |> msgset_union_list
-               in
-               if changed || msgset_nonempty combined_messages then
-                 let boundary =
-                   boundary_env_of_choices boundary_messages choices
-                 in
-                 let envs =
-                   Array.mapi
-                     (fun i _ ->
-                       local_env_for_reaction inputs internal_messages boundary
-                         current_arr choices i)
-                     choices
-                 in
-                 if
-                   Array.mapi
-                     (fun i choice ->
-                       choice_enabled inputs current_arr envs.(i) i choice)
-                     choices
-                   |> Array.to_list |> List.for_all (fun x -> x)
-                   && sync_ok internal_messages choices
-                 then
-                   let next =
-                     choices |> Array.to_list
-                     |> List.map (fun choice -> choice.cc_to_state)
-                   in
-                   let action =
-                     if MsgSet.is_empty combined_messages then Epsilon
-                     else Messages combined_messages
-                   in
-                   let guard =
-                     choices |> Array.to_list
-                     |> List.filter_map (fun choice ->
-                            match choice.cc_transition with
-                            | Some _ -> Some choice.cc_guard
-                            | None -> None)
-                     |> merge_guards
-                   in
-                   let debug =
-                     product_transition_debug internal_messages boundary choices
-                       envs
-                   in
-                   add_product_transition ~guard ~boundary
-                     ~transition_debug_info:debug current next action);
-        let has_ordinary_non_clock_move =
-          List.exists
-            (fun t -> t.from_state = product_state && not (transition_is_clock t))
-            product.transitions
-        in
-        if not has_ordinary_non_clock_move then
-          let boundary = empty_boundary_env in
-          let local_envs =
-            Array.mapi
-              (fun i _ ->
-                local_env_for_progress inputs internal_messages boundary
-                  current_arr i)
-              current_arr
-          in
-          Array.iteri
-            (fun i state_id ->
-              get_outgoing_from_index outgoing.(i) state_id
-              |> List.iter (fun t ->
-                     match t.action with
-                     | Progress _ when guard_satisfied local_envs.(i) t.guard ->
-                         let next =
-                           List.mapi
-                             (fun j state -> if i = j then t.to_state else state)
-                             current
-                         in
-                         let debug =
-                           product_transition_debug internal_messages boundary
-                             [| choice_of_transition inputs.(i).op_member_id t |]
-                             [| local_envs.(i) |]
-                         in
-                         add_product_transition ~guard:t.guard ~boundary
-                           ~transition_debug_info:debug current next t.action
-                     | _ -> ()))
-            current_arr;
-        let clock_choices =
-          Array.mapi
-            (fun i state_id ->
-              get_outgoing_from_index outgoing.(i) state_id
-              |> List.filter_map (fun t ->
-                     match t.action with
-                     | Clock -> Some t
-                     | _ -> None))
-            current_arr
-          |> Array.to_list
-        in
-        if List.for_all (fun choices -> choices <> []) clock_choices then
-          clock_choices |> cartesian_product
-          |> List.iter (fun combo ->
-                 let transitions = Array.of_list combo in
-                 let boundary = empty_boundary_env in
-                 let envs =
-                   Array.mapi
-                     (fun i _ ->
-                       local_env_for_clock inputs internal_messages boundary
-                         current_arr i)
-                     transitions
-                 in
-                 if
-                   Array.mapi
-                     (fun i transition ->
-                       guard_satisfied envs.(i) transition.guard)
-                     transitions
-                   |> Array.to_list |> List.for_all (fun x -> x)
-                 then
-                   let next =
-                     transitions |> Array.to_list
-                     |> List.map (fun t -> t.to_state)
-                   in
-                   let guard =
-                     transitions |> Array.to_list
-                     |> List.map (fun t -> t.guard)
-                     |> merge_guards
-                   in
-                   let debug =
-                     let choices =
-                       Array.mapi
-                         (fun i transition ->
-                           choice_of_transition inputs.(i).op_member_id
-                             transition)
-                         transitions
-                     in
-                     product_transition_debug internal_messages boundary choices
-                       envs
-                   in
-                   add_product_transition ~guard ~boundary
-                     ~transition_debug_info:debug current next Clock)))
-  done;
+  TypeAutomaton.change_name name product;
   recompute_state_summaries product;
   (product, internal_messages, boundary_messages)
 
@@ -968,38 +552,17 @@ let entry_nodes_by_product_state arena =
     arena.arena_nodes;
   table
 
-(* Phase 5: keep the winning behaviour of the product and hide the interface we
-   just checked. The result is the open type of the composed subsystem. *)
+(* Phase 5: the residual is the WHOLE composed product with the just-checked
+   internal interface hidden. We do NOT prune to the game's winning region or to
+   the player's selected boundary moves: the game verdict only decides
+   compatibility (and stops the pool at the first failure), while the residual
+   must expose the full open behaviour so the next composition step's game sees
+   the true subsystem. Only hide_internal_action (internal Messages -> Epsilon)
+   and the boundary guard projection are applied. *)
 let build_residual_automaton residual_nm product internal_messages
-    boundary_messages arena game_result =
+    boundary_messages _arena _game_result =
   let residual = TypeAutomaton.create () in
   TypeAutomaton.change_name residual_nm residual;
-  let entry_of_state = entry_nodes_by_product_state arena in
-  let state_is_winning state_id =
-    match Hashtbl.find_opt entry_of_state state_id with
-    | Some node_id -> StringSet.mem node_id game_result.winning_nodes
-    | None -> false
-  in
-  (* Player states retain only the boundary moves the player actually selected. *)
-  let selected_boundaries = Hashtbl.create 16 in
-  List.iter
-    (fun (edge : arena_edge) ->
-      match edge.arena_edge_label with
-      | BoundaryChoice boundary ->
-          Hashtbl.replace selected_boundaries (edge.arena_edge_from, boundary) ()
-      | ActionLabel _ | EpsilonLabel -> ())
-    game_result.selected_player_edges;
-  let player_state state_id =
-    match Hashtbl.find_opt entry_of_state state_id with
-    | Some node_id ->
-        (match (Hashtbl.find (node_table arena) node_id).arena_node_kind with
-        | ArenaPlayer -> Some node_id
-        | _ -> None)
-    | None -> None
-  in
-  let boundary_selected_for player_node boundary =
-    Hashtbl.mem selected_boundaries (player_node, boundary)
-  in
   let state_map = Hashtbl.create 32 in
   let copy_state product_state =
     match Hashtbl.find_opt state_map product_state with
@@ -1015,37 +578,34 @@ let build_residual_automaton residual_nm product internal_messages
         dst.accepting <- src.accepting;
         dst.is_fair <- src.is_fair;
         dst.adversary <- src.adversary;
-        dst.is_winning <- true;
         dst.residual_type <- src.residual_type;
         dst.product_components <- src.product_components;
         dst.debug_info <- src.debug_info;
         residual_state
   in
-  ignore (copy_state product.start_state);
+  (* Copy every product state so the residual keeps the full graph. *)
+  Hashtbl.iter (fun product_state _ -> ignore (copy_state product_state))
+    product.states;
   List.iter
     (fun (t : transition) ->
-      let keep_endpoints =
-        state_is_winning t.from_state && state_is_winning t.to_state
-      in
-      let keep_player_choice =
-        match player_state t.from_state with
-        | Some player_node ->
-            boundary_selected_for player_node (boundary_of_transition t)
-        | None -> true
-      in
-      if keep_endpoints && keep_player_choice then (
-        let boundary = boundary_of_transition t in
-        let from_state = copy_state t.from_state in
-        let to_state = copy_state t.to_state in
-        let action = hide_internal_action internal_messages t.action in
-        let guard = residual_guard boundary_messages boundary t.guard in
-        TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
-          ~boundary_future:boundary.be_future
-          ?transition_debug_info:t.transition_debug_info residual from_state
-          to_state action guard))
+      let boundary = boundary_of_transition t in
+      let from_state = copy_state t.from_state in
+      let to_state = copy_state t.to_state in
+      let action = hide_internal_action internal_messages t.action in
+      (* Carry forward the PENDING (boundary) guard, not the already-discharged
+         internal guard: it is the still-live boundary constraint the next
+         composition step must test. *)
+      let guard = residual_guard boundary_messages boundary t.boundary_guard in
+      (* Keep the still-visible (boundary) offers so the next composition step's
+         local environment can see what this subsystem presents. Internal offers
+         were just hidden and must not leak into the next round. *)
+      let offers = MsgSet.diff t.offers internal_messages in
+      TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
+        ~boundary_future:boundary.be_future ~offers
+        ?transition_debug_info:t.transition_debug_info residual from_state
+        to_state action guard)
     product.transitions;
   recompute_state_summaries residual;
-  List.iter (fun (t : transition) -> t.in_winning <- true) residual.transitions;
   residual
 
 (* One incremental composition step: compose, build the arena, solve the game,
@@ -1054,7 +614,7 @@ let build_residual_automaton residual_nm product internal_messages
 let build_composition_step ?(verbose = false) composition_name residual_nm
     progress_ids inputs =
   let product, internal_messages, boundary_messages =
-    build_open_product composition_name progress_ids inputs
+    build_open_product ~verbose composition_name progress_ids inputs
   in
   let product_path = product_dot_path composition_name in
   write_automaton_dot ~verbose product_path product;
@@ -1131,7 +691,7 @@ let build_open_artifacts ?(verbose = false) context =
       (* A single-member pool has nothing to compose; still build its product. *)
       if rest = [] then (
         let product, internal_messages, boundary_messages =
-          build_open_product first.member_id !progress_ids
+          build_open_product ~verbose first.member_id !progress_ids
             [| !composite_input |]
         in
         let product_path = product_dot_path first.member_id in

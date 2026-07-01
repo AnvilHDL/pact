@@ -175,6 +175,10 @@ type transition = {
   guard : guard;
   boundary_now : MsgSet.t;
   boundary_future : MsgSet.t;
+  (* Pending (boundary-projected) guard: the part of the merged product guard
+     that concerns boundary messages and is left for the environment to
+     discharge. guard holds the satisfied (internal-projected) part. Debug only. *)
+  boundary_guard : guard;
   offers : MsgSet.t;
   mutable maybe_offers : MsgSet.t;
   mutable in_winning : bool;
@@ -293,7 +297,8 @@ module TypeAutomaton = struct
     (Hashtbl.find auto.states state_id).adversary <- true
 
   let add_transition_full ?(boundary_now = MsgSet.empty)
-      ?(boundary_future = MsgSet.empty) ?(offers = MsgSet.empty) ?transition_debug_info auto from_state
+      ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard)
+      ?(offers = MsgSet.empty) ?transition_debug_info auto from_state
       to_state action guard =
     let trans =
       {
@@ -303,6 +308,7 @@ module TypeAutomaton = struct
         guard;
         boundary_now;
         boundary_future;
+        boundary_guard;
         maybe_offers = MsgSet.empty;
         offers;
         in_winning = false;
@@ -492,6 +498,7 @@ let import_automaton_into ~dst ~src ~at_start =
       TypeAutomaton.add_transition_full
         ~boundary_now:t.boundary_now
         ~boundary_future:t.boundary_future
+        ~boundary_guard:t.boundary_guard
         ~offers:t.offers
         ?transition_debug_info:t.transition_debug_info dst
         (Hashtbl.find state_map t.from_state)
@@ -573,10 +580,13 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
   let enqueue states =
     if not (Hashtbl.mem visited states) then Queue.add states queue
   in
-  let add_product_transition from_vec to_vec action guard offer =
+  let add_product_transition ?(boundary_now = MsgSet.empty)
+      ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard) from_vec
+      to_vec action guard offer =
     let from_id = get_product_state from_vec in
     let to_id = get_product_state to_vec in
-    TypeAutomaton.add_transition prod from_id to_id action guard offer;
+    TypeAutomaton.add_transition_full ~boundary_now ~boundary_future
+      ~boundary_guard ~offers:offer prod from_id to_id action guard;
     if to_vec <> from_vec then enqueue to_vec
   in
   let debug_env env =
@@ -767,6 +777,33 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                 |> List.map (fun (_, _, _, _, offers, _) -> offers)
                 |> List.fold_left MsgSet.union MsgSet.empty
               in
+              let combined_maybe_offers =
+                combo
+                |> List.map (fun (_, _, _, _, _, maybe_offers) -> maybe_offers)
+                |> List.fold_left MsgSet.union MsgSet.empty
+              in
+
+              (* Boundary projection E_B = (U, F): the mirror of STEP 1's internal
+                 projection. The same merged combo guard is projected onto the
+                 boundary messages (the pending part left for the environment).
+                 U = the boundary messages this round genuinely requires now
+                 (guard.require_now on the boundary side); F = boundary messages
+                 that may still arrive this cycle (guard.future_intersects plus
+                 the components' maybe_offers), minus U. Offers presented now do
+                 NOT force a boundary message into U — only require_now does, so
+                 a combo that fires just m1 does not spuriously demand m2 from the
+                 environment. Empty when boundary_messages = ∅ (closed). *)
+              let merged_guard = merge_guards guards in
+              let boundary_guard =
+                project_guard_to boundary_messages merged_guard
+              in
+              let be_now = boundary_guard.require_now in
+              let be_future =
+                boundary_guard.future_intersects
+                |> List.fold_left MsgSet.union
+                     (MsgSet.inter combined_maybe_offers boundary_messages)
+                |> fun set -> MsgSet.diff set be_now
+              in
 
               (* Suppress the trivial all-epsilon self-loop that changes nothing and has no
                  guard (it carries no information); keep guarded epsilon waits. *)
@@ -826,26 +863,58 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                   }));
 
               if picked then (
-                let guard = merge_guards guards in
+                (* The transition carries the FULL merged guard (the closed game
+                   and dead-end analysis rely on it). The boundary (pending) part
+                   is kept separately in boundary_guard for the residual/next-step
+                   composition; the internal part is what STEP 1 already checked. *)
+                let guard = merged_guard in
                 let state_key = String.concat "," (List.map string_of_int next) in
                 let action_key = string_of_action combined_action in
                 let key = state_key ^ "|" ^ action_key in
                 match Hashtbl.find_opt grouped key with
-                | Some (stored_next, stored_action, stored_offers, existing_guard) ->
+                | Some
+                    ( stored_next,
+                      stored_action,
+                      stored_offers,
+                      existing_guard,
+                      stored_be_now,
+                      stored_be_future,
+                      stored_boundary_guard ) ->
+                    (* Merging combos into one grouped edge: union the boundary
+                       availabilities and merge the pending guards, matching how
+                       offers/guards already merge here. *)
                     Hashtbl.replace grouped key
-                      (stored_next, stored_action,
-                       MsgSet.union stored_offers combined_offers,
-                       merge_guards [ existing_guard; guard ])
+                      ( stored_next,
+                        stored_action,
+                        MsgSet.union stored_offers combined_offers,
+                        merge_guards [ existing_guard; guard ],
+                        MsgSet.union stored_be_now be_now,
+                        MsgSet.union stored_be_future be_future,
+                        merge_guards [ stored_boundary_guard; boundary_guard ] )
                 | None ->
                     Hashtbl.add grouped key
-                      (next, combined_action, combined_offers, guard)
+                      ( next,
+                        combined_action,
+                        combined_offers,
+                        guard,
+                        be_now,
+                        be_future,
+                        boundary_guard )
               ))
             combos;
           (* Emit one transition per grouped (next_state, action). *)
           Hashtbl.iter
-            (fun _key (next, combined_action, combined_offers, guard) ->
-              add_product_transition current next combined_action guard
-                combined_offers)
+            (fun _key
+                 ( next,
+                   combined_action,
+                   combined_offers,
+                   guard,
+                   be_now,
+                   be_future,
+                   boundary_guard ) ->
+              add_product_transition ~boundary_now:be_now
+                ~boundary_future:be_future ~boundary_guard current next
+                combined_action guard combined_offers)
             grouped))
   done;
   recompute_state_summaries prod;
@@ -1030,7 +1099,14 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
         let base =
           if (not show_guards) || guard_is_any t.guard then
             html_of_action t.action
-          else html_of_action t.action ^ "<BR/>" ^ html_of_guard t.guard
+          else
+            html_of_action t.action ^ "<BR/>satisfied: " ^ html_of_guard t.guard
+        in
+        (* The pending (boundary-projected) guard is what the environment still
+           has to discharge; show it separately from the satisfied guard. *)
+        let pending =
+          if (not show_guards) || guard_is_any t.boundary_guard then ""
+          else "<BR/>pending: " ^ html_of_guard t.boundary_guard
         in
         let boundary =
           html_of_boundary_projection ~show_empty:show_empty_boundary t
@@ -1044,7 +1120,7 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
           | true, None -> ""
           | true, Some info -> "<BR/>" ^ html_of_text_block info
         in
-        base ^ offers ^ boundary ^ debug
+        base ^ pending ^ offers ^ boundary ^ debug
       in
       Printf.fprintf out "  %d -> %d [label=<%s>];\n" t.from_state
         t.to_state label)

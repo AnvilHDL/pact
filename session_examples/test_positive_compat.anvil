@@ -51,9 +51,9 @@ pool p9 { // true
 
 pool p10 { // true
     ep_le -- ep_ri : ch;
-    ip101 : #ep.m1 || #ep.m2 ,
-    ip102 : #ep.m1,
-    ip103 : #ep.m2
+    ip101 : (#ep.m1 || #ep.m2);#1,
+    ip102 : #ep.m1;#1,
+    ip103 : #ep.m2;#1
 }
 
 pool p11 { // true
