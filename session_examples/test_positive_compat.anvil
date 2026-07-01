@@ -62,12 +62,13 @@ pool p11 { // true
     ip112 : F #ep.m1 
 }
 
-pool p12 { // false
+pool p12 {
     ep_le -- ep_ri : ch;
-    in121 : (ep.m1;ep.m2) + (ep.m2;ep.m1),
-    in122 : ep.m1,
-    in123 : ep.m2
+    in121 : ((ep.m1;ep.m2) + (ep.m2;ep.m1));#1,
+    in122 : ep.m1;#1,
+    in123 : ep.m2;#1
 }
+
 pool p13 {
     ep_le -- ep_ri : ch;
     ip131 : ep.req;#4,
@@ -80,10 +81,10 @@ pool p14 {
 }
 pool p15 { // false
     ep_le -- ep_ri : ch;
-    in151 : ep.m1;&(ep.m2,ep.m3),
-    in152 : ep.m1,
-    in153 : ^(ep.m2,*),
-    in154 : ^(ep.m3,*)
+    in151 : ep.m1;&(ep.m2,ep.m3);#1,
+    in152 : ep.m1;#1,
+    in153 : ^(ep.m2,*);#1,
+    in154 : ^(ep.m3,*);#1
 }
 
 pool p16{

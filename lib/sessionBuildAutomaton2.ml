@@ -226,18 +226,23 @@ let rec build_automaton (name : identifier option) (st : session_type)
            (ā ∉ E, i.e. m ∉ Imm(E)). In the sync product every component must pick
            a transition; this guarded self-loop is the only legal "stay", so when
            m is available the component is forced to fire it (maximality).
-           No clock condition: only the clock node's own self-loop forbids #. *)
-        TypeAutomaton.add_transition auto current current Epsilon
-          { any_guard with forbid_now = msg_set };
+           A blocking message is really ^(m, * : #1): its "stay" self-loop keeps waiting
+           only while m may still arrive this cycle (F ∩ {m} ≠ ∅), matching the xoffer
+           construction; a non-blocking message has no future obligation. *)
         if action_is_blocking act then begin
-          (* Blocking messages may wait for a clock only while the peer is absent. *)
+          TypeAutomaton.add_transition auto current current Epsilon
+            { any_guard with forbid_now = msg_set; future_intersects = [ msg_set ] };
+          (* Blocking messages may wait for a clock only once m can no longer arrive. *)
           let next_i = TypeAutomaton.new_state auto false in
           set_residual_type auto next_i (delay_then 1 sty);
           TypeAutomaton.add_transition auto current next_i Epsilon
             (xoffer_else_guard ~require_clock:false [ msg_set ] msg_set);
           TypeAutomaton.add_transition auto next_i current Clock
             { any_guard with require_clock = true; forbid_clock = false }
-        end;
+        end
+        else
+          TypeAutomaton.add_transition auto current current Epsilon
+            { any_guard with forbid_now = msg_set };
         [ next ]
     | StyAtom (AtomConjunction acts) ->
         mark_nonfinal ();
@@ -314,6 +319,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
         TypeAutomaton.add_transition auto current next_i Epsilon any_guard;
         TypeAutomaton.add_transition auto next_i current Clock
           { any_guard with require_clock = true };
+                  TypeAutomaton.add_transition auto next_i next_i Epsilon
+          { any_guard with forbid_clock = true };
         build body body_start rec_env let_env
     | StyXOffer offerings ->
         build_xoffer offerings current rec_env let_env
@@ -322,10 +329,28 @@ let rec build_automaton (name : identifier option) (st : session_type)
     | StyParallel (left, right) ->
         mark_nonfinal ();
         (* PDF §5.2 (τ = τ1 ∥ τ2): δ_τ = SyncEdges(τ1, τ2). Parallel inside one
-           type is the same sync product as the pool. *)
+           type is the same sync product as the pool.
+           Preprocessing: add unguarded epsilon self-loops to final states before product.
+           Product: cartesian product pairs these naturally.
+           Postprocessing: remove the unguarded epsilon self-loops from final states. *)
         let left_auto = build_automaton None left default_span in
         let right_auto = build_automaton None right default_span in
-        let product = async_product [| left_auto; right_auto |] in
+        SessionAutomaton2.add_final_state_epsilon_loops left_auto;
+        SessionAutomaton2.add_final_state_epsilon_loops right_auto;
+        (* Internal parallel: ALL messages are boundary (no sync pairing required);
+           use the environment so guarded waits still resolve against the partner. *)
+        let all_messages =
+          SessionAutomaton2.MsgSet.union
+            (SessionAutomaton2.messages_of_automaton left_auto)
+            (SessionAutomaton2.messages_of_automaton right_auto)
+        in
+        let product =
+          SessionAutomaton2.unified_product [| left_auto; right_auto |]
+            ~boundary_messages:all_messages ~use_env:true
+        in
+        (* Remove only the unguarded epsilon self-loops on accepting states of the product.
+           These are the ones we added for preprocessing; product-generated epsilons have guards. *)
+        SessionAutomaton2.remove_final_state_epsilon_loops product;
         import_automaton_into ~dst:auto ~src:product ~at_start:current
     | StyRec (id, body) ->
         mark_nonfinal ();

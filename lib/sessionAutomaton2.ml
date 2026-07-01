@@ -95,6 +95,25 @@ let guard_satisfied env g =
   && MsgSet.disjoint g.future_disjoint env.future
   && List.for_all future_group g.future_intersects
 
+(* Project a guard onto a message universe: keep only conditions about those messages.
+   Boundary conditions are dropped (they concern the outside environment, not partners). *)
+let project_guard_to universe g =
+  let inter s = MsgSet.inter s universe in
+  let inter_groups groups =
+    groups
+    |> List.map inter
+    |> List.filter (fun s -> not (MsgSet.is_empty s))
+  in
+  {
+    require_now = inter g.require_now;
+    forbid_now = inter g.forbid_now;
+    missing_now_groups = inter_groups g.missing_now_groups;
+    require_clock = g.require_clock;
+    forbid_clock = g.forbid_clock;
+    future_disjoint = inter g.future_disjoint;
+    future_intersects = inter_groups g.future_intersects;
+  }
+
 let string_of_guard g =
   let parts = ref [] in
   let fmt_msgset msgs = "{" ^ string_of_msgset msgs ^ "}" in
@@ -134,7 +153,8 @@ type product_component = {
   pc_residual : string option;
 }
 
-(* Head and maybe_ready cache the formal Head/MaybeReady sets. *)
+(* Head and maybe_ready cache the formal Head/MaybeReady sets.
+   head_clock records whether the clock (#) is in this state's Head (PDF: Head(cycle) = {#}). *)
 type state = {
   id : int;
   mutable accepting : bool;
@@ -142,6 +162,7 @@ type state = {
   mutable is_fair : bool;
   mutable adversary : bool;
   mutable head : MsgSet.t;
+  mutable head_clock : bool;
   mutable maybe_ready : MsgSet.t;
   mutable residual_type : string option;
   mutable product_components : product_component list;
@@ -227,6 +248,7 @@ module TypeAutomaton = struct
         is_fair = false;
         adversary = false;
         head = MsgSet.empty;
+        head_clock = false;
         maybe_ready = MsgSet.empty;
         residual_type = None;
         product_components = [];
@@ -253,6 +275,7 @@ module TypeAutomaton = struct
         is_fair = false;
         adversary = false;
         head = MsgSet.empty;
+        head_clock = false;
         maybe_ready = MsgSet.empty;
         residual_type = None;
         product_components = [];
@@ -380,6 +403,9 @@ let recompute_state_summaries auto =
   Hashtbl.iter
     (fun _ st ->
       st.head <- MsgSet.empty;
+      (* Head(cycle) = {#}: a finished (accepting) state also does not obstruct the clock
+         (PDF §2.3 terminating-process rule), so it is treated as offering the clock. *)
+      st.head_clock <- st.accepting;
       st.maybe_ready <- MsgSet.empty)
     auto.states;
   List.iter
@@ -389,6 +415,10 @@ let recompute_state_summaries auto =
           let st = Hashtbl.find auto.states t.from_state in
           st.head <- MsgSet.union st.head msgs;
           st.maybe_ready <- MsgSet.union st.maybe_ready msgs
+      | Clock ->
+          (* The clock is part of Head. *)
+          let st = Hashtbl.find auto.states t.from_state in
+          st.head_clock <- true
       | _ -> ())
     auto.transitions;
   let changed = ref true in
@@ -449,6 +479,7 @@ let import_automaton_into ~dst ~src ~at_start =
       dst_st.is_fair <- src_st.is_fair;
       dst_st.adversary <- src_st.adversary;
       dst_st.head <- src_st.head;
+      dst_st.head_clock <- src_st.head_clock;
       dst_st.maybe_ready <- src_st.maybe_ready;
       dst_st.residual_type <- src_st.residual_type;
       dst_st.product_components <- src_st.product_components;
@@ -502,7 +533,12 @@ let add_progress_transition auto from_state to_state ids =
     { any_guard with forbid_clock = true }
 
 (* Closed product: all sync_messages must be consumed internally. *)
-let closed_product ?progress_ids automata sync_messages =
+(* Unified synchronous product for internal parallel, closed, and open compositions.
+   - boundary_messages: messages visible to the environment (open boundary); empty for internal/closed.
+   - internal_messages = all_messages - boundary_messages must be paired (≥2 components).
+   - use_env: if true, compute environments from partner components' Head/MaybeReady (closed/open).
+     if false, use simple cartesian product (internal parallel). *)
+let unified_product ?progress_ids automata ~boundary_messages ~use_env =
   Array.iter recompute_state_summaries automata;
   let prod = TypeAutomaton.create () in
   let state_map = Hashtbl.create 32 in
@@ -512,6 +548,11 @@ let closed_product ?progress_ids automata sync_messages =
     Array.map (fun auto -> build_outgoing_index auto.transitions) automata
   in
   let own_messages = Array.map messages_of_automaton automata in
+  (* Compute internal messages: all messages except boundary. *)
+  let all_messages =
+    Array.fold_left (fun acc msgs -> MsgSet.union acc msgs) MsgSet.empty own_messages
+  in
+  let internal_messages = MsgSet.diff all_messages boundary_messages in
   let get_product_state states =
     match Hashtbl.find_opt state_map states with
     | Some id -> id
@@ -533,6 +574,8 @@ let closed_product ?progress_ids automata sync_messages =
     if to_vec <> from_vec then enqueue to_vec
   in
   let sync_ok component_msgs combined =
+    (* Check that internal messages are paired (≥2 components for each internal msg). *)
+    let internal_in_combined = MsgSet.inter combined internal_messages in
     MsgSet.for_all
       (fun msg ->
         let count =
@@ -541,7 +584,7 @@ let closed_product ?progress_ids automata sync_messages =
             0 component_msgs
         in
         count >= 2)
-      combined
+      internal_in_combined
   in
   while not (Queue.is_empty queue) do
     let current = Queue.take queue in
@@ -585,283 +628,238 @@ let closed_product ?progress_ids automata sync_messages =
               append_state_debug prod_state_info
                 "All components are accepting, but no product progress transition was configured.")
       else (
-        Array.iteri
-          (fun i st_id ->
-            let outs = get_outgoing_from_index outgoing.(i) st_id in
-            List.iter
-              (fun t ->
-                match t.action with
-                | Epsilon | FairBranch _ when guard_is_any t.guard ->
-                    let next =
-                      List.mapi
-                        (fun j s -> if i = j then t.to_state else s)
-                        current
-                    in
-                    add_product_transition current next t.action t.guard
-                | _ -> ())
-              outs)
-          current_arr;
+        (* Unified sync product: every component picks exactly ONE outgoing transition
+           (its real transitions, including guarded self-loops — no synthetic passive).
+           We take the cartesian product, then for each combo:
+             - combine the actions (union messages; clock must be unanimous),
+             - merge the component guards,
+             - in use_env mode, drop the combo if any component's INTERNAL-message
+               guard is not satisfied by its local environment,
+             - apply the sync check (internal messages paired; clock all-or-none),
+           then group combos by (next_state, action) and merge their guards. *)
 
-        (* Partners' Head/MaybeReady sets become each component's local environment. *)
+        (* Local environments (used only in use_env mode) from partners' Head/MaybeReady,
+           projected to internal messages and the component's own alphabet.
+           The clock is part of Head (state.head_clock), so if every partner offers the clock
+           the local immediate environment contains {#} (PDF §2.3 LocalEnv). *)
         let local_envs =
           Array.mapi
             (fun i _st_id ->
               let imm = ref MsgSet.empty in
               let future = ref MsgSet.empty in
+              let all_partners_clock = ref true in
+              let has_partner = ref false in
               Array.iteri
                 (fun j other_id ->
                   if i <> j then (
+                    has_partner := true;
                     let other = Hashtbl.find automata.(j).states other_id in
                     imm := MsgSet.union !imm other.head;
-                    future := MsgSet.union !future other.maybe_ready))
+                    future := MsgSet.union !future other.maybe_ready;
+                    if not other.head_clock then all_partners_clock := false))
                 current_arr;
               let imm =
                 !imm
-                |> MsgSet.inter sync_messages
+                |> MsgSet.inter internal_messages
                 |> MsgSet.inter own_messages.(i)
               in
               let future =
                 !future
-                |> MsgSet.inter sync_messages
+                |> MsgSet.inter internal_messages
                 |> MsgSet.inter own_messages.(i)
                 |> fun f -> MsgSet.diff f imm
               in
-              { imm; future; clock = false })
+              (* Imm(E_i) = {#} when all partners offer the clock. *)
+              let clock = !has_partner && !all_partners_clock in
+              { imm; future; clock })
             current_arr
         in
-        let env_choices =
+
+        (* Per-component outgoing choices. Progress and Clock are treated as ordinary
+           choices in the cartesian product (Progress is emitted only from the accepting
+           product state above, so it does not appear here; Clock is handled here and its
+           all-or-none constraint is enforced during the sync check).
+           A finished (accepting) component vacuously participates in a clock round: it
+           offers a Clock-in-place choice so partners can still tick (PDF §2.3 skip rule /
+           terminating-process clock passthrough). *)
+        let component_choices =
           Array.mapi
-            (fun i st_id ->
-              let outs = get_outgoing_from_index outgoing.(i) st_id in
-              let passive =
-                {
-                  mc_to_state = st_id;
-                  mc_actions = MsgSet.empty;
-                  mc_changed = false;
-                }
-              in
-              let transition_choices =
-                outs
-                |> List.filter_map (fun t ->
-                       match t.action with
-                       | Messages _ | Epsilon
-                         when (not (guard_is_any t.guard))
-                              && guard_satisfied local_envs.(i) t.guard ->
-                           Some
-                             {
-                               mc_to_state = t.to_state;
-                               mc_actions = action_messages t.action;
-                               mc_changed =
-                                 t.to_state <> st_id || t.action <> Epsilon;
-                             }
-                       | _ -> None)
-              in
-              passive :: transition_choices)
+            (fun i st_id -> (i, st_id, get_outgoing_from_index outgoing.(i) st_id))
             current_arr
           |> Array.to_list
-        in
-        if List.for_all (fun choices -> choices <> []) env_choices then
-          env_choices
-          |> cartesian_product
-          |> List.iter (fun combo ->
-                 let next = List.map (fun choice -> choice.mc_to_state) combo in
-                 let component_msgs =
-                   combo |> List.map (fun choice -> choice.mc_actions) |> Array.of_list
+          |> List.map (fun (i, st_id, outs) ->
+                 let real = List.map (fun t -> (i, t.to_state, t.action, t.guard)) outs in
+                 let st_accepting = (Hashtbl.find automata.(i).states st_id).accepting in
+                 let has_clock =
+                   List.exists (fun t -> match t.action with Clock -> true | _ -> false) outs
                  in
-                 let combined =
-                   Array.fold_left MsgSet.union MsgSet.empty component_msgs
-                 in
-                 let changed = List.exists (fun choice -> choice.mc_changed) combo in
-                 if
-                   (changed || not (MsgSet.is_empty combined))
-                   && (MsgSet.is_empty combined || sync_ok component_msgs combined)
-                 then
-                   let action =
-                     if MsgSet.is_empty combined then Epsilon else Messages combined
-                   in
-                   add_product_transition current next action any_guard);
-
-        let has_ordinary_non_clock_move =
-          List.exists (fun t -> t.from_state = prod_state) prod.transitions
+                 if st_accepting && not has_clock then
+                   (* Accepting component ticks in place so partners' clock round proceeds. *)
+                   (i, st_id, Clock, any_guard) :: real
+                 else real)
         in
-        if not has_ordinary_non_clock_move then
-          Array.iteri
-            (fun i st_id ->
-              let outs = get_outgoing_from_index outgoing.(i) st_id in
-              List.iter
-                (fun t ->
-                  match t.action with
-                  | Progress _ when guard_satisfied local_envs.(i) t.guard ->
-                      let next =
-                        List.mapi
-                          (fun j s -> if i = j then t.to_state else s)
-                          current
-                      in
-                      add_product_transition current next t.action t.guard
-                  | _ -> ())
-                outs)
-            current_arr;
 
-        let clock_choices =
-          let clock_envs =
-            Array.map clock_guard_env local_envs
+        if List.for_all (fun choices -> choices <> []) component_choices then (
+          let combos = cartesian_product component_choices in
+          (* Group by (next_state_vector, action); merge guards of grouped combos. *)
+          let grouped = Hashtbl.create 16 in
+          List.iter
+            (fun combo ->
+              (* combo : (component_index, to_state, action, guard) list, one per component. *)
+              let next =
+                combo
+                |> List.map (fun (i, to_state, _, _) -> (i, to_state))
+                |> List.sort (fun (a, _) (b, _) -> compare a b)
+                |> List.map snd
+              in
+              let actions = List.map (fun (_, _, act, _) -> act) combo in
+              let guards = List.map (fun (_, _, _, g) -> g) combo in
+
+              (* STEP 1: every component's guard, PROJECTED TO INTERNAL MESSAGES, must be
+                 satisfied by its partner-derived local environment. No action-kind cases:
+                 the projection drops boundary conditions, so boundary-only transitions are
+                 unconstrained, and internal "wait"/message guards are checked uniformly. *)
+              let step1_ok =
+                (not use_env)
+                || List.for_all
+                     (fun (i, _, act, g) ->
+                       let env =
+                         match act with
+                         | Clock -> clock_guard_env local_envs.(i)
+                         | _ -> local_envs.(i)
+                       in
+                       guard_satisfied env (project_guard_to internal_messages g))
+                     combo
+              in
+
+              (* STEP 2: sync check on actions.
+                 - Clock: all components pick clock, or none do.
+                 - Internal messages: each must be picked by >= 2 components.
+                 - Boundary messages: no constraint. *)
+              let clock_count =
+                List.fold_left
+                  (fun acc act -> match act with Clock -> acc + 1 | _ -> acc)
+                  0 actions
+              in
+              let clock_ok = clock_count = 0 || clock_count = List.length actions in
+
+              let component_msgs =
+                actions
+                |> List.map (function Messages m -> m | _ -> MsgSet.empty)
+                |> Array.of_list
+              in
+              let combined_msgs =
+                Array.fold_left MsgSet.union MsgSet.empty component_msgs
+              in
+              let combined_action =
+                if clock_count = List.length actions && clock_count > 0 then Clock
+                else if MsgSet.is_empty combined_msgs then Epsilon
+                else Messages combined_msgs
+              in
+              let sync_ok_msgs =
+                match combined_action with
+                | Messages _ -> sync_ok component_msgs combined_msgs
+                | _ -> true
+              in
+
+              (* Suppress the trivial all-epsilon self-loop that changes nothing and has no
+                 guard (it carries no information); keep guarded epsilon waits. *)
+              let changed = next <> current in
+              let keep =
+                match combined_action with
+                | Epsilon -> changed || not (guard_is_any (merge_guards guards))
+                | _ -> true
+              in
+
+              if step1_ok && clock_ok && sync_ok_msgs && keep then (
+                let guard = merge_guards guards in
+                let state_key = String.concat "," (List.map string_of_int next) in
+                let action_key = string_of_action combined_action in
+                let key = state_key ^ "|" ^ action_key in
+                match Hashtbl.find_opt grouped key with
+                | Some (stored_next, stored_action, existing_guard) ->
+                    Hashtbl.replace grouped key
+                      (stored_next, stored_action, merge_guards [ existing_guard; guard ])
+                | None -> Hashtbl.add grouped key (next, combined_action, guard)
+              ))
+            combos;
+          (* Emit one transition per grouped (next_state, action). *)
+          Hashtbl.iter
+            (fun _key (next, combined_action, guard) ->
+              add_product_transition current next combined_action guard)
+            grouped;
+
+          (* Progress transitions: a component may advance its progress marker only when it
+             is otherwise idle (single-component move), mirroring the original semantics. *)
+          let has_ordinary_non_clock_move =
+            List.exists
+              (fun t -> t.from_state = prod_state && t.action <> Clock)
+              prod.transitions
           in
-          Array.mapi
-            (fun i st_id ->
-              let outs = get_outgoing_from_index outgoing.(i) st_id in
-              (* A product clock round exists only when every component clocks. *)
-              outs
-              |> List.filter (fun t ->
-                     match t.action with
-                     | Clock -> guard_satisfied clock_envs.(i) t.guard
-                     | _ -> false)
-              |> List.map (fun t -> t.to_state))
-            current_arr
-          |> Array.to_list
-        in
-        if List.for_all (fun choices -> choices <> []) clock_choices then
-          clock_choices
-          |> cartesian_product
-          |> List.iter (fun next ->
-                 add_product_transition current next Clock any_guard)))
+          if (not has_ordinary_non_clock_move) && use_env then
+            Array.iteri
+              (fun i st_id ->
+                let outs = get_outgoing_from_index outgoing.(i) st_id in
+                List.iter
+                  (fun t ->
+                    match t.action with
+                    | Progress _ when guard_satisfied local_envs.(i) t.guard ->
+                        let next =
+                          List.mapi (fun j s -> if i = j then t.to_state else s) current
+                        in
+                        add_product_transition current next t.action t.guard
+                    | _ -> ())
+                  outs)
+              current_arr)))
   done;
   recompute_state_summaries prod;
   prod
+
+let closed_product ?progress_ids automata sync_messages =
+  (* Closed product: all messages except those explicitly in sync_messages are boundary. *)
+  let all_messages =
+    Array.fold_left
+      (fun acc auto -> MsgSet.union acc (messages_of_automaton auto))
+      MsgSet.empty automata
+  in
+  let boundary_messages = MsgSet.diff all_messages sync_messages in
+  unified_product ?progress_ids automata ~boundary_messages ~use_env:true
 
 (* Local parallel product exposes component messages instead of synchronizing them. *)
-let async_product automata =
-  Array.iter recompute_state_summaries automata;
-  let prod = TypeAutomaton.create () in
-  let state_map = Hashtbl.create 32 in
-  let start_vector = Array.to_list (Array.map (fun auto -> auto.start_state) automata) in
-  Hashtbl.add state_map start_vector prod.start_state;
-  let outgoing =
-    Array.map (fun auto -> build_outgoing_index auto.transitions) automata
+(* Add unguarded epsilon self-loops to all accepting states (for internal parallel preprocessing). *)
+let add_final_state_epsilon_loops auto =
+  let states_to_update = ref [] in
+  Hashtbl.iter
+    (fun _id state ->
+      if state.accepting then states_to_update := state.id :: !states_to_update)
+    auto.states;
+  List.iter
+    (fun state_id ->
+      TypeAutomaton.add_transition auto state_id state_id Epsilon any_guard)
+    !states_to_update
+
+(* Remove unguarded epsilon self-loops only from the product's final states.
+   These are the preprocessing epsilons added before the product. *)
+let remove_final_state_epsilon_loops auto =
+  (* Find which states are final (accepting) in the product. *)
+  let final_states = ref [] in
+  Hashtbl.iter
+    (fun _id state ->
+      if state.accepting then final_states := state.id :: !final_states)
+    auto.states;
+  let final_state_set =
+    List.fold_left (fun acc id -> IntSet.add id acc) IntSet.empty !final_states
   in
-  let get_product_state states =
-    match Hashtbl.find_opt state_map states with
-    | Some id -> id
-    | None ->
-        let id = TypeAutomaton.new_state prod false in
-        Hashtbl.add state_map states id;
-        id
-  in
-  let queue = Queue.create () in
-  let visited = Hashtbl.create 32 in
-  Queue.add start_vector queue;
-  let enqueue states =
-    if not (Hashtbl.mem visited states) then Queue.add states queue
-  in
-  let add_product_transition from_vec to_vec action guard =
-    let from_id = get_product_state from_vec in
-    let to_id = get_product_state to_vec in
-    TypeAutomaton.add_transition prod from_id to_id action guard;
-    if to_vec <> from_vec then enqueue to_vec
-  in
-  while not (Queue.is_empty queue) do
-    let current = Queue.take queue in
-    if not (Hashtbl.mem visited current) then (
-      Hashtbl.add visited current ();
-      let prod_state = get_product_state current in
-      let current_arr = Array.of_list current in
-      let prod_state_info = Hashtbl.find prod.states prod_state in
-      set_product_state_debug prod prod_state
-        (product_components_for_vector automata current_arr);
-      prod_state_info.is_fair <-
-        Array.mapi
-          (fun i st_id -> (Hashtbl.find automata.(i).states st_id).is_fair)
-          current_arr
-        |> Array.to_list
-        |> List.exists (fun x -> x);
-      prod_state_info.adversary <-
-        Array.mapi
-          (fun i st_id -> (Hashtbl.find automata.(i).states st_id).adversary)
-          current_arr
-        |> Array.to_list
-        |> List.exists (fun x -> x);
-      let all_accepting =
-        Array.mapi
-          (fun i st_id -> (Hashtbl.find automata.(i).states st_id).accepting)
-          current_arr
-        |> Array.to_list
-        |> List.for_all (fun x -> x)
-      in
-      if all_accepting then
-        (Hashtbl.find prod.states prod_state).accepting <- true;
-      Array.iteri
-        (fun i st_id ->
-          let outs = get_outgoing_from_index outgoing.(i) st_id in
-          List.iter
-            (fun t ->
-              match t.action with
-              | Clock -> ()
-              | _ ->
-                  let next =
-                    List.mapi
-                      (fun j s -> if i = j then t.to_state else s)
-                      current
-                  in
-                  add_product_transition current next t.action t.guard)
-            outs)
-        current_arr;
-      let message_choices =
-        Array.mapi
-          (fun i st_id ->
-            let outs = get_outgoing_from_index outgoing.(i) st_id in
-            let msg_transitions =
-              outs
-              |> List.filter_map (fun t ->
-                     match t.action with
-                     | Messages msgs -> Some (t.to_state, msgs, t.guard)
-                     | _ -> None)
-            in
-            (st_id, MsgSet.empty, any_guard) :: msg_transitions)
-          current_arr
-        |> Array.to_list
-      in
-      message_choices
-      |> cartesian_product
-      |> List.iter (fun combo ->
-             let selected =
-               List.filter
-                 (fun (_, msgs, _) -> not (MsgSet.is_empty msgs))
-                 combo
-             in
-             if List.length selected >= 2 then
-               let next = List.map (fun (st, _, _) -> st) combo in
-               let combined =
-                 List.fold_left
-                   (fun acc (_, msgs, _) -> MsgSet.union acc msgs)
-                   MsgSet.empty selected
-               in
-               let guard =
-                 merge_guards (List.map (fun (_, _, guard) -> guard) selected)
-               in
-               add_product_transition current next (Messages combined) guard);
-      let clock_choices =
-        Array.mapi
-          (fun i st_id ->
-            let outs = get_outgoing_from_index outgoing.(i) st_id in
-            (* A product clock round exists only when every component clocks. *)
-            outs
-            |> List.filter (fun t ->
-                   match t.action with
-                   | Clock -> true
-                   | _ -> false)
-            |> List.map (fun t -> (t.to_state, t.guard)))
-          current_arr
-        |> Array.to_list
-      in
-      if List.for_all (fun choices -> choices <> []) clock_choices then
-        clock_choices
-        |> cartesian_product
-        |> List.iter (fun combo ->
-               let next = List.map fst combo in
-               let guard = merge_guards (List.map snd combo) in
-               add_product_transition current next Clock guard))
-  done;
-  recompute_state_summaries prod;
-  prod
+  auto.transitions <-
+    List.filter
+      (fun t ->
+        match t.action with
+        | Epsilon when t.from_state = t.to_state && guard_is_any t.guard ->
+            (* Remove only if it's an unguarded epsilon self-loop on a final state *)
+            not (IntSet.mem t.from_state final_state_set)
+        | _ -> true)
+      auto.transitions
+
 
 let escape_dot s =
   let b = Buffer.create (String.length s) in
