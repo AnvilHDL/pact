@@ -76,7 +76,7 @@ let xoffer_else_guard ?(require_clock = false) branch_groups head_set =
     missing_now_groups = branch_groups;
     future_disjoint = head_set;
     require_clock;
-    forbid_clock = not require_clock;
+    forbid_clock = false;
   }
 
 let add_blocking_retry auto current branch_groups head_set retry_ty =
@@ -221,7 +221,14 @@ let rec build_automaton (name : identifier option) (st : session_type)
         let next = TypeAutomaton.new_state auto true in
         set_residual_type auto next StyTrue;
         TypeAutomaton.add_transition auto current next (Messages msg_set)
-          { any_guard with require_now = msg_set; forbid_clock = true };
+          { any_guard with require_now = msg_set; forbid_clock = false };
+        (* PDF §5.2 (τ = a): stay this cycle only while the peer is absent
+           (ā ∉ E, i.e. m ∉ Imm(E)). In the sync product every component must pick
+           a transition; this guarded self-loop is the only legal "stay", so when
+           m is available the component is forced to fire it (maximality).
+           No clock condition: only the clock node's own self-loop forbids #. *)
+        TypeAutomaton.add_transition auto current current Epsilon
+          { any_guard with forbid_now = msg_set };
         if action_is_blocking act then begin
           (* Blocking messages may wait for a clock only while the peer is absent. *)
           let next_i = TypeAutomaton.new_state auto false in
@@ -245,7 +252,11 @@ let rec build_automaton (name : identifier option) (st : session_type)
         let next = TypeAutomaton.new_state auto true in
         set_residual_type auto next StyTrue;
         TypeAutomaton.add_transition auto current next (Messages msg_set)
-          { any_guard with require_now = msg_set; forbid_clock = true };
+          { any_guard with require_now = msg_set; forbid_clock = false };
+        (* Stay only while the whole group is not yet available (¬(grp ⊆ Imm)),
+           since the conjunction fires atomically. No clock condition. *)
+        TypeAutomaton.add_transition auto current current Epsilon
+          { any_guard with missing_now_groups = [ msg_set ] };
         if all_blocking then begin
           (* Blocking conjunctions wait as a unit until the whole group is ready. *)
           let next_i = TypeAutomaton.new_state auto false in
@@ -266,8 +277,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
           for i = 1 to n do
             let next = TypeAutomaton.new_state auto false in
             set_residual_type auto next (delay_then (n - i) StyTrue);
-            TypeAutomaton.add_transition auto !last next Clock
-              { any_guard with require_clock = true };
+            TypeAutomaton.add_transition auto !last next Clock {any_guard with require_clock = true; forbid_clock = false};
+            TypeAutomaton.add_transition auto !last !last Epsilon { any_guard with forbid_clock = true};
             last := next
           done;
           TypeAutomaton.set_accepting auto !last true;
@@ -310,7 +321,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
         build_offer offerings current rec_env let_env
     | StyParallel (left, right) ->
         mark_nonfinal ();
-        (* Parallel inside one type is async; pool products handle synchronization. *)
+        (* PDF §5.2 (τ = τ1 ∥ τ2): δ_τ = SyncEdges(τ1, τ2). Parallel inside one
+           type is the same sync product as the pool. *)
         let left_auto = build_automaton None left default_span in
         let right_auto = build_automaton None right default_span in
         let product = async_product [| left_auto; right_auto |] in
@@ -383,18 +395,15 @@ let rec build_automaton (name : identifier option) (st : session_type)
             any_guard with
             require_now = group;
             future_disjoint = head_set;
-            forbid_clock = true;
+            forbid_clock = false;
           };
         finals := build (continuation_or_true off) target rec_env let_env @ !finals)
       msg_branches;
     if not (MsgSet.is_empty head_set) then
-      (* If any branch head may still arrive this cycle, xoffer keeps waiting. *)
+      (* If any branch head may still arrive this cycle, xoffer keeps waiting
+         (F ∩ HB ≠ ∅). No clock condition. *)
       TypeAutomaton.add_transition auto current current Epsilon
-        {
-          any_guard with
-          future_intersects = [ head_set ];
-          forbid_clock = true;
-        };
+        { any_guard with future_intersects = [ head_set ] };
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in
@@ -462,18 +471,18 @@ let rec build_automaton (name : identifier option) (st : session_type)
             any_guard with
             require_now = enabled_msgs;
             missing_now_groups = List.map snd residual;
-            forbid_clock = true;
+            forbid_clock = false;
           };
         finals := build target_ty target rec_env let_env @ !finals)
       branch_subsets;
     if not (MsgSet.is_empty head_set) then
-      (* While some branch head may still arrive this cycle, the offer keeps waiting. *)
+      (* While some branch head may still arrive this cycle, the offer keeps
+         waiting (F ∩ HB ≠ ∅). No clock condition. *)
       TypeAutomaton.add_transition auto current current Epsilon
         {
           any_guard with
           missing_now_groups = List.map snd msg_branches;
           future_intersects = [ head_set ];
-          forbid_clock = true;
         };
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
