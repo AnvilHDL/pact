@@ -367,9 +367,11 @@ let build_open_arena name product =
       }
       :: !edges
   in
+  (* A state is a player state when it has any real boundary move. The clock is
+     folded into the boundary env (be_clock), so boundary_env_nonempty already
+     covers the clock provide/withhold decision — no special clock casing here. *)
   let has_player_state state_id =
-    Hashtbl.find moves_by_state state_id
-    |> List.exists boundary_env_nonempty
+    Hashtbl.find moves_by_state state_id |> List.exists boundary_env_nonempty
   in
   let entry state_id =
     if has_player_state state_id then arena_player_id state_id

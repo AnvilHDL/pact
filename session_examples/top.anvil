@@ -125,5 +125,7 @@ pool p16{
     ip162 : ^(ep.m1,*);#2,
     ip163 : ^(ep.m2,*);#3,
     ip164 : ^(ep.m3,*);#4
-
+// passes when #4 is used above
 }
+
+interface i1 (ep : left ch) = ep.m1;^(ep.m2,ep.m3);#1

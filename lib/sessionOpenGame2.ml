@@ -35,11 +35,12 @@ let boundary_env_equal lhs rhs =
   && MsgSet.equal lhs.be_future rhs.be_future
   && lhs.be_clock = rhs.be_clock
 
-(* A boundary move is "real" (creating a player/environment node) only when the
-   environment actually chooses a boundary message. The clock is resolved by all
-   components together, so be_clock alone is not an environment choice. *)
+(* A boundary move is "real" (creating a player/environment node) when the
+   environment chooses a boundary message OR the shared clock. The clock is an
+   environment-controlled boundary action (provide # vs withhold #), so be_clock
+   is a genuine environment choice and must be split like a boundary message. *)
 let boundary_env_nonempty env =
-  msgset_nonempty env.be_now || msgset_nonempty env.be_future
+  msgset_nonempty env.be_now || msgset_nonempty env.be_future || env.be_clock
 
 (* ---- Typed game arena ---- *)
 

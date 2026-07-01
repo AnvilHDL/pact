@@ -675,13 +675,13 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
               let actions = List.map (fun (_, _, act, _, _, _) -> act) combo in
               let guards = List.map (fun (_, _, _, g, _, _) -> g) combo in
 
+              let all_partners_clock = ref true in
+              let has_partner = ref false in
               let local_envs =
                 Array.mapi
                   (fun i _st_id ->
                     let imm = ref MsgSet.empty in
                     let future = ref MsgSet.empty in
-                    let all_partners_clock = ref true in
-                    let has_partner = ref false in
                     List.iter
                       (fun (j, _, _, _, offers, _maybe_offers) ->
                         if i <> j then (
@@ -706,24 +706,44 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                       |> MsgSet.inter internal_messages
                       |> MsgSet.inter own_messages.(i)
                     in
-                    let clock = !has_partner && !all_partners_clock in
-                    { imm; future; clock })
+                    (* clock resolved per hypothesis below. *)
+                    { imm; future; clock = false })
                   current_arr
               in
+              let partners_offer_clock = !has_partner && !all_partners_clock in
 
-              (* STEP 1: every component's guard, PROJECTED TO INTERNAL MESSAGES, must be
-                 satisfied by its partner-derived local environment. No action-kind cases:
-                 the projection drops boundary conditions, so boundary-only transitions are
-                 unconstrained, and internal "wait"/message guards are checked uniformly. *)
+              (* Clock treatment during guard satisfaction.
+
+                 Closed (no boundary messages): the clock is internal. Partners must
+                 all tick, so the environment clock is exactly partners_offer_clock
+                 and the clock conditions (require_clock/forbid_clock) are checked
+                 against it internally.
+
+                 Open (some boundary messages): the clock is decided by the current
+                 environment. If the environment HAS the clock (all internal partners
+                 offer it) we treat the clock as a BOUNDARY action: its conditions are
+                 dropped from the internal check and instead ride the boundary env
+                 (be_clock below), so the game/player resolves provide-vs-withhold. If
+                 the environment does NOT have the clock, we treat it as internal and
+                 check the guard against an environment without the clock (clock=false). *)
+              let clock_is_boundary =
+                (not (MsgSet.is_empty boundary_messages)) && partners_offer_clock
+              in
+              let internal_env_clock =
+                if clock_is_boundary then false else partners_offer_clock
+              in
+              let strip_clock g =
+                if clock_is_boundary then
+                  { g with require_clock = false; forbid_clock = false }
+                else g
+              in
               let guard_checks =
                 List.map
-                  (fun (i, _, act, g, _, _) ->
-                    let env =
-                      match act with
-                      | Clock -> clock_guard_env local_envs.(i)
-                      | _ -> local_envs.(i)
+                  (fun (i, _, _act, g, _, _) ->
+                    let env = { local_envs.(i) with clock = internal_env_clock } in
+                    let projected_guard =
+                      strip_clock (project_guard_to internal_messages g)
                     in
-                    let projected_guard = project_guard_to internal_messages g in
                     (i, guard_satisfied env projected_guard, projected_guard, env))
                   combo
               in
