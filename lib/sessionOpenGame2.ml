@@ -181,6 +181,48 @@ let compute_id_attractor node_by_id outgoing valid_region req_id =
   done;
   !attractor
 
+let edge_is_clock edge = edge.arena_edge_action = Some Clock
+
+(* Attractor for # ∈ Inf(π), required on every path (paper Win_T) independent
+   of fairness/progress — mirrors sessionGame2.compute_clock_attractor_indexed.
+   Player nodes stay existential (the environment is the friendly quantifier
+   for every property in this game, so it only needs one move that keeps
+   ticking), but adversary nodes are ALWAYS universal here, even when
+   arena_is_fair: unlike the $id property, there is no fair-suffix escape for
+   clock recurrence — a fair adversary node with one path that never ticks
+   still has a losing (non-recurring) path, which alone makes it non-winning
+   for this property. *)
+let compute_clock_attractor node_by_id outgoing valid_region =
+  let attractor = ref StringSet.empty in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    StringSet.iter
+      (fun node_id ->
+        if not (StringSet.mem node_id !attractor) then (
+          let node = Hashtbl.find node_by_id node_id in
+          let edges = arena_outgoing outgoing node_id in
+          let edge_good edge =
+            StringSet.mem edge.arena_edge_to valid_region
+            && (edge_is_clock edge || StringSet.mem edge.arena_edge_to !attractor)
+          in
+          let progresses =
+            match node.arena_node_kind with
+            | ArenaPlayer -> List.exists edge_good edges
+            | ArenaAdversary | ArenaFail ->
+                edges <> []
+                && List.for_all
+                     (fun edge -> StringSet.mem edge.arena_edge_to valid_region)
+                     edges
+                && List.for_all edge_good edges
+          in
+          if progresses then (
+            attractor := StringSet.add node_id !attractor;
+            changed := true)))
+      valid_region
+  done;
+  !attractor
+
 (* Dead-end safety (closed solver's sanity_check, lifted to the arena): the set
    of nodes from which ⊥ cannot be avoided. ⊥ is the seed. For *safety*, ownership
    is dual to liveness: the player (our friend) escapes ⊥ if ANY successor is
@@ -222,23 +264,34 @@ let forced_fail_set node_by_id outgoing all_nodes =
   (* ⊥ self-loops, so it is always in the set; that is intended. *)
   !forced
 
-(* Winning region: every required id must be forced infinitely often. We
-   intersect the per-id attractors to a fixpoint, exactly as the closed solver
-   does. With an empty required set the loop leaves the region untouched, so
-   every (dead-end-free) node is winning — the T = ∅ specialization. *)
+(* Winning region: every required id must be forced infinitely often, AND
+   # ∈ Inf(π) on every path (paper Win_T, unconditional on fairness/progress).
+   The clock-recurrence requirement is a nested outer greatest-fixpoint
+   (mirrors sessionGame2.solve_game_custom_indexed): repeatedly shrink the
+   candidate region to states that can force reaching Clock again WITHIN the
+   current region, then intersect with the per-id progress attractors, until
+   it stabilizes. With an empty required id set the inner loop leaves the
+   region untouched, so the clock-recurrence check alone still applies. *)
 let solve_open_region node_by_id outgoing all_nodes req_ids =
   let winning = ref all_nodes in
-  let changed = ref true in
-  while !changed do
-    let start = !winning in
-    let current = ref start in
-    List.iter
-      (fun req_id ->
-        if not (StringSet.is_empty !current) then
-          current := compute_id_attractor node_by_id outgoing !current req_id)
-      req_ids;
-    if StringSet.equal start !current then changed := false
-    else winning := !current
+  let outer_changed = ref true in
+  while !outer_changed do
+    let outer_start = !winning in
+    let region = ref (compute_clock_attractor node_by_id outgoing !winning) in
+    let changed = ref true in
+    while !changed do
+      let start = !region in
+      let current = ref start in
+      List.iter
+        (fun req_id ->
+          if not (StringSet.is_empty !current) then
+            current := compute_id_attractor node_by_id outgoing !current req_id)
+        req_ids;
+      if StringSet.equal start !current then changed := false
+      else region := !current
+    done;
+    winning := !region;
+    if StringSet.equal outer_start !winning then outer_changed := false
   done;
   !winning
 
@@ -301,6 +354,165 @@ let losing_trace node_by_id outgoing winning start =
   walk start;
   Buffer.contents buffer
 
+let list_drop n xs =
+  let rec aux n xs =
+    match (n, xs) with
+    | n, xs when n <= 0 -> xs
+    | _, [] -> []
+    | n, _ :: rest -> aux (n - 1) rest
+  in
+  aux n xs
+
+(* Restrict reachability (from start, over edges into `can_visit` nodes) to a
+   parent map, mirroring sessionGame2.reachable_parent_map for the arena's
+   string-keyed nodes. *)
+let reachable_parent_map outgoing start can_visit =
+  let parent = Hashtbl.create 16 in
+  let queue = Queue.create () in
+  if can_visit start then (
+    Hashtbl.add parent start None;
+    Queue.add start queue);
+  while not (Queue.is_empty queue) do
+    let node_id = Queue.take queue in
+    arena_outgoing outgoing node_id
+    |> List.iter (fun edge ->
+           if can_visit edge.arena_edge_to
+              && not (Hashtbl.mem parent edge.arena_edge_to) then (
+             Hashtbl.add parent edge.arena_edge_to (Some (node_id, edge));
+             Queue.add edge.arena_edge_to queue))
+  done;
+  parent
+
+let path_from_parent_map parent node_id =
+  let rec aux node_id =
+    match Hashtbl.find_opt parent node_id with
+    | None | Some None -> []
+    | Some (Some (prev, edge)) -> aux prev @ [ edge ]
+  in
+  aux node_id
+
+let find_cycle_avoiding outgoing reachable avoids_edge =
+  let visited = Hashtbl.create 16 in
+  let visiting = Hashtbl.create 16 in
+  let result = ref None in
+  let rec dfs node_id path =
+    if Option.is_none !result then (
+      Hashtbl.replace visiting node_id (List.length path);
+      arena_outgoing outgoing node_id
+      |> List.filter (fun edge ->
+             avoids_edge edge && Hashtbl.mem reachable edge.arena_edge_to)
+      |> List.iter (fun edge ->
+             if Option.is_none !result then
+               match Hashtbl.find_opt visiting edge.arena_edge_to with
+               | Some index ->
+                   result :=
+                     Some
+                       ( edge.arena_edge_to,
+                         list_drop index path @ [ edge ] )
+               | None ->
+                   if not (Hashtbl.mem visited edge.arena_edge_to) then
+                     dfs edge.arena_edge_to (path @ [ edge ]));
+      Hashtbl.remove visiting node_id;
+      Hashtbl.replace visited node_id ())
+  in
+  let node_ids = Hashtbl.fold (fun node_id _ acc -> node_id :: acc) reachable [] in
+  List.iter
+    (fun node_id ->
+      if Option.is_none !result && not (Hashtbl.mem visited node_id) then
+        dfs node_id [])
+    node_ids;
+  !result
+
+let find_clock_avoiding_lasso outgoing start winning =
+  let losing node_id = not (StringSet.mem node_id winning) in
+  let reachable = reachable_parent_map outgoing start losing in
+  match
+    find_cycle_avoiding outgoing reachable (fun edge -> not (edge_is_clock edge))
+  with
+  | None -> None
+  | Some (cycle_start, cycle) ->
+      Some (path_from_parent_map reachable cycle_start, cycle_start, cycle)
+
+let find_progress_avoiding_lasso outgoing start winning req_ids =
+  let losing node_id = not (StringSet.mem node_id winning) in
+  let reachable = reachable_parent_map outgoing start losing in
+  req_ids
+  |> List.find_map (fun req_id ->
+         match
+           find_cycle_avoiding outgoing reachable (fun edge ->
+               not (StringSet.mem req_id (edge_progress_ids edge)))
+         with
+         | None -> None
+         | Some (cycle_start, cycle) ->
+             Some
+               ( req_id,
+                 path_from_parent_map reachable cycle_start,
+                 cycle_start,
+                 cycle ))
+
+let print_node_context buffer node_by_id winning node_id =
+  let node = Hashtbl.find node_by_id node_id in
+  let win = StringSet.mem node_id winning in
+  Printf.bprintf buffer "%s [%s] %s" node_id
+    (match node.arena_node_kind with
+    | ArenaPlayer -> "player"
+    | ArenaAdversary -> "adversary"
+    | ArenaFail -> "fail")
+    (if win then "(WIN)" else "(LOSE)")
+
+let print_edge_step buffer node_by_id winning current edge =
+  print_node_context buffer node_by_id winning current;
+  Printf.bprintf buffer "\n --[%s]--> " (string_of_edge_label edge.arena_edge_label);
+  edge.arena_edge_to
+
+(* Prefer a clock-starvation witness first (# ∈ Inf(π) is required
+   unconditionally, paper Win_T), falling back to a progress-avoiding cycle,
+   and only then the generic arbitrary-successor walk — mirrors
+   sessionGame2.find_counterexample_indexed. *)
+let find_counterexample node_by_id outgoing winning start req_ids =
+  match find_clock_avoiding_lasso outgoing start winning with
+  | Some (prefix, cycle_start, cycle) ->
+      let buffer = Buffer.create 512 in
+      Printf.bprintf buffer
+        "Clock-starvation counterexample: repeat the cycle below forever without ever taking #.\n";
+      let current = ref start in
+      if prefix <> [] then Printf.bprintf buffer "\nPrefix to the avoiding cycle:\n";
+      List.iter
+        (fun edge -> current := print_edge_step buffer node_by_id winning !current edge)
+        prefix;
+      Printf.bprintf buffer "\nCycle avoiding # starts at %s:\n" cycle_start;
+      current := cycle_start;
+      List.iter
+        (fun edge -> current := print_edge_step buffer node_by_id winning !current edge)
+        cycle;
+      Printf.bprintf buffer "Back to %s without taking #.\n" cycle_start;
+      Buffer.contents buffer
+  | None -> (
+      match find_progress_avoiding_lasso outgoing start winning req_ids with
+      | Some (req_id, prefix, cycle_start, cycle) ->
+          let buffer = Buffer.create 512 in
+          Printf.bprintf buffer
+            "Liveness counterexample: repeat the cycle below forever to avoid progress $%s.\n"
+            req_id;
+          let current = ref start in
+          if prefix <> [] then
+            Printf.bprintf buffer "\nPrefix to the avoiding cycle:\n";
+          List.iter
+            (fun edge ->
+              current := print_edge_step buffer node_by_id winning !current edge)
+            prefix;
+          Printf.bprintf buffer "\nCycle avoiding $%s starts at %s:\n" req_id
+            cycle_start;
+          current := cycle_start;
+          List.iter
+            (fun edge ->
+              current := print_edge_step buffer node_by_id winning !current edge)
+            cycle;
+          Printf.bprintf buffer "Back to %s without taking $%s.\n" cycle_start
+            req_id;
+          Buffer.contents buffer
+      | None -> losing_trace node_by_id outgoing winning start)
+
 let play_open_game arena ~progress_ids =
   let node_by_id = node_table arena in
   let outgoing = arena_outgoing_index arena in
@@ -336,7 +548,8 @@ let play_open_game arena ~progress_ids =
     else
       Some
         (indent_block "  "
-           (losing_trace node_by_id outgoing winning arena.arena_start))
+           (find_counterexample node_by_id outgoing winning arena.arena_start
+              progress_ids))
   in
   { compatible; winning_nodes = winning; selected_player_edges; summary;
     counterexample_trace }

@@ -44,3 +44,11 @@ pool n7 { // false
     in71 : ^(#ep.m1, #ep.m2) ,
     in72 : #ep.m1;#ep.m2
 }
+pool n8 { // true
+    ep_le -- ep_ri : ch;
+    n81 : (() + &(#ep.m1, #ep.m2));#1,
+    n82 :(#ep.m1;#1) ,
+    n83 : (#ep.m4; #ep.m2);#1,
+    n84 : #ep.m4;#1
+
+}

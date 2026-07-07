@@ -1,13 +1,13 @@
 pool p1 { // trued
     ep_le -- ep_ri : ch;
-    ip11 : (ep.req ; ep.ack) ,
-    ip12 : (ep.req ; ep.ack)
+    ip11 : (ep.req ; ep.ack);#1 ,
+    ip12 : (ep.req ; ep.ack);#1
 }
 
 pool p2 { // true
     ep_le -- ep_ri : ch;
-    ip21 : (#ep.req ; #ep.ack) ,
-    ip22 : (#ep.req || #ep.ack)
+    ip21 : (#ep.req ; #ep.ack);#1 ,
+    ip22 : (#ep.req || #ep.ack);#1
 }
 
 pool p3 { // true
@@ -23,20 +23,20 @@ pool p4 { // true
 
 pool p5 { // true
     ep_le -- ep_ri : ch;
-    ip51 : ep.m1 ,
-    ip52 : #2;ep.m1
+    ip51 : ep.m1;#1 ,
+    ip52 : #2;ep.m1;#1
 }
 
 pool p6 { // true
     ep_le -- ep_ri : ch;
-    ip61 : F ep.m1 ,
-    ip62 : ep.m1
+    ip61 : F ep.m1;#1 ,
+    ip62 : ep.m1;#1
 }
 
 pool p7 { // true
     ep_le -- ep_ri : ch;
-    ip71 : ep.m1,
-    ip72 : ep.m1;ep.m1
+    ip71 : ep.m1;#1,
+    ip72 : ep.m1;ep.m1;#1
 }
 pool p8 { // false
     ep_le -- ep_ri : ch;
@@ -45,8 +45,8 @@ pool p8 { // false
 }
 pool p9 { // true
     ep_le -- ep_ri : ch;
-    ip91 : ep.m1 ,
-    ip92 : rec X . ^( #ep.m1 , * : #1;X ) 
+    ip91 : ep.m1;#1 ,
+    ip92 : rec X . (^( #ep.m1 , * : #1;X )) ;#1 
 }
 
 pool p10 { // true
@@ -58,8 +58,8 @@ pool p10 { // true
 
 pool p11 { // true
     ep_le -- ep_ri : ch;
-    ip111 : rec X . ^( #ep.m1 , * : #1 ; X ) ,
-    ip112 : F #ep.m1 
+    ip111 : rec X . ^( #ep.m1 , * : #1 ; X );#1 ,
+    ip112 : F #ep.m1;#1 
 }
 
 pool p12 {
@@ -76,8 +76,8 @@ pool p13 {
 }
 pool p14 {
     ep_le -- ep_ri : ch;
-    ip141 : #ep.req || #ep.ack,
-    ip142 : #ep.req ; #ep.ack
+    ip141 : (#ep.req || #ep.ack);#1,
+    ip142 : #ep.req ; #ep.ack;#1
 }
 pool p15 { // false
     ep_le -- ep_ri : ch;
@@ -98,14 +98,14 @@ pool p16{
 
 pool p17 { // true
     ep_le -- ep_ri : ch;
-    ip171 : &(ep.m1,ep.m2),
-    ip172 : ep.m1
+    ip171 : &(ep.m1,ep.m2);#1,
+    ip172 : ep.m1;#1
 }
 
 pool p19 { // true
     ep_le -- ep_ri : ch;
     ip191 : &(ep.m1, ep.m2,*);#1,
-    ip192 : #2;ep.m1
+    ip192 : #2;ep.m1;#1
 }
 pool p20{
     ep_le -- ep_ri : ch;
@@ -120,15 +120,15 @@ pool p21 {
 }
 pool p22 { 
     ep_le -- ep_ri : ch;
-    in221 : &(ep.m1, ep.m2) ,
-    in222 : ep.m1
+    in221 : &(ep.m1, ep.m2);#1 ,
+    in222 : ep.m1;#1
 }
 
 pool p23 { // true
     ep_le -- ep_ri : ch;
-    p231 : () + &(#ep.m1, #ep.m2),
-    p232 :#ep.m1 ,
-    p233 : #ep.m4; #ep.m2,
-    p234 : #ep.m4
+    p231 : &(#ep.m1, #ep.m2);#1,
+    p232 :(#ep.m1;#1) ,
+    p233 : (#ep.m4; #ep.m2);#1,
+    p234 : #ep.m4;#1
 
 }

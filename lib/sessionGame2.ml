@@ -77,26 +77,72 @@ let compute_id_attractor_indexed auto outgoing_index valid_region req_id =
   done;
   !attractor
 
-let solve_game_custom_indexed auto outgoing_index req_ids =
-  (* Intersect the per-ID attractors until all required IDs are forced. *)
-  let winning =
-    ref
-      (Hashtbl.fold
-         (fun id _ acc -> IntSet.add id acc)
-         auto.states IntSet.empty)
-  in
+let compute_clock_attractor_indexed outgoing_index valid_region =
+  (* Compute states within valid_region that force reaching a Clock
+     transition again. Unlike compute_id_attractor_indexed, this is ALWAYS
+     universal, even for fair states: # ∈ Inf(π) is required on every path
+     (paper Win_T), not just the fair-and-live disjunct, so there is no
+     existential escape for fair nodes here — a fair node with one path that
+     recurs on # and one that never ticks still has a losing (non-recurring)
+     path, and that path alone makes it non-winning for this property. *)
+  let attractor = ref IntSet.empty in
   let changed = ref true in
   while !changed do
-    let start = !winning in
-    let current = ref start in
-    List.iter
-      (fun req_id ->
-        if not (IntSet.is_empty !current) then
-          current :=
-            compute_id_attractor_indexed auto outgoing_index !current req_id)
-      req_ids;
-    if IntSet.equal start !current then changed := false
-    else winning := !current
+    changed := false;
+    IntSet.iter
+      (fun state_id ->
+        if not (IntSet.mem state_id !attractor) then (
+          let outgoing = get_outgoing_from_index outgoing_index state_id in
+          let all_outgoing_valid =
+            outgoing <> []
+            && List.for_all
+                 (fun t -> IntSet.mem t.to_state valid_region)
+                 outgoing
+          in
+          let reaches_clock =
+            all_outgoing_valid
+            && List.for_all
+                 (fun t ->
+                   transition_is_clock t || IntSet.mem t.to_state !attractor)
+                 outgoing
+          in
+          if reaches_clock then (
+            attractor := IntSet.add state_id !attractor;
+            changed := true)))
+      valid_region
+  done;
+  !attractor
+
+let solve_game_custom_indexed auto outgoing_index req_ids =
+  (* # ∈ Inf(π) is required on every path (paper Win_T), independent of
+     fairness/progress. That's a recurrence ("always eventually see Clock
+     again"), so it is an outer greatest-fixpoint: repeatedly shrink the
+     candidate winning region to states that can force reaching Clock again
+     WITHIN the current region, intersected with the per-id progress
+     attractors, until it stabilizes. *)
+  let all_states =
+    Hashtbl.fold (fun id _ acc -> IntSet.add id acc) auto.states IntSet.empty
+  in
+  let winning = ref all_states in
+  let outer_changed = ref true in
+  while !outer_changed do
+    let outer_start = !winning in
+    let region = ref (compute_clock_attractor_indexed outgoing_index !winning) in
+    let changed = ref true in
+    while !changed do
+      let start = !region in
+      let current = ref start in
+      List.iter
+        (fun req_id ->
+          if not (IntSet.is_empty !current) then
+            current :=
+              compute_id_attractor_indexed auto outgoing_index !current req_id)
+        req_ids;
+      if IntSet.equal start !current then changed := false
+      else region := !current
+    done;
+    winning := !region;
+    if IntSet.equal outer_start !winning then outer_changed := false
   done;
   !winning
 
@@ -195,7 +241,7 @@ let path_from_parent_map parent state_id =
   in
   aux state_id
 
-let find_cycle_avoiding_id outgoing_index reachable req_id =
+let find_cycle_avoiding outgoing_index reachable avoids_transition =
   let visited = Hashtbl.create 16 in
   let visiting = Hashtbl.create 16 in
   let result = ref None in
@@ -204,8 +250,7 @@ let find_cycle_avoiding_id outgoing_index reachable req_id =
       Hashtbl.replace visiting state_id (List.length path);
       get_outgoing_from_index outgoing_index state_id
       |> List.filter (fun t ->
-             (not (transition_has_id t req_id))
-             && Hashtbl.mem reachable t.to_state)
+             avoids_transition t && Hashtbl.mem reachable t.to_state)
       |> List.iter (fun t ->
              if Option.is_none !result then
                match Hashtbl.find_opt visiting t.to_state with
@@ -231,6 +276,14 @@ let find_cycle_avoiding_id outgoing_index reachable req_id =
     states;
   !result
 
+let find_cycle_avoiding_id outgoing_index reachable req_id =
+  find_cycle_avoiding outgoing_index reachable (fun t ->
+      not (transition_has_id t req_id))
+
+let find_cycle_avoiding_clock outgoing_index reachable =
+  find_cycle_avoiding outgoing_index reachable (fun t ->
+      not (transition_is_clock t))
+
 let find_progress_avoiding_lasso outgoing_index start winning_set req_ids =
   let losing state_id = not (IntSet.mem state_id winning_set) in
   let reachable = reachable_parent_map outgoing_index start losing in
@@ -244,6 +297,14 @@ let find_progress_avoiding_lasso outgoing_index start winning_set req_ids =
                  path_from_parent_map reachable cycle_start,
                  cycle_start,
                  cycle ))
+
+let find_clock_avoiding_lasso outgoing_index start winning_set =
+  let losing state_id = not (IntSet.mem state_id winning_set) in
+  let reachable = reachable_parent_map outgoing_index start losing in
+  match find_cycle_avoiding_clock outgoing_index reachable with
+  | None -> None
+  | Some (cycle_start, cycle) ->
+      Some (path_from_parent_map reachable cycle_start, cycle_start, cycle)
 
 let print_state_context buffer auto winning_set state_id =
   let st = Hashtbl.find auto.states state_id in
@@ -262,7 +323,31 @@ let print_transition_step buffer auto winning_set current t =
   t.to_state
 
 let find_counterexample_indexed auto outgoing_index start winning_set req_ids =
-  (* Prefer a real liveness witness: a reachable losing lasso avoiding one progress ID. *)
+  (* Prefer a clock-starvation witness first: # ∈ Inf(π) is required
+     unconditionally (paper Win_T), so a cycle with no Clock transition at all
+     is the more fundamental defect — report it distinctly from a cycle that
+     merely avoids one progress $id, so the message points at the actual
+     violated property instead of a coincidentally-also-avoided marker. *)
+  match find_clock_avoiding_lasso outgoing_index start winning_set with
+  | Some (prefix, cycle_start, cycle) ->
+      let buffer = Buffer.create 512 in
+      Printf.bprintf buffer
+        "Clock-starvation counterexample: repeat the cycle below forever without ever taking #.\n";
+      let current = ref start in
+      if prefix <> [] then
+        Printf.bprintf buffer "\nPrefix to the avoiding cycle:\n";
+      List.iter
+        (fun t -> current := print_transition_step buffer auto winning_set !current t)
+        prefix;
+      Printf.bprintf buffer "\nCycle avoiding # starts at state %d:\n" cycle_start;
+      current := cycle_start;
+      List.iter
+        (fun t -> current := print_transition_step buffer auto winning_set !current t)
+        cycle;
+      Printf.bprintf buffer "Back to state %d without taking #.\n" cycle_start;
+      Buffer.contents buffer
+  | None -> (
+  (* Otherwise, prefer a real liveness witness: a reachable losing lasso avoiding one progress ID. *)
   match find_progress_avoiding_lasso outgoing_index start winning_set req_ids with
   | Some (req_id, prefix, cycle_start, cycle) ->
       let buffer = Buffer.create 512 in
@@ -316,7 +401,7 @@ let find_counterexample_indexed auto outgoing_index start winning_set req_ids =
               dfs t.to_state)
       in
       dfs start;
-      Buffer.contents buffer
+      Buffer.contents buffer)
 
 let find_counterexample auto start winning_set req_ids =
   let outgoing_index = build_outgoing_index auto.transitions in
