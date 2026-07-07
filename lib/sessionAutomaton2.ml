@@ -857,24 +857,35 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                  projection. The same merged combo guard is projected onto the
                  boundary messages (the pending part left for the environment).
                  U = the boundary messages this round genuinely requires now
-                 (guard.require_now ∪ guard.subset_now on the boundary side —
-                 both express "the environment must be offering this now",
-                 exact vs subset; a transition guarded only by subset_now, e.g.
-                 a plain message-firing edge, must still surface its message in
-                 U or two boundary-distinct transitions collapse into the same
-                 θ move and the choice between them wrongly becomes the
-                 system's instead of the environment's); F = boundary messages
-                 that may still arrive this cycle (guard.future_intersects plus
-                 the components' maybe_offers), minus U. Offers presented now do
-                 NOT force a boundary message into U — only require_now/subset_now
-                 does, so a combo that fires just m1 does not spuriously demand m2
-                 from the environment. Empty when boundary_messages = ∅ (closed). *)
+                 (guard.require_now ∪ guard.subset_now ∪ every message across
+                 guard.exists_now_groups, on the boundary side — all three
+                 express "the environment must be offering something from this
+                 set now": require_now/subset_now exactly/subset, and
+                 exists_now_groups as a disjunction where ANY one message from
+                 ANY one group suffices, so its whole message set must surface
+                 in U or a transition guarded only by exists_now_groups (e.g.
+                 L-OfferSome's onward step, "some branch is ready") would get
+                 U = ∅ and collapse into the SAME θ move as a transition whose
+                 guard requires the opposite — missing_now_groups' "no branch
+                 ready" — even though the two are mutually exclusive under any
+                 single concrete Imm(E); a transition guarded only by
+                 subset_now, e.g. a plain message-firing edge, must still
+                 surface its message in U for the same reason); F = boundary
+                 messages that may still arrive this cycle (guard.future_intersects
+                 plus the components' maybe_offers), minus U. Offers presented
+                 now do NOT force a boundary message into U — only
+                 require_now/subset_now/exists_now_groups does, so a combo that
+                 fires just m1 does not spuriously demand m2 from the
+                 environment. Empty when boundary_messages = ∅ (closed). *)
               let merged_guard = merge_guards guards in
               let boundary_guard =
                 project_guard_to boundary_messages merged_guard
               in
               let be_now =
                 MsgSet.union boundary_guard.require_now boundary_guard.subset_now
+                |> MsgSet.union
+                     (List.fold_left MsgSet.union MsgSet.empty
+                        boundary_guard.exists_now_groups)
               in
               let be_future =
                 boundary_guard.future_intersects

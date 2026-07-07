@@ -34,8 +34,18 @@ let get_unreachable_ids outgoing_index req_ids start_node =
   done;
   List.filter (fun req_id -> not (Hashtbl.mem found req_id)) req_ids
 
-let compute_id_attractor_indexed auto outgoing_index valid_region req_id =
-  (* Compute states that force one required progress ID within valid_region. *)
+(* Ordinary (reachability) attractor: states within valid_region that can
+   force REACHING an ~is_good edge at least once, keyed on ownership exactly
+   like the closed solver's existing is_fair rule (fair/player-modelling
+   states are existential — one good move suffices; others are universal —
+   every move must stay good). This is a least fixpoint — it says nothing
+   about visiting ~is_good again afterward, which is why it must NOT be used
+   directly for a Büchi/recurrence condition (see compute_recurrence_region_indexed
+   below): a state reachable from an already-attracted state via a
+   non-good edge gets pulled in here too, which is correct for "can reach F
+   at all" but wrong for "can reach F infinitely often". *)
+let compute_reach_attractor_indexed ~is_fair ~is_good outgoing_index
+    valid_region =
   let attractor = ref IntSet.empty in
   let changed = ref true in
   while !changed do
@@ -43,108 +53,173 @@ let compute_id_attractor_indexed auto outgoing_index valid_region req_id =
     IntSet.iter
       (fun state_id ->
         if not (IntSet.mem state_id !attractor) then (
-          let state = Hashtbl.find auto.states state_id in
           let outgoing = get_outgoing_from_index outgoing_index state_id in
+          let edge_good t =
+            IntSet.mem t.to_state valid_region
+            && (is_good t || IntSet.mem t.to_state !attractor)
+          in
           let all_outgoing_valid =
             outgoing <> []
             && List.for_all
                  (fun t -> IntSet.mem t.to_state valid_region)
                  outgoing
           in
-          let exists_progress =
-            List.exists
-              (fun t ->
-                IntSet.mem t.to_state valid_region
-                && (transition_has_id t req_id
-                   || IntSet.mem t.to_state !attractor))
-              outgoing
+          let reaches_again =
+            if is_fair state_id then List.exists edge_good outgoing
+            else all_outgoing_valid && List.for_all edge_good outgoing
           in
-          let reaches_progress =
-            (* Fair states model environment choices, so one fair-progress path suffices. *)
-            if state.is_fair then exists_progress
-            else
-              all_outgoing_valid
-              && List.for_all
-                   (fun t ->
-                     transition_has_id t req_id
-                     || IntSet.mem t.to_state !attractor)
-                   outgoing
-          in
-          if reaches_progress then (
+          if reaches_again then (
             attractor := IntSet.add state_id !attractor;
             changed := true)))
       valid_region
   done;
   !attractor
 
-let compute_clock_attractor_indexed outgoing_index valid_region =
-  (* Compute states within valid_region that force reaching a Clock
-     transition again. Unlike compute_id_attractor_indexed, this is ALWAYS
-     universal, even for fair states: # ∈ Inf(π) is required on every path
-     (paper Win_T), not just the fair-and-live disjunct, so there is no
-     existential escape for fair nodes here — a fair node with one path that
-     recurs on # and one that never ticks still has a losing (non-recurring)
-     path, and that path alone makes it non-winning for this property. *)
-  let attractor = ref IntSet.empty in
+(* Recurrence (Büchi) winning region: states that can force revisiting an
+   ~is_good edge INFINITELY OFTEN. Standard nested fixpoint: repeatedly
+   shrink the candidate region W to the set of states that can reach an
+   ~is_good edge landing back inside the CURRENT W (re-seeding the
+   reachability target every outer pass) until W stabilizes. *)
+let compute_recurrence_region_indexed ~is_fair ~is_good outgoing_index
+    valid_region =
+  let region = ref valid_region in
   let changed = ref true in
   while !changed do
-    changed := false;
-    IntSet.iter
-      (fun state_id ->
-        if not (IntSet.mem state_id !attractor) then (
-          let outgoing = get_outgoing_from_index outgoing_index state_id in
-          let all_outgoing_valid =
-            outgoing <> []
-            && List.for_all
-                 (fun t -> IntSet.mem t.to_state valid_region)
-                 outgoing
-          in
-          let reaches_clock =
-            all_outgoing_valid
-            && List.for_all
-                 (fun t ->
-                   transition_is_clock t || IntSet.mem t.to_state !attractor)
-                 outgoing
-          in
-          if reaches_clock then (
-            attractor := IntSet.add state_id !attractor;
-            changed := true)))
-      valid_region
+    let next =
+      compute_reach_attractor_indexed ~is_fair
+        ~is_good:(fun t -> is_good t && IntSet.mem t.to_state !region)
+        outgoing_index !region
+    in
+    if IntSet.equal next !region then changed := false else region := next
   done;
-  !attractor
+  !region
+
+(* Clock recurrence must hold on every path, independent of fairness: no
+   existential escape for fair states, since one recurring path and one
+   never-ticking path still leaves a losing path. *)
+let compute_clock_attractor_indexed outgoing_index valid_region =
+  compute_recurrence_region_indexed ~is_fair:(fun _ -> false)
+    ~is_good:transition_is_clock outgoing_index valid_region
+
+(* Conjunction of two independent recurrence conditions, each keeping its own
+   ownership rule (is_fair_a/is_fair_b). Naively intersecting two
+   independently-computed recurrence regions can destructively drop a state
+   that was a waypoint for one condition while being pruned for the other;
+   fixed by re-seeding both attractors into the shrinking joint region every
+   outer pass until it stabilizes. *)
+let compute_conjoined_recurrence_indexed ~is_fair_a ~is_good_a ~is_fair_b
+    ~is_good_b outgoing_index valid_region =
+  let region = ref valid_region in
+  let changed = ref true in
+  while !changed do
+    let region_a =
+      compute_recurrence_region_indexed ~is_fair:is_fair_a ~is_good:is_good_a
+        outgoing_index !region
+    in
+    let region_b =
+      compute_recurrence_region_indexed ~is_fair:is_fair_b ~is_good:is_good_b
+        outgoing_index !region
+    in
+    let next = IntSet.inter region_a region_b in
+    if IntSet.equal next !region then changed := false else region := next
+  done;
+  !region
+
+(* Round-robin progress monitor: r = List.length req_ids copies of every
+   state, `(state_id, k)` packed as `state_id * r + k`, meaning "at state_id,
+   waiting to see req_ids.(k)". An edge whose action carries req_ids.(k)
+   advances to phase `(k+1) mod r`; every other edge stays at phase k.
+   Visiting an advancing edge infinitely often forces every req_id to recur —
+   a SINGLE recurring-set condition instead of r independently-intersected
+   attractors, which can destructively drop a waypoint one property needed
+   but another didn't directly witness. *)
+let monitor_pack r state_id k = (state_id * r) + k
+
+let monitor_unpack r packed = (packed / r, packed mod r)
 
 let solve_game_custom_indexed auto outgoing_index req_ids =
-  (* # ∈ Inf(π) is required on every path (paper Win_T), independent of
-     fairness/progress. That's a recurrence ("always eventually see Clock
-     again"), so it is an outer greatest-fixpoint: repeatedly shrink the
-     candidate winning region to states that can force reaching Clock again
-     WITHIN the current region, intersected with the per-id progress
-     attractors, until it stabilizes. *)
-  let all_states =
-    Hashtbl.fold (fun id _ acc -> IntSet.add id acc) auto.states IntSet.empty
-  in
-  let winning = ref all_states in
-  let outer_changed = ref true in
-  while !outer_changed do
-    let outer_start = !winning in
-    let region = ref (compute_clock_attractor_indexed outgoing_index !winning) in
-    let changed = ref true in
-    while !changed do
-      let start = !region in
-      let current = ref start in
-      List.iter
-        (fun req_id ->
-          if not (IntSet.is_empty !current) then
-            current :=
-              compute_id_attractor_indexed auto outgoing_index !current req_id)
-        req_ids;
-      if IntSet.equal start !current then changed := false
-      else region := !current
-    done;
-    winning := !region;
-    if IntSet.equal outer_start !winning then outer_changed := false
-  done;
-  !winning
+  let r = List.length req_ids in
+  if r = 0 then
+    (* No progress markers required: clock-recurrence alone.
+       compute_clock_attractor_indexed is already a full recurrence fixpoint
+       (compute_recurrence_region_indexed), so a single call suffices. *)
+    let all_states =
+      Hashtbl.fold (fun id _ acc -> IntSet.add id acc) auto.states IntSet.empty
+    in
+    compute_clock_attractor_indexed outgoing_index all_states
+  else
+    let req_ids_arr = Array.of_list req_ids in
+    let is_fair_of packed =
+      let state_id, _k = monitor_unpack r packed in
+      (Hashtbl.find auto.states state_id).is_fair
+    in
+    let monitor_outgoing : transition_outgoing_index = Hashtbl.create 64 in
+    Hashtbl.iter
+      (fun state_id _ ->
+        let outgoing = get_outgoing_from_index outgoing_index state_id in
+        for k = 0 to r - 1 do
+          let monitor_transitions =
+            List.map
+              (fun t ->
+                let advances = transition_has_id t req_ids_arr.(k) in
+                let next_k = if advances then (k + 1) mod r else k in
+                { t with
+                  from_state = monitor_pack r state_id k;
+                  to_state = monitor_pack r t.to_state next_k;
+                })
+              outgoing
+          in
+          Hashtbl.replace monitor_outgoing (monitor_pack r state_id k)
+            monitor_transitions
+        done)
+      auto.states;
+    let monitor_all =
+      Hashtbl.fold
+        (fun state_id _ acc ->
+          let acc = ref acc in
+          for k = 0 to r - 1 do
+            acc := IntSet.add (monitor_pack r state_id k) !acc
+          done;
+          !acc)
+        auto.states IntSet.empty
+    in
+    (* F_T: an edge is "good" (advances the counter) exactly when it moves
+       from phase k to phase (k+1) mod r, i.e. its from/to differ in phase. *)
+    let monitor_advances t =
+      let _, from_k = monitor_unpack r t.from_state in
+      let _, to_k = monitor_unpack r t.to_state in
+      to_k <> from_k
+    in
+    (* Clock recurrence (always universal) and id-progress recurrence
+       (existential for fair states) are conjoined via
+       compute_conjoined_recurrence_indexed so neither attractor prunes a
+       waypoint the other still needs. transition_is_clock reads monitor
+       transitions directly since building the monitor only relabels
+       from_state/to_state, leaving t.action untouched. *)
+    let winning =
+      compute_conjoined_recurrence_indexed ~is_fair_a:(fun _ -> false)
+        ~is_good_a:transition_is_clock ~is_fair_b:is_fair_of
+        ~is_good_b:monitor_advances monitor_outgoing monitor_all
+    in
+    (* Project back onto original state ids: a state wins only if EVERY
+       reachable monitor phase of it wins (conservative — see plan notes on
+       phase-fragility; this can only shrink, never grow, the winning set
+       relative to a phase-exact reading, so it cannot manufacture a false
+       "compatible"). *)
+    let per_state_phase_wins = Hashtbl.create 64 in
+    IntSet.iter
+      (fun packed ->
+        let state_id, _k = monitor_unpack r packed in
+        Hashtbl.replace per_state_phase_wins state_id
+          (1 + (try Hashtbl.find per_state_phase_wins state_id with Not_found -> 0)))
+      winning;
+    Hashtbl.fold
+      (fun state_id _ acc ->
+        let wins_count =
+          try Hashtbl.find per_state_phase_wins state_id with Not_found -> 0
+        in
+        if wins_count = r then IntSet.add state_id acc else acc)
+      auto.states IntSet.empty
 
 let solve_game_custom auto req_ids =
   let outgoing_index = build_outgoing_index auto.transitions in
@@ -323,11 +398,11 @@ let print_transition_step buffer auto winning_set current t =
   t.to_state
 
 let find_counterexample_indexed auto outgoing_index start winning_set req_ids =
-  (* Prefer a clock-starvation witness first: # ∈ Inf(π) is required
-     unconditionally (paper Win_T), so a cycle with no Clock transition at all
-     is the more fundamental defect — report it distinctly from a cycle that
-     merely avoids one progress $id, so the message points at the actual
-     violated property instead of a coincidentally-also-avoided marker. *)
+  (* Prefer a clock-starvation witness first: clock recurrence is required
+     unconditionally, so a cycle with no Clock transition at all is the more
+     fundamental defect — report it distinctly from a cycle that merely
+     avoids one progress $id, so the message points at the actual violated
+     property instead of a coincidentally-also-avoided marker. *)
   match find_clock_avoiding_lasso outgoing_index start winning_set with
   | Some (prefix, cycle_start, cycle) ->
       let buffer = Buffer.create 512 in

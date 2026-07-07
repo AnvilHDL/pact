@@ -137,11 +137,21 @@ let indent_block prefix text =
 
 let edge_is_clock edge = edge.arena_edge_action = Some Clock
 
-(* Attractor for one required progress id, keyed on node ownership:
-   - player nodes win existentially (one good successor suffices),
-   - adversary nodes win existentially when arena_is_fair ("unfair suffixes
-     are allowed to win"), else universally (all successors must stay good). *)
-let compute_id_attractor node_by_id outgoing valid_region req_id =
+(* Ordinary (reachability) attractor: nodes within valid_region that can
+   force REACHING an ~is_good edge at least once, keyed on ownership exactly
+   like the existing per-property attractors (player nodes always
+   existential; adversary nodes existential when arena_is_fair else
+   universal; fail nodes universal). This is a least fixpoint — it says
+   nothing about visiting ~is_good again afterward, which is why it must NOT
+   be used directly for a Büchi/recurrence condition (see
+   compute_recurrence_region below): a node reachable from an
+   already-attracted node via a non-good edge gets pulled in here too, which
+   is correct for "can reach F at all" but wrong for "can reach F infinitely
+   often" (that needs re-attracting to F ∩ (the current recurrence
+   candidate), nested in an outer greatest fixpoint — a single reachability
+   pass silently answers the weaker "reaches once" question instead). *)
+let compute_reach_attractor ?(is_fair = fun (node : arena_node) -> node.arena_is_fair)
+    node_by_id outgoing ~is_good valid_region =
   let attractor = ref StringSet.empty in
   let changed = ref true in
   while !changed do
@@ -153,13 +163,12 @@ let compute_id_attractor node_by_id outgoing valid_region req_id =
           let edges = arena_outgoing outgoing node_id in
           let edge_good edge =
             StringSet.mem edge.arena_edge_to valid_region
-            && (StringSet.mem req_id (edge_progress_ids edge)
-               || StringSet.mem edge.arena_edge_to !attractor)
+            && (is_good edge || StringSet.mem edge.arena_edge_to !attractor)
           in
           let existential =
             match node.arena_node_kind with
             | ArenaPlayer -> true
-            | ArenaAdversary -> node.arena_is_fair
+            | ArenaAdversary -> is_fair node
             | ArenaFail -> false
           in
           let progresses =
@@ -178,41 +187,58 @@ let compute_id_attractor node_by_id outgoing valid_region req_id =
   done;
   !attractor
 
-(* Attractor for # ∈ Inf(π), required on every path (paper Win_T) independent
-   of fairness/progress — mirrors sessionGame2.compute_clock_attractor_indexed.
-   Player nodes stay existential, but adversary nodes are ALWAYS universal
-   here, even when arena_is_fair: unlike the $id property, there is no
-   fair-suffix escape for clock recurrence. *)
-let compute_clock_attractor node_by_id outgoing valid_region =
-  let attractor = ref StringSet.empty in
+(* Recurrence (Büchi) winning region: nodes that can force revisiting an
+   ~is_good edge INFINITELY OFTEN, not just once. Standard nested fixpoint:
+   repeatedly shrink the candidate region W to the set of nodes that can
+   reach an ~is_good edge landing back inside the CURRENT W (re-seeding the
+   reachability target every outer pass, since "good enough to recur into"
+   is itself only well-defined relative to the region still being attracted
+   to) until W stabilizes. *)
+let compute_recurrence_region ?is_fair node_by_id outgoing ~is_good
+    valid_region =
+  let region = ref valid_region in
   let changed = ref true in
   while !changed do
-    changed := false;
-    StringSet.iter
-      (fun node_id ->
-        if not (StringSet.mem node_id !attractor) then (
-          let node = Hashtbl.find node_by_id node_id in
-          let edges = arena_outgoing outgoing node_id in
-          let edge_good edge =
-            StringSet.mem edge.arena_edge_to valid_region
-            && (edge_is_clock edge || StringSet.mem edge.arena_edge_to !attractor)
-          in
-          let progresses =
-            match node.arena_node_kind with
-            | ArenaPlayer -> List.exists edge_good edges
-            | ArenaAdversary | ArenaFail ->
-                edges <> []
-                && List.for_all
-                     (fun edge -> StringSet.mem edge.arena_edge_to valid_region)
-                     edges
-                && List.for_all edge_good edges
-          in
-          if progresses then (
-            attractor := StringSet.add node_id !attractor;
-            changed := true)))
-      valid_region
+    let next =
+      compute_reach_attractor ?is_fair node_by_id outgoing
+        ~is_good:(fun edge -> is_good edge && StringSet.mem edge.arena_edge_to !region)
+        !region
+    in
+    if StringSet.equal next !region then changed := false else region := next
   done;
-  !attractor
+  !region
+
+(* Clock recurrence must hold on every path, independent of fairness: no
+   existential escape for fair nodes — mirrors
+   sessionGame2.compute_clock_attractor_indexed. is_fair:(fun _ -> false)
+   forces universal ownership even at arena_is_fair nodes. *)
+let compute_clock_attractor node_by_id outgoing valid_region =
+  compute_recurrence_region ~is_fair:(fun _ -> false) node_by_id outgoing
+    ~is_good:edge_is_clock valid_region
+
+(* Conjunction of two independent recurrence conditions, each keeping its own
+   ownership rule. Mirrors sessionGame2.compute_conjoined_recurrence_indexed:
+   naively intersecting two independently-computed regions can destructively
+   drop a node that was a waypoint for one condition while being pruned for
+   the other; fixed by re-seeding both attractors into the shrinking joint
+   region every outer pass until it stabilizes. *)
+let compute_conjoined_recurrence node_by_id outgoing ~is_fair_a ~is_good_a
+    ~is_fair_b ~is_good_b valid_region =
+  let region = ref valid_region in
+  let changed = ref true in
+  while !changed do
+    let region_a =
+      compute_recurrence_region ~is_fair:is_fair_a node_by_id outgoing
+        ~is_good:is_good_a !region
+    in
+    let region_b =
+      compute_recurrence_region ~is_fair:is_fair_b node_by_id outgoing
+        ~is_good:is_good_b !region
+    in
+    let next = StringSet.inter region_a region_b in
+    if StringSet.equal next !region then changed := false else region := next
+  done;
+  !region
 
 (* Dead-end safety (closed solver's sanity_check, lifted to the arena): the set
    of nodes from which ⊥ cannot be avoided. ⊥ is the seed. For *safety*, ownership
@@ -255,35 +281,98 @@ let forced_fail_set node_by_id outgoing all_nodes =
   (* ⊥ self-loops, so it is always in the set; that is intended. *)
   !forced
 
-(* Winning region: every required id must be forced infinitely often, AND
-   # ∈ Inf(π) on every path (paper Win_T, unconditional on fairness/progress).
-   The clock-recurrence requirement is a nested outer greatest-fixpoint
-   (mirrors sessionGame2.solve_game_custom_indexed): repeatedly shrink the
-   candidate region to states that can force reaching Clock again WITHIN the
-   current region, then intersect with the per-id progress attractors, until
-   it stabilizes. *)
+(* Round-robin progress monitor (mirrors sessionGame2.solve_game_custom_indexed):
+   r = List.length req_ids copies of every arena node, "<id>#<k>" meaning "at
+   node <id>, waiting to see req_ids.(k)". An edge whose action carries
+   req_ids.(k) advances to phase (k+1) mod r; every other edge stays at phase
+   k. This turns r independently-intersected $id attractors (which could
+   destructively drop a waypoint one property needed but another didn't
+   directly witness) into a SINGLE recurring-set condition on the monitor
+   product, sidestepping that bug by construction. *)
+let monitor_node_id node_id k = node_id ^ "#" ^ string_of_int k
+
+let build_monitor node_by_id outgoing all_nodes req_ids =
+  let r = List.length req_ids in
+  let req_ids_arr = Array.of_list req_ids in
+  let monitor_node_by_id = Hashtbl.create (StringSet.cardinal all_nodes * r) in
+  let monitor_outgoing = Hashtbl.create (StringSet.cardinal all_nodes * r) in
+  let monitor_all = ref StringSet.empty in
+  StringSet.iter
+    (fun node_id ->
+      let node = Hashtbl.find node_by_id node_id in
+      let edges = arena_outgoing outgoing node_id in
+      for k = 0 to r - 1 do
+        let m_id = monitor_node_id node_id k in
+        monitor_all := StringSet.add m_id !monitor_all;
+        Hashtbl.replace monitor_node_by_id m_id
+          { node with arena_node_id = m_id };
+        let advances edge = StringSet.mem req_ids_arr.(k) (edge_progress_ids edge) in
+        let monitor_edges =
+          List.map
+            (fun edge ->
+              let next_k = if advances edge then (k + 1) mod r else k in
+              {
+                edge with
+                arena_edge_from = m_id;
+                arena_edge_to = monitor_node_id edge.arena_edge_to next_k;
+              })
+            edges
+        in
+        Hashtbl.replace monitor_outgoing m_id monitor_edges
+      done)
+    all_nodes;
+  (monitor_node_by_id, monitor_outgoing, !monitor_all)
+
+(* An edge on the monitor product advances the counter exactly when it moves
+   between different phase suffixes of the same underlying node identity. *)
+let monitor_edge_advances edge =
+  let from_k = String.rindex edge.arena_edge_from '#' in
+  let to_k = String.rindex edge.arena_edge_to '#' in
+  String.sub edge.arena_edge_from (from_k + 1)
+    (String.length edge.arena_edge_from - from_k - 1)
+  <> String.sub edge.arena_edge_to (to_k + 1)
+       (String.length edge.arena_edge_to - to_k - 1)
+
+(* Winning region: clock-recurrence (always universal, independent of
+   fairness/progress) AND id-progress-recurrence (existential only for fair
+   nodes), conjoined via compute_conjoined_recurrence, mirroring
+   sessionGame2.solve_game_custom_indexed. Both conditions are evaluated on
+   the SAME monitor product (clock is phase-independent since be_clock/# is
+   unaffected by which $id is currently awaited, so checking it on every
+   phase copy is equivalent to checking it once per original node — but it
+   must share the monitor's outer fixpoint so it can be conjoined without a
+   separate, destructively-pruning outer nest). *)
 let solve_open_region node_by_id outgoing all_nodes req_ids =
-  let winning = ref all_nodes in
-  let outer_changed = ref true in
-  while !outer_changed do
-    let outer_start = !winning in
-    let region = ref (compute_clock_attractor node_by_id outgoing !winning) in
-    let changed = ref true in
-    while !changed do
-      let start = !region in
-      let current = ref start in
-      List.iter
-        (fun req_id ->
-          if not (StringSet.is_empty !current) then
-            current := compute_id_attractor node_by_id outgoing !current req_id)
-        req_ids;
-      if StringSet.equal start !current then changed := false
-      else region := !current
-    done;
-    winning := !region;
-    if StringSet.equal outer_start !winning then outer_changed := false
-  done;
-  !winning
+  if req_ids = [] then
+    (* No progress markers required: dead-end/clock-recurrence freedom must
+       be kept as an explicit condition here. compute_clock_attractor is
+       already a full recurrence fixpoint (compute_recurrence_region), so a
+       single call suffices. *)
+    compute_clock_attractor node_by_id outgoing all_nodes
+  else
+    let monitor_node_by_id, monitor_outgoing, monitor_all =
+      build_monitor node_by_id outgoing all_nodes req_ids
+    in
+    let winning =
+      compute_conjoined_recurrence monitor_node_by_id monitor_outgoing
+        ~is_fair_a:(fun _ -> false) ~is_good_a:edge_is_clock
+        ~is_fair_b:(fun node -> node.arena_is_fair) ~is_good_b:monitor_edge_advances
+        monitor_all
+    in
+    (* Project back onto original node ids: a node wins only if EVERY phase
+       copy of it wins (conservative — can only shrink, never grow, the
+       winning set relative to a phase-exact reading, so it cannot
+       manufacture a false "compatible"; see plan notes on phase-fragility). *)
+    let r = List.length req_ids in
+    StringSet.filter
+      (fun node_id ->
+        let rec all_phases_win k =
+          k >= r
+          || (StringSet.mem (monitor_node_id node_id k) winning
+             && all_phases_win (k + 1))
+        in
+        all_phases_win 0)
+      all_nodes
 
 (* The ⊥ sink emits no $id, so it can never satisfy a non-empty required set;
    when T = ∅ it is kept winning (dead-end freedom is then the only safety
@@ -455,9 +544,9 @@ let print_edge_step buffer node_by_id winning current edge =
   Printf.bprintf buffer "\n --[%s]--> " (string_of_edge_label edge.arena_edge_label);
   edge.arena_edge_to
 
-(* Prefer a clock-starvation witness first (# ∈ Inf(π) is required
-   unconditionally, paper Win_T), falling back to a progress-avoiding cycle,
-   and only then the generic arbitrary-successor walk — mirrors
+(* Prefer a clock-starvation witness first (clock recurrence is required
+   unconditionally), falling back to a progress-avoiding cycle, and only then
+   the generic arbitrary-successor walk — mirrors
    sessionGame2.find_counterexample_indexed. *)
 let find_counterexample node_by_id outgoing winning start req_ids =
   match find_clock_avoiding_lasso outgoing start winning with
