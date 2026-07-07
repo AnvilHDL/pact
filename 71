@@ -1,0 +1,249 @@
+Debug mode enabled
+
+Generalized Type v2:
+
+Session Type i1: #ep.m1;#ep.m2;#<1> 
+Session Type i2: (#ep.m1 ⊕ #ep.m2);#<1> 
+
+Generating Generalized Types (v2) as DOT files...
+
+
+Generalized Type v2 Pool Compatiblity Checks:
+
+Checking Pool p3  
+Generalized Type v2 closed sync messages for pool p3: {ep.ack,ep.req}
+ Generalized Type v2 automaton ip31: states=7 transitions=12
+ Generalized Type v2 automaton ip32: states=5 transitions=9
+------------------------------------------------------------
+Product combo: REJECTED
+  from   : [0,0]
+  action : alpha = {ep.req}
+  to     : [1,1]
+
+  checks:
+    step1        : fail   use_env=true
+    clock        : ok     selected=0/2
+    sync         : fail 
+    changed      : true
+    keep         : true
+    combined_msg : {ep.req}
+
+  component transitions:
+    - ip31:s0 -> s1
+        action : alpha = epsilon
+        O      : {}
+        MO     : {ep.req}
+        G      : true
+        E      : Imm={ep.req}; F={ep.ack}; clock=false
+    - ip32:s0 -> s1
+        action : alpha = {ep.req}
+        O      : {ep.req}
+        MO     : {}
+        G      : {ep.req} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E      : Imm={}; F={ep.ack,ep.req}; clock=false
+
+  guard checks:
+    - ip31:s0  fail
+        G' : true
+        E  : Imm={ep.req}; F={ep.ack}; clock=false
+    - ip32:s0  fail
+        G' : {ep.req} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E  : Imm={}; F={ep.ack,ep.req}; clock=false
+------------------------------------------------------------
+
+------------------------------------------------------------
+Product combo: REJECTED
+  from   : [0,0]
+  action : alpha = {ep.ack}
+  to     : [1,2]
+
+  checks:
+    step1        : fail   use_env=true
+    clock        : ok     selected=0/2
+    sync         : fail 
+    changed      : true
+    keep         : true
+    combined_msg : {ep.ack}
+
+  component transitions:
+    - ip31:s0 -> s1
+        action : alpha = epsilon
+        O      : {}
+        MO     : {ep.req}
+        G      : true
+        E      : Imm={ep.ack}; F={ep.req}; clock=false
+    - ip32:s0 -> s2
+        action : alpha = {ep.ack}
+        O      : {ep.ack}
+        MO     : {}
+        G      : {ep.ack} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E      : Imm={}; F={ep.ack,ep.req}; clock=false
+
+  guard checks:
+    - ip31:s0  fail
+        G' : true
+        E  : Imm={ep.ack}; F={ep.req}; clock=false
+    - ip32:s0  fail
+        G' : {ep.ack} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E  : Imm={}; F={ep.ack,ep.req}; clock=false
+------------------------------------------------------------
+
+------------------------------------------------------------
+Product combo: REJECTED
+  from   : [0,0]
+  action : alpha = epsilon
+  to     : [1,0]
+
+  checks:
+    step1        : fail   use_env=true
+    clock        : ok     selected=0/2
+    sync         : ok   
+    changed      : true
+    keep         : true
+    combined_msg : {}
+
+  component transitions:
+    - ip31:s0 -> s1
+        action : alpha = epsilon
+        O      : {}
+        MO     : {ep.req}
+        G      : true
+        E      : Imm={ep.ack,ep.req}; F={}; clock=false
+    - ip32:s0 -> s0
+        action : alpha = epsilon
+        O      : {ep.ack,ep.req}
+        MO     : {ep.ack,ep.req}
+        G      : forall G in [{ep.ack,ep.req}]. G cap F <> empty
+        E      : Imm={}; F={ep.ack,ep.req}; clock=false
+
+  guard checks:
+    - ip31:s0  fail
+        G' : true
+        E  : Imm={ep.ack,ep.req}; F={}; clock=false
+    - ip32:s0  ok
+        G' : forall G in [{ep.ack,ep.req}]. G cap F <> empty
+        E  : Imm={}; F={ep.ack,ep.req}; clock=false
+------------------------------------------------------------
+
+------------------------------------------------------------
+Product combo: REJECTED
+  from   : [0,0]
+  action : alpha = {ep.req}
+  to     : [2,1]
+
+  checks:
+    step1        : fail   use_env=true
+    clock        : ok     selected=0/2
+    sync         : fail 
+    changed      : true
+    keep         : true
+    combined_msg : {ep.req}
+
+  component transitions:
+    - ip31:s0 -> s2
+        action : alpha = epsilon
+        O      : {}
+        MO     : {ep.ack}
+        G      : true
+        E      : Imm={ep.req}; F={ep.ack}; clock=false
+    - ip32:s0 -> s1
+        action : alpha = {ep.req}
+        O      : {ep.req}
+        MO     : {}
+        G      : {ep.req} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E      : Imm={}; F={ep.ack,ep.req}; clock=false
+
+  guard checks:
+    - ip31:s0  fail
+        G' : true
+        E  : Imm={ep.req}; F={ep.ack}; clock=false
+    - ip32:s0  fail
+        G' : {ep.req} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E  : Imm={}; F={ep.ack,ep.req}; clock=false
+------------------------------------------------------------
+
+------------------------------------------------------------
+Product combo: REJECTED
+  from   : [0,0]
+  action : alpha = {ep.ack}
+  to     : [2,2]
+
+  checks:
+    step1        : fail   use_env=true
+    clock        : ok     selected=0/2
+    sync         : fail 
+    changed      : true
+    keep         : true
+    combined_msg : {ep.ack}
+
+  component transitions:
+    - ip31:s0 -> s2
+        action : alpha = epsilon
+        O      : {}
+        MO     : {ep.ack}
+        G      : true
+        E      : Imm={ep.ack}; F={ep.req}; clock=false
+    - ip32:s0 -> s2
+        action : alpha = {ep.ack}
+        O      : {ep.ack}
+        MO     : {}
+        G      : {ep.ack} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E      : Imm={}; F={ep.ack,ep.req}; clock=false
+
+  guard checks:
+    - ip31:s0  fail
+        G' : true
+        E  : Imm={ep.ack}; F={ep.req}; clock=false
+    - ip32:s0  fail
+        G' : {ep.ack} subset Imm(E) && {ep.ack,ep.req} cap F = empty
+        E  : Imm={}; F={ep.ack,ep.req}; clock=false
+------------------------------------------------------------
+
+------------------------------------------------------------
+Product combo: REJECTED
+  from   : [0,0]
+  action : alpha = epsilon
+  to     : [2,0]
+
+  checks:
+    step1        : fail   use_env=true
+    clock        : ok     selected=0/2
+    sync         : ok   
+    changed      : true
+    keep         : true
+    combined_msg : {}
+
+  component transitions:
+    - ip31:s0 -> s2
+        action : alpha = epsilon
+        O      : {}
+        MO     : {ep.ack}
+        G      : true
+        E      : Imm={ep.ack,ep.req}; F={}; clock=false
+    - ip32:s0 -> s0
+        action : alpha = epsilon
+        O      : {ep.ack,ep.req}
+        MO     : {ep.ack,ep.req}
+        G      : forall G in [{ep.ack,ep.req}]. G cap F <> empty
+        E      : Imm={}; F={ep.ack,ep.req}; clock=false
+
+  guard checks:
+    - ip31:s0  fail
+        G' : true
+        E  : Imm={ep.ack,ep.req}; F={}; clock=false
+    - ip32:s0  ok
+        G' : forall G in [{ep.ack,ep.req}]. G cap F <> empty
+        E  : Imm={}; F={ep.ack,ep.req}; clock=false
+------------------------------------------------------------
+
+Generalized Type v2 product construction completed for pool p3: states=1 transitions=0
+Generalized Type v2 game analysis completed for pool p3: false
+Generalized Type v2 Pool p3 Compatibility: false | err_msg = Error: The automaton has dead-end states:
+Trace from start state 0 to dead-end state 0:
+  State 0: DEAD END
+  Dead-end diagnostics:
+    Product state map:
+    ip31:s0 = (#ep.req+#ep.ack)
+    ip32:s0 = (#ep.req ⊕ #ep.ack)
+ 
+

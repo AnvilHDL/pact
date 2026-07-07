@@ -1,0 +1,43 @@
+interface fifo_itfc(push_ep : right fifo_insert_ch<select_t>, pop_ep : right fifo_dequeue_ch<select_t>) =  
+                                                (
+                                                    rec X . ^( pop_ep.pop : ^(push_ep.full, *);#1,
+                                                       * :  ^(push_ep.full, *);#1;X
+                                                     )
+                                                  )
+                                                                    + 
+                                                  (
+                                                    rec Y . ^(
+                                                        push_ep.push : ^(pop_ep.empty, *);#1,
+                                                        * : ^(pop_ep.empty, *);#1;Y
+                                                    )
+                                                  )
+                                                     
+                                                                    + 
+                                                    (
+                                                        &(push_ep.push , pop_ep.pop) ; #1
+                                                    )
+
+
+interface master_itfc(fifo_ep : left fifo_insert_ch<select_t>) = F rec X .^(fifo_ep.full : #1;X, * : #fifo_ep.push) ; #1
+
+interface slave_itfc(fifo_ep : left fifo_dequeue_ch<select_t>) = F rec X .^(fifo_ep.empty : #1;X, * : #fifo_ep.pop) ; #1
+
+pool fifo_pool {
+    fifo_push_ep -- fifo_push_ep2 : fifo_insert_ch<select_t>,
+    fifo_pop_ep -- fifo_pop_ep2 : fifo_dequeue_ch<select_t>;
+    ififo : fifo_itfc(fifo_push_ep2, fifo_pop_ep2),
+    imaster : master_itfc(fifo_push_ep),
+    islave : slave_itfc(fifo_pop_ep)
+}
+
+chan fifo_insert_ch<Tp : type> {
+    right push : (Tp@#1),
+    left full : (void@#1) 
+}
+
+chan fifo_dequeue_ch<Tp : type> {
+    left pop : (Tp@#1) ,
+    left empty : (void@#1)
+}
+
+type select_t = logic[2];

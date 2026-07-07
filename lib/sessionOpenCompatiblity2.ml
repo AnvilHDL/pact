@@ -535,6 +535,7 @@ let residual_guard boundary_messages boundary source_guard =
     missing_now_groups = project_groups source_guard.missing_now_groups;
     future_intersects = project_groups source_guard.future_intersects;
     future_disjoint = MsgSet.inter boundary_messages source_guard.future_disjoint;
+    subset_now = MsgSet.inter boundary_messages source_guard.subset_now;
     require_clock = source_guard.require_clock;
     forbid_clock = source_guard.forbid_clock;
   }

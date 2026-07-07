@@ -42,8 +42,9 @@ let string_of_action = function
 
 (* Symbolic one-step environment constraints for a transition. *)
 type guard = {
-  require_now : MsgSet.t; (* require_now ⊆ Imm(E) *)
+  require_now : MsgSet.t; (* require_now = Imm(E) *)
   forbid_now : MsgSet.t; (* forbid_now ∩ Imm(E) = ∅ *)
+  subset_now : MsgSet.t; (* subset_now ⊆ Imm(E) *)
   missing_now_groups : MsgSet.t list; (* ∀G. G ∈ missing_now_groups ⇒ G ⊄ Imm(E) *)
   require_clock : bool; (* require_clock ⇒ # ∈ Imm(E) *)
   forbid_clock : bool; (* forbid_clock ⇒ # ∉ Imm(E) *)
@@ -54,6 +55,7 @@ type guard = {
 let any_guard = {
   require_now = MsgSet.empty;
   forbid_now = MsgSet.empty;
+  subset_now = MsgSet.empty;
   missing_now_groups = [];
   require_clock = false;
   forbid_clock = false;
@@ -64,6 +66,7 @@ let any_guard = {
 let guard_is_any g =
   MsgSet.is_empty g.require_now
   && MsgSet.is_empty g.forbid_now
+  && MsgSet.is_empty g.subset_now
   && g.missing_now_groups = []
   && not g.require_clock
   && not g.forbid_clock
@@ -84,20 +87,32 @@ let clock_guard_env env =
 
 (* A transition is enabled exactly when its symbolic guard matches the local view. *)
 let guard_satisfied env g =
-  let missing_group group = not (MsgSet.subset group env.imm) in
-  let future_group group = not (MsgSet.disjoint group env.future) in
-  MsgSet.subset g.require_now env.imm
-  && MsgSet.disjoint g.forbid_now env.imm
-  && List.for_all missing_group g.missing_now_groups
-  && ((not g.require_clock) || env.clock)
-  && ((not g.forbid_clock) || not env.clock)
-  && MsgSet.disjoint g.future_disjoint env.future
-  && List.for_all future_group g.future_intersects
+  if guard_is_any g then true
+  else
+    let missing_group group = not (MsgSet.subset group env.imm) in
+    let future_group group = not (MsgSet.disjoint group env.future) in
+    MsgSet.equal g.require_now env.imm || (MsgSet.subset g.subset_now env.imm && (not (MsgSet.is_empty g.subset_now) && MsgSet.is_empty g.require_now))
+    && MsgSet.disjoint g.forbid_now env.imm
+    && List.for_all missing_group g.missing_now_groups
+    && ((not g.require_clock) || env.clock)
+    && ((not g.forbid_clock) || not env.clock)
+    && MsgSet.disjoint g.future_disjoint env.future
+    && List.for_all future_group g.future_intersects
 
 (* Project a guard onto a message universe: keep only conditions about those messages.
    Boundary conditions are dropped (they concern the outside environment, not partners). *)
 let project_guard_to universe g =
   let inter s = MsgSet.inter s universe in
+  (* (* A future_intersects group is a DISJUNCTION (G ∩ F ≠ ∅ = some message of G is
+     in F). It must not be split across the internal/boundary partition: keeping
+     only G ∩ universe would turn one OR into a stricter, separate condition (and
+     drop the disjunct entirely once its messages are hidden). So a group that has
+     ANY message in the universe is kept WHOLE — its disjunction stays intact and
+     is satisfied by either the internal or boundary future. A group with no
+     message in the universe is dropped. *)
+  let keep_disjunctive_groups groups =
+    groups |> List.filter (fun g -> not (MsgSet.disjoint g universe))
+  in *)
   let inter_groups groups =
     groups
     |> List.map inter
@@ -106,6 +121,7 @@ let project_guard_to universe g =
   {
     require_now = inter g.require_now;
     forbid_now = inter g.forbid_now;
+    subset_now = inter g.subset_now;
     missing_now_groups = inter_groups g.missing_now_groups;
     require_clock = g.require_clock;
     forbid_clock = g.forbid_clock;
@@ -123,8 +139,9 @@ let string_of_guard g =
     if not (MsgSet.is_empty msgs) then
       add (pred (fmt_msgset msgs))
   in
-  add_msg (fun s -> s ^ " subset Imm(E)") g.require_now;
+  add_msg (fun s -> s ^ "= Imm(E)") g.require_now;
   add_msg (fun s -> s ^ " cap Imm(E) = empty") g.forbid_now;
+  add_msg (fun s -> s ^ " subset Imm(E)") g.subset_now;
   if g.missing_now_groups <> [] then
     add
       ("forall G in ["
@@ -172,7 +189,7 @@ type transition = {
   from_state : int;
   to_state : int;
   action : action;
-  guard : guard;
+  guard : guard; (*Env*)
   boundary_now : MsgSet.t;
   boundary_future : MsgSet.t;
   (* Pending (boundary-projected) guard: the part of the merged product guard
@@ -531,6 +548,7 @@ let merge_guards guards =
         require_clock = acc.require_clock || guard.require_clock;
         forbid_clock = acc.forbid_clock || guard.forbid_clock;
         future_disjoint = MsgSet.union acc.future_disjoint guard.future_disjoint;
+        subset_now = MsgSet.union acc.subset_now guard.subset_now;
         future_intersects = acc.future_intersects @ guard.future_intersects;
       })
     any_guard guards

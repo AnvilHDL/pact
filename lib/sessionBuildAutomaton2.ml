@@ -227,7 +227,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
         TypeAutomaton.add_transition auto current next (Messages msg_set)
           { any_guard with require_now = msg_set; forbid_clock = false } msg_set;
         TypeAutomaton.add_transition auto current current Epsilon
-            { any_guard with forbid_now = msg_set; future_intersects = [ msg_set ] } msg_set;
+            {any_guard with forbid_now = msg_set} msg_set;
         if action_is_blocking act then begin
           let next_i = TypeAutomaton.new_state auto false in
           set_residual_type auto next_i (delay_then 1 sty);
@@ -419,9 +419,9 @@ let rec build_automaton (name : identifier option) (st : session_type)
         TypeAutomaton.add_transition auto current target (Messages group)
           {
             any_guard with
-            require_now = group;
             future_disjoint = head_set;
             forbid_clock = false;
+            subset_now = group;
           }
           group;
         finals := build (continuation_or_true off) target rec_env let_env @ !finals)
