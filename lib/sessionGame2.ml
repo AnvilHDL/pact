@@ -5,33 +5,6 @@ module IntSet = Set.Make (Int)
 let transition_has_id (t : transition) (req_id : string) =
   transition_has_progress t req_id
 
-let is_pure_clock_wait_self_loop t =
-  (* The clock is always a boundary/environment move (paper §Local Rules): the
-     closed-world environment can only offer {} or {#}, and Live requires # to
-     recur infinitely often, so a run can never withhold the clock forever.
-     The "wait one instant, the clock hasn't happened yet" self-loop paired
-     with every Clock edge (see sessionBuildAutomaton2.ml) is therefore never
-     a real alternative for the closed game. Only prune when the guard is
-     EXACTLY {forbid_clock=true} and nothing else — a merged product self-loop
-     that also carries another condition may be load-bearing for a different
-     pending synchronization, so it must not be touched. *)
-  t.from_state = t.to_state
-  && (match t.action with Epsilon -> true | _ -> false)
-  && t.guard.forbid_clock
-  && guard_is_any { t.guard with forbid_clock = false }
-
-let prune_pure_clock_wait_self_loops transitions =
-  let has_clock_edge = Hashtbl.create 16 in
-  List.iter
-    (fun t ->
-      if transition_is_clock t then Hashtbl.replace has_clock_edge t.from_state ())
-    transitions;
-  List.filter
-    (fun t ->
-      not
-        (is_pure_clock_wait_self_loop t && Hashtbl.mem has_clock_edge t.from_state))
-    transitions
-
 let indent_block prefix text =
   text
   |> String.split_on_char '\n'
@@ -352,9 +325,7 @@ let find_counterexample auto start winning_set req_ids =
 let play_game auto ids =
   (* Closed compatibility is dead-end freedom plus progress for all interface IDs. *)
   recompute_state_summaries auto;
-  let outgoing_index =
-    build_outgoing_index (prune_pure_clock_wait_self_loops auto.transitions)
-  in
+  let outgoing_index = build_outgoing_index auto.transitions in
   let dead_ends = sanity_check_indexed auto outgoing_index in
   if dead_ends <> [] then
     let traces = collect_dead_ends_paths_indexed auto outgoing_index dead_ends in

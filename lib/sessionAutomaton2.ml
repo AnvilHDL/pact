@@ -46,6 +46,7 @@ type guard = {
   forbid_now : MsgSet.t; (* forbid_now ∩ Imm(E) = ∅ *)
   subset_now : MsgSet.t; (* subset_now ⊆ Imm(E) *)
   missing_now_groups : MsgSet.t list; (* ∀G. G ∈ missing_now_groups ⇒ G ⊄ Imm(E) *)
+  exists_now_groups : MsgSet.t list; (* ∃G ∈ exists_now_groups. G ∩ Imm(E) ≠ ∅ *)
   require_clock : bool; (* require_clock ⇒ # ∈ Imm(E) *)
   forbid_clock : bool; (* forbid_clock ⇒ # ∉ Imm(E) *)
   future_disjoint : MsgSet.t; (* future_disjoint ∩ F = ∅ *)
@@ -57,6 +58,7 @@ let any_guard = {
   forbid_now = MsgSet.empty;
   subset_now = MsgSet.empty;
   missing_now_groups = [];
+  exists_now_groups = [];
   require_clock = false;
   forbid_clock = false;
   future_disjoint = MsgSet.empty;
@@ -68,6 +70,7 @@ let guard_is_any g =
   && MsgSet.is_empty g.forbid_now
   && MsgSet.is_empty g.subset_now
   && g.missing_now_groups = []
+  && g.exists_now_groups = []
   && not g.require_clock
   && not g.forbid_clock
   && MsgSet.is_empty g.future_disjoint
@@ -90,10 +93,19 @@ let guard_satisfied env g =
   if guard_is_any g then true
   else
     let missing_group group = not (MsgSet.subset group env.imm) in
+    let exists_group group = not (MsgSet.disjoint group env.imm) in
     let future_group group = not (MsgSet.disjoint group env.future) in
-    MsgSet.equal g.require_now env.imm || (MsgSet.subset g.subset_now env.imm && (not (MsgSet.is_empty g.subset_now) && MsgSet.is_empty g.require_now))
+    let now_ok =
+      if not (MsgSet.is_empty g.require_now) then
+        MsgSet.equal g.require_now env.imm
+      else if not (MsgSet.is_empty g.subset_now) then
+        MsgSet.subset g.subset_now env.imm
+      else true
+    in
+    now_ok
     && MsgSet.disjoint g.forbid_now env.imm
     && List.for_all missing_group g.missing_now_groups
+    && (g.exists_now_groups = [] || List.exists exists_group g.exists_now_groups)
     && ((not g.require_clock) || env.clock)
     && ((not g.forbid_clock) || not env.clock)
     && MsgSet.disjoint g.future_disjoint env.future
@@ -103,30 +115,33 @@ let guard_satisfied env g =
    Boundary conditions are dropped (they concern the outside environment, not partners). *)
 let project_guard_to universe g =
   let inter s = MsgSet.inter s universe in
-  (* (* A future_intersects group is a DISJUNCTION (G ∩ F ≠ ∅ = some message of G is
-     in F). It must not be split across the internal/boundary partition: keeping
-     only G ∩ universe would turn one OR into a stricter, separate condition (and
-     drop the disjunct entirely once its messages are hidden). So a group that has
-     ANY message in the universe is kept WHOLE — its disjunction stays intact and
-     is satisfied by either the internal or boundary future. A group with no
-     message in the universe is dropped. *)
-  let keep_disjunctive_groups groups =
-    groups |> List.filter (fun g -> not (MsgSet.disjoint g universe))
-  in *)
   let inter_groups groups =
     groups
     |> List.map inter
     |> List.filter (fun s -> not (MsgSet.is_empty s))
+  in
+  (* future_intersects and exists_now_groups are DISJUNCTIONS (∃G. G ∩ F/Imm(E)
+     ≠ ∅ = some message of G is present). Unlike missing_now_groups'
+     conjunction, a disjunctive group must not be split per-message across the
+     projection: keeping only G ∩ universe would turn one OR into a stricter
+     condition and could drop the disjunct entirely once its witnessing
+     message is outside the universe, even though the group is still
+     satisfiable by a message that IS in the universe. So a group is kept
+     WHOLE when it has any message in the universe, and dropped entirely when
+     none of its messages are in the universe. *)
+  let keep_disjunctive_groups groups =
+    groups |> List.filter (fun group -> not (MsgSet.disjoint group universe))
   in
   {
     require_now = inter g.require_now;
     forbid_now = inter g.forbid_now;
     subset_now = inter g.subset_now;
     missing_now_groups = inter_groups g.missing_now_groups;
+    exists_now_groups = keep_disjunctive_groups g.exists_now_groups;
     require_clock = g.require_clock;
     forbid_clock = g.forbid_clock;
     future_disjoint = inter g.future_disjoint;
-    future_intersects = inter_groups g.future_intersects;
+    future_intersects = keep_disjunctive_groups g.future_intersects;
   }
 
 let string_of_guard g =
@@ -149,6 +164,13 @@ let string_of_guard g =
           |> List.map fmt_msgset
           |> String.concat ";")
        ^ "]. not (G subset Imm(E))");
+  if g.exists_now_groups <> [] then
+    add
+      ("exists G in ["
+       ^ (g.exists_now_groups
+          |> List.map fmt_msgset
+          |> String.concat ";")
+       ^ "]. G cap Imm(E) <> empty");
   if g.require_clock then add "# in Imm(E)";
   if g.forbid_clock then add "# notin Imm(E)";
   add_msg (fun s -> s ^ " cap F = empty") g.future_disjoint;
@@ -545,6 +567,7 @@ let merge_guards guards =
         require_now = MsgSet.union acc.require_now guard.require_now;
         forbid_now = MsgSet.union acc.forbid_now guard.forbid_now;
         missing_now_groups = acc.missing_now_groups @ guard.missing_now_groups;
+        exists_now_groups = acc.exists_now_groups @ guard.exists_now_groups;
         require_clock = acc.require_clock || guard.require_clock;
         forbid_clock = acc.forbid_clock || guard.forbid_clock;
         future_disjoint = MsgSet.union acc.future_disjoint guard.future_disjoint;
@@ -1067,13 +1090,19 @@ let html_of_guard g =
   let add_msg pred msgs =
     if not (MsgSet.is_empty msgs) then add (pred (html_of_msgset msgs))
   in
-  add_msg (fun s -> s ^ " ⊆ Imm(E)") g.require_now;
+  add_msg (fun s -> s ^ " = Imm(E)") g.require_now;
   add_msg (fun s -> s ^ " ∩ Imm(E) = ∅") g.forbid_now;
+  add_msg (fun s -> s ^ " ⊆ Imm(E)") g.subset_now;
   if g.missing_now_groups <> [] then
     add
       ("∀G ∈ ["
        ^ (g.missing_now_groups |> List.map html_of_msgset |> String.concat "; ")
        ^ "]. ¬(G ⊆ Imm(E))");
+  if g.exists_now_groups <> [] then
+    add
+      ("∃G ∈ ["
+       ^ (g.exists_now_groups |> List.map html_of_msgset |> String.concat "; ")
+       ^ "]. G ∩ Imm(E) ≠ ∅");
   if g.require_clock then add "# ∈ Imm(E)";
   if g.forbid_clock then add "# ∉ Imm(E)";
   add_msg (fun s -> s ^ " ∩ F = ∅") g.future_disjoint;

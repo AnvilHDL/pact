@@ -529,11 +529,21 @@ let residual_guard boundary_messages boundary source_guard =
     |> List.map (fun group -> MsgSet.inter boundary_messages group)
     |> List.filter (fun group -> not (MsgSet.is_empty group))
   in
+  (* future_intersects/exists_now_groups are DISJUNCTIONS (∃G. G ∩ F/Imm ≠ ∅ =
+     some message of G is present). Projecting per-message via project_groups
+     would unsoundly drop a disjunct once its witnessing message is outside
+     boundary_messages, even though a boundary message elsewhere in the same
+     group could still satisfy it. So a group is kept WHOLE when it has any
+     message in boundary_messages, and dropped entirely otherwise. *)
+  let keep_disjunctive_groups groups =
+    groups |> List.filter (fun group -> not (MsgSet.disjoint group boundary_messages))
+  in
   {
     require_now = boundary.be_now;
     forbid_now = MsgSet.inter boundary_messages source_guard.forbid_now;
     missing_now_groups = project_groups source_guard.missing_now_groups;
-    future_intersects = project_groups source_guard.future_intersects;
+    exists_now_groups = keep_disjunctive_groups source_guard.exists_now_groups;
+    future_intersects = keep_disjunctive_groups source_guard.future_intersects;
     future_disjoint = MsgSet.inter boundary_messages source_guard.future_disjoint;
     subset_now = MsgSet.inter boundary_messages source_guard.subset_now;
     require_clock = source_guard.require_clock;

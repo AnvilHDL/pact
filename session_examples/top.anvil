@@ -152,8 +152,33 @@
 //     ip42 : #1
 // }
 
-pool p4 { // true
+// pool p4 { // true
+//     ep_le -- ep_ri : ch;
+//     ip41 : ((#ep.req  + #ep.ack) ;#1) ,
+//     ip42 : (&(#ep.req , #ep.ack);#1) 
+// }
+
+// pool p2 { // true
+//     ep_le -- ep_ri : ch;
+//     ip21 : (#ep.req ; #ep.ack) ,
+//     ip22 : (#ep.req || #ep.ack)
+// }
+// interface i1 (ep : left ch) = ^( #ep.req , *) ;#1
+
+// pool p13 {
+//     ep_le -- ep_ri : ch;
+//     ip131 : ep.req;#4,
+//     ip132 : ep.req;#1
+// }
+
+// pool p4 { // true
+//     ep_le -- ep_ri : ch;
+//     ip41 : ((#ep.req  + #ep.ack) ;#1) ,
+//     ip42 : (&(#ep.req , #ep.ack);#1) 
+// }
+
+pool n4 { // false
     ep_le -- ep_ri : ch;
-    ip41 : ((#ep.req  + #ep.ack) ;#1) ,
-    ip42 : (&(#ep.req , #ep.ack);#1) 
+    in41 : F #ep.m1;#1,
+    in42 : #ep.m1;#1
 }
