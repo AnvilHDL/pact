@@ -135,11 +135,12 @@ let indent_block prefix text =
   |> List.map (fun line -> prefix ^ line)
   |> String.concat "\n"
 
+let edge_is_clock edge = edge.arena_edge_action = Some Clock
+
 (* Attractor for one required progress id, keyed on node ownership:
    - player nodes win existentially (one good successor suffices),
-   - adversary/fail nodes win universally (all successors must stay good).
-   This mirrors sessionGame2.compute_id_attractor_indexed but the ∃/∀ split is
-   by arena_node_kind, not by an is_fair flag. *)
+   - adversary nodes win existentially when arena_is_fair ("unfair suffixes
+     are allowed to win"), else universally (all successors must stay good). *)
 let compute_id_attractor node_by_id outgoing valid_region req_id =
   let attractor = ref StringSet.empty in
   let changed = ref true in
@@ -155,10 +156,6 @@ let compute_id_attractor node_by_id outgoing valid_region req_id =
             && (StringSet.mem req_id (edge_progress_ids edge)
                || StringSet.mem edge.arena_edge_to !attractor)
           in
-          (* Existential nodes (player choices and inferred fair-branch states)
-             win if one move stays good; universal (system) nodes need all moves
-             good. This matches the closed solver's is_fair existential rule and
-             realizes "unfair suffixes are allowed to win". *)
           let existential =
             match node.arena_node_kind with
             | ArenaPlayer -> true
@@ -181,17 +178,11 @@ let compute_id_attractor node_by_id outgoing valid_region req_id =
   done;
   !attractor
 
-let edge_is_clock edge = edge.arena_edge_action = Some Clock
-
 (* Attractor for # ∈ Inf(π), required on every path (paper Win_T) independent
    of fairness/progress — mirrors sessionGame2.compute_clock_attractor_indexed.
-   Player nodes stay existential (the environment is the friendly quantifier
-   for every property in this game, so it only needs one move that keeps
-   ticking), but adversary nodes are ALWAYS universal here, even when
-   arena_is_fair: unlike the $id property, there is no fair-suffix escape for
-   clock recurrence — a fair adversary node with one path that never ticks
-   still has a losing (non-recurring) path, which alone makes it non-winning
-   for this property. *)
+   Player nodes stay existential, but adversary nodes are ALWAYS universal
+   here, even when arena_is_fair: unlike the $id property, there is no
+   fair-suffix escape for clock recurrence. *)
 let compute_clock_attractor node_by_id outgoing valid_region =
   let attractor = ref StringSet.empty in
   let changed = ref true in
@@ -270,8 +261,7 @@ let forced_fail_set node_by_id outgoing all_nodes =
    (mirrors sessionGame2.solve_game_custom_indexed): repeatedly shrink the
    candidate region to states that can force reaching Clock again WITHIN the
    current region, then intersect with the per-id progress attractors, until
-   it stabilizes. With an empty required id set the inner loop leaves the
-   region untouched, so the clock-recurrence check alone still applies. *)
+   it stabilizes. *)
 let solve_open_region node_by_id outgoing all_nodes req_ids =
   let winning = ref all_nodes in
   let outer_changed = ref true in

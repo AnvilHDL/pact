@@ -289,7 +289,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
     | StyChoice (left, right) ->
         mark_nonfinal ();
         TypeAutomaton.make_adversary auto current;
-        if infer_fair_choice left right then TypeAutomaton.make_fair auto current;
+        (* if infer_fair_choice left right then *)
+          TypeAutomaton.make_fair auto current;
         let left_start = TypeAutomaton.new_state auto false in
         let right_start = TypeAutomaton.new_state auto false in
         TypeAutomaton.add_transition auto current left_start Epsilon any_guard

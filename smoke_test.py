@@ -61,14 +61,14 @@ def result_handler(out_log,file_name):
     return results
 
 
-def run_compat(file):
+def run_compat(file,mode):
     file_base = os.path.basename(file)
     print("Running compatibility check on file: " + file_base)
     compat_temp_log = os.path.join(EXAMPLE_DIR, "compat_temp.txt")
     relative_file = os.path.relpath(file, BASE_DIR)
     # dune exec anvil -- -debug-choice 3 session_examples/test_positive_compat.anvil
 
-    command = ["dune", "exec", "anvil", "--", "-debug-choice", "3", relative_file]
+    command = ["dune", "exec", "anvil", "--", "-debug-choice", str(mode), relative_file]
     with open(compat_temp_log, 'w') as f:
         subprocess.run(command, stdout=f, stderr=subprocess.STDOUT, cwd=BASE_DIR) 
 
@@ -97,12 +97,20 @@ def table_of_results(results):
 def summarize_results(results):
     if not results:
         return Result.Error
-    if any(result == Result.Incompatible for result in results.values()):
+    if all(result == Result.Incompatible for result in results.values()):
         return Result.Incompatible
-    return Result.Compatible
+    elif all(result == Result.Compatible for result in results.values()):
+        return Result.Compatible
+    else:
+        return Result.Error
 
 if __name__ == "__main__":
+    mode = 3
     type_files = EXAMPLES
+    if os.sys.argv[1:]:
+        mode = int(os.sys.argv[1])
+    else:
+        print("No mode specified, defaulting to mode 3 (compatibility check).")
     os.system("rm -rf " + ERROR_DIR)
     compat_count = 0
     incompat_count = 0
@@ -110,7 +118,7 @@ if __name__ == "__main__":
     for file in type_files:
         print("==================================================================================")
         base_name = os.path.basename(file)
-        results = run_compat(file)
+        results = run_compat(file,mode )
         table_of_results(results)
         result = summarize_results(results)
         match result:

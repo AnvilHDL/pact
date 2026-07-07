@@ -177,8 +177,17 @@
 //     ip42 : (&(#ep.req , #ep.ack);#1) 
 // }
 
-pool n4 { // false
+
+pool p12 {
     ep_le -- ep_ri : ch;
-    in41 : F #ep.m1;#1,
-    in42 : #ep.m1;#1
+    in121 : ((ep.m1;#ep2.m2) + (ep2.m2;#ep.m1));#1,
+    in122 : ep.m1;#1,
+    in123 : ep2.m2;#1
 }
+
+
+// pool p12{
+//     ep_le -- ep_ri : ch;
+//     in121 : ep.m1;#ep.m2;#1,
+//     in122 : ep.m1;#1
+// }

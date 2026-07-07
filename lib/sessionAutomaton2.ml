@@ -216,8 +216,15 @@ type transition = {
   boundary_future : MsgSet.t;
   (* Pending (boundary-projected) guard: the part of the merged product guard
      that concerns boundary messages and is left for the environment to
-     discharge. guard holds the satisfied (internal-projected) part. Debug only. *)
+     discharge. guard holds the FULL merged guard (closed game/dead-end
+     analysis rely on it), not just the internal-projected part. Debug only. *)
   boundary_guard : guard;
+  (* The combined action's message set projected onto internal_messages —
+     i.e. the union of component labels that actually synchronized to
+     satisfy the (internal-projected) guard, as opposed to `action`, which
+     carries the full combined label including boundary messages. Debug
+     only; empty/Epsilon when the picked action has no internal component. *)
+  internal_action : action;
   offers : MsgSet.t;
   mutable maybe_offers : MsgSet.t;
   mutable in_winning : bool;
@@ -337,8 +344,8 @@ module TypeAutomaton = struct
 
   let add_transition_full ?(boundary_now = MsgSet.empty)
       ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard)
-      ?(offers = MsgSet.empty) ?transition_debug_info auto from_state
-      to_state action guard =
+      ?internal_action ?(offers = MsgSet.empty) ?transition_debug_info auto
+      from_state to_state action guard =
     let trans =
       {
         from_state;
@@ -348,6 +355,7 @@ module TypeAutomaton = struct
         boundary_now;
         boundary_future;
         boundary_guard;
+        internal_action = Option.value internal_action ~default:action;
         maybe_offers = MsgSet.empty;
         offers;
         in_winning = false;
@@ -622,12 +630,13 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
     if not (Hashtbl.mem visited states) then Queue.add states queue
   in
   let add_product_transition ?(boundary_now = MsgSet.empty)
-      ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard) from_vec
-      to_vec action guard offer =
+      ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard)
+      ?internal_action from_vec to_vec action guard offer =
     let from_id = get_product_state from_vec in
     let to_id = get_product_state to_vec in
     TypeAutomaton.add_transition_full ~boundary_now ~boundary_future
-      ~boundary_guard ~offers:offer prod from_id to_id action guard;
+      ~boundary_guard ?internal_action ~offers:offer prod from_id to_id action
+      guard;
     if to_vec <> from_vec then enqueue to_vec
   in
   let debug_env env =
@@ -848,17 +857,25 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                  projection. The same merged combo guard is projected onto the
                  boundary messages (the pending part left for the environment).
                  U = the boundary messages this round genuinely requires now
-                 (guard.require_now on the boundary side); F = boundary messages
+                 (guard.require_now ∪ guard.subset_now on the boundary side —
+                 both express "the environment must be offering this now",
+                 exact vs subset; a transition guarded only by subset_now, e.g.
+                 a plain message-firing edge, must still surface its message in
+                 U or two boundary-distinct transitions collapse into the same
+                 θ move and the choice between them wrongly becomes the
+                 system's instead of the environment's); F = boundary messages
                  that may still arrive this cycle (guard.future_intersects plus
                  the components' maybe_offers), minus U. Offers presented now do
-                 NOT force a boundary message into U — only require_now does, so
-                 a combo that fires just m1 does not spuriously demand m2 from the
-                 environment. Empty when boundary_messages = ∅ (closed). *)
+                 NOT force a boundary message into U — only require_now/subset_now
+                 does, so a combo that fires just m1 does not spuriously demand m2
+                 from the environment. Empty when boundary_messages = ∅ (closed). *)
               let merged_guard = merge_guards guards in
               let boundary_guard =
                 project_guard_to boundary_messages merged_guard
               in
-              let be_now = boundary_guard.require_now in
+              let be_now =
+                MsgSet.union boundary_guard.require_now boundary_guard.subset_now
+              in
               let be_future =
                 boundary_guard.future_intersects
                 |> List.fold_left MsgSet.union
@@ -973,9 +990,17 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                    be_now,
                    be_future,
                    boundary_guard ) ->
+              let internal_action =
+                match combined_action with
+                | Messages msgs ->
+                    let internal_msgs = MsgSet.inter msgs internal_messages in
+                    if MsgSet.is_empty internal_msgs then Epsilon
+                    else Messages internal_msgs
+                | other -> other
+              in
               add_product_transition ~boundary_now:be_now
-                ~boundary_future:be_future ~boundary_guard current next
-                combined_action guard combined_offers)
+                ~boundary_future:be_future ~boundary_guard ~internal_action
+                current next combined_action guard combined_offers)
             grouped))
   done;
   recompute_state_summaries prod;
@@ -1169,6 +1194,15 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
           else
             html_of_action t.action ^ "<BR/>satisfied: " ^ html_of_guard t.guard
         in
+        (* The internal label is the combined action projected onto
+           internal_messages — what actually synchronized to satisfy the
+           guard, as opposed to `action`'s full (possibly boundary-mixed)
+           label. Only shown when it differs, so closed-product transitions
+           (where every message is internal) stay unchanged. *)
+        let internal_label =
+          if (not show_guards) || t.internal_action = t.action then ""
+          else "<BR/>internal: " ^ html_of_action t.internal_action
+        in
         (* The pending (boundary-projected) guard is what the environment still
            has to discharge; show it separately from the satisfied guard. *)
         let pending =
@@ -1187,7 +1221,7 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
           | true, None -> ""
           | true, Some info -> "<BR/>" ^ html_of_text_block info
         in
-        base ^ pending ^ offers ^ boundary ^ debug
+        base ^ internal_label ^ pending ^ offers ^ boundary ^ debug
       in
       Printf.fprintf out "  %d -> %d [label=<%s>];\n" t.from_state
         t.to_state label)
