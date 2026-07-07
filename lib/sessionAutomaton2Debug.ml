@@ -47,8 +47,8 @@ let guard_check_line ~component ~state_id ~ok ~guard ~env =
   String.concat "\n"
     [
       Printf.sprintf "    - %s:s%d  %s" component state_id (check_status ok);
-      Printf.sprintf "        G' : %s" guard;
-      Printf.sprintf "        E  : %s" env;
+      Printf.sprintf "        G_proj : %s" guard;
+      Printf.sprintf "        E      : %s" env;
     ]
 
 let print_combo_verdict ~verbose verdict =
@@ -81,7 +81,7 @@ let print_combo_verdict ~verbose verdict =
          @ verdict.component_lines
          @ [
              "";
-             "  guard checks:";
+             "  projected guard checks:";
            ]
          @ verdict.guard_lines
          @ [ "------------------------------------------------------------" ]))

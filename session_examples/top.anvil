@@ -192,3 +192,5 @@ pool p16{
 //     in121 : ep.m1;#ep.m2;#1,
 //     in122 : ep.m1;#1
 // }
+
+// interface i1 (ep : left ch) = ^(ep.m2,ep.m3,*);#1

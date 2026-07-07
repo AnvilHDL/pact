@@ -635,6 +635,8 @@ let build_composition_step ?(verbose = false) composition_name residual_nm
   let arena_path = arena_dot_path composition_name in
   print_open_arena_dot arena_path arena;
   let game_result = play_open_game arena ~progress_ids in
+  Printf.printf "Open compatibility result for %s: %s\n" composition_name
+    game_result.summary;
   let residual_dot, residual_input =
     if game_result.compatible then (
       let residual =
@@ -713,6 +715,8 @@ let build_open_artifacts ?(verbose = false) context =
         let arena_path = arena_dot_path first.member_id in
         print_open_arena_dot arena_path arena;
         let game_result = play_open_game arena ~progress_ids:!progress_ids in
+        Printf.printf "Open compatibility result for %s: %s\n" first.member_id
+          game_result.summary;
         steps :=
           [
             {

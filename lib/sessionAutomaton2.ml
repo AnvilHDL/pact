@@ -14,6 +14,16 @@ module IntSet = Set.Make (Int)
 let msgset_of_list msgs =
   List.fold_left (fun acc msg -> MsgSet.add msg acc) MsgSet.empty msgs
 
+let powerset s = 
+  let rec aux acc = function
+    | [] -> [acc]
+    | x :: xs ->
+        let with_x = aux (MsgSet.add x acc) xs in
+        let without_x = aux acc xs in
+        with_x @ without_x
+  in
+  aux MsgSet.empty (MsgSet.elements s)
+
 let msgset_to_list set = MsgSet.elements set
 
 let string_of_msgset set =
@@ -50,7 +60,7 @@ type guard = {
   require_clock : bool; (* require_clock ⇒ # ∈ Imm(E) *)
   forbid_clock : bool; (* forbid_clock ⇒ # ∉ Imm(E) *)
   future_disjoint : MsgSet.t; (* future_disjoint ∩ F = ∅ *)
-  future_intersects : MsgSet.t list; (* ∀G ∈ future_intersects. G ∩ F ≠ ∅ *)
+  future_intersects : MsgSet.t list; (* ∀G ∈ future_intersects. G ⊆ F (SyncEdges' OfferFut equality per powerset slice) *)
 }
 
 let any_guard = {
@@ -94,7 +104,7 @@ let guard_satisfied env g =
   else
     let missing_group group = not (MsgSet.subset group env.imm) in
     let exists_group group = not (MsgSet.disjoint group env.imm) in
-    let future_group group = not (MsgSet.disjoint group env.future) in
+    let future_group group = MsgSet.subset group env.future in
     let now_ok =
       if not (MsgSet.is_empty g.require_now) then
         MsgSet.equal g.require_now env.imm
@@ -141,12 +151,16 @@ let project_guard_to universe g =
     require_clock = g.require_clock;
     forbid_clock = g.forbid_clock;
     future_disjoint = inter g.future_disjoint;
-    future_intersects = keep_disjunctive_groups g.future_intersects;
+    future_intersects = inter_groups g.future_intersects;
   }
 
 let string_of_guard g =
   let parts = ref [] in
   let fmt_msgset msgs = "{" ^ string_of_msgset msgs ^ "}" in
+  (* " | " between groups, distinct from the "," inside a group, so a single
+     multi-message group (e.g. {m1,m2}) can't be misread as two 1-message
+     groups (e.g. {m1} | {m2}) or vice versa. *)
+  let fmt_groups groups = groups |> List.map fmt_msgset |> String.concat " | " in
   let add pred =
     parts := pred :: !parts
   in
@@ -159,28 +173,19 @@ let string_of_guard g =
   add_msg (fun s -> s ^ " subset Imm(E)") g.subset_now;
   if g.missing_now_groups <> [] then
     add
-      ("forall G in ["
-       ^ (g.missing_now_groups
-          |> List.map fmt_msgset
-          |> String.concat ";")
-       ^ "]. not (G subset Imm(E))");
+      ("forall G in [ " ^ fmt_groups g.missing_now_groups
+       ^ " ]. not (G subset Imm(E))");
   if g.exists_now_groups <> [] then
     add
-      ("exists G in ["
-       ^ (g.exists_now_groups
-          |> List.map fmt_msgset
-          |> String.concat ";")
-       ^ "]. G cap Imm(E) <> empty");
+      ("exists G in [ " ^ fmt_groups g.exists_now_groups
+       ^ " ]. G cap Imm(E) <> empty");
   if g.require_clock then add "# in Imm(E)";
   if g.forbid_clock then add "# notin Imm(E)";
   add_msg (fun s -> s ^ " cap F = empty") g.future_disjoint;
   if g.future_intersects <> [] then
     add
-      ("forall G in ["
-       ^ (g.future_intersects
-          |> List.map fmt_msgset
-          |> String.concat ";")
-       ^ "]. G cap F <> empty");
+      ("forall G in [ " ^ fmt_groups g.future_intersects
+       ^ " ]. G subset F");
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat " && " xs
@@ -492,8 +497,8 @@ let recompute_state_summaries auto =
   done;
   List.iter
     (fun t ->
-      let to_st = Hashtbl.find auto.states t.to_state in
-      t.maybe_offers <- to_st.maybe_ready)
+      let from_st = Hashtbl.find auto.states t.from_state in
+      t.maybe_offers <- MsgSet.diff from_st.maybe_ready t.offers)
     auto.transitions
 
 let messages_of_transition t =
@@ -876,7 +881,18 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                  now do NOT force a boundary message into U — only
                  require_now/subset_now/exists_now_groups does, so a combo that
                  fires just m1 does not spuriously demand m2 from the
-                 environment. Empty when boundary_messages = ∅ (closed). *)
+                 environment. Empty when boundary_messages = ∅ (closed).
+
+                 A message the merged guard's future_disjoint already proves
+                 absent from F (e.g. an xoffer/offer "escape" transition taken
+                 exactly because a branch head can no longer arrive this
+                 cycle) must never resurface in F via combined_maybe_offers'
+                 coarse over-approximation: otherwise this transition and its
+                 mutually-exclusive sibling (guarded by future_intersects on
+                 the same message — "might still arrive") get the same (U,F)
+                 boundary projection and collapse into one arena node, even
+                 though the two guards can never both hold under the same
+                 concrete environment. *)
               let merged_guard = merge_guards guards in
               let boundary_guard =
                 project_guard_to boundary_messages merged_guard
@@ -892,6 +908,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                 |> List.fold_left MsgSet.union
                      (MsgSet.inter combined_maybe_offers boundary_messages)
                 |> fun set -> MsgSet.diff set be_now
+                |> fun set -> MsgSet.diff set boundary_guard.future_disjoint
               in
 
               (* Suppress the trivial all-epsilon self-loop that changes nothing and has no
@@ -1126,27 +1143,26 @@ let html_of_guard g =
   let add_msg pred msgs =
     if not (MsgSet.is_empty msgs) then add (pred (html_of_msgset msgs))
   in
+  (* " | " between groups, distinct from the ", " inside a group, so a single
+     multi-message group can't be misread as several single-message groups. *)
+  let fmt_groups groups =
+    groups |> List.map html_of_msgset |> String.concat " | "
+  in
   add_msg (fun s -> s ^ " = Imm(E)") g.require_now;
   add_msg (fun s -> s ^ " ∩ Imm(E) = ∅") g.forbid_now;
   add_msg (fun s -> s ^ " ⊆ Imm(E)") g.subset_now;
   if g.missing_now_groups <> [] then
     add
-      ("∀G ∈ ["
-       ^ (g.missing_now_groups |> List.map html_of_msgset |> String.concat "; ")
-       ^ "]. ¬(G ⊆ Imm(E))");
+      ("∀G ∈ [ " ^ fmt_groups g.missing_now_groups ^ " ]. ¬(G ⊆ Imm(E))");
   if g.exists_now_groups <> [] then
     add
-      ("∃G ∈ ["
-       ^ (g.exists_now_groups |> List.map html_of_msgset |> String.concat "; ")
-       ^ "]. G ∩ Imm(E) ≠ ∅");
+      ("∃G ∈ [ " ^ fmt_groups g.exists_now_groups ^ " ]. G ∩ Imm(E) ≠ ∅");
   if g.require_clock then add "# ∈ Imm(E)";
   if g.forbid_clock then add "# ∉ Imm(E)";
   add_msg (fun s -> s ^ " ∩ F = ∅") g.future_disjoint;
   if g.future_intersects <> [] then
     add
-      ("∀G ∈ ["
-       ^ (g.future_intersects |> List.map html_of_msgset |> String.concat "; ")
-       ^ "]. G ∩ F ≠ ∅");
+      ("∀G ∈ [ " ^ fmt_groups g.future_intersects ^ " ]. G ⊆ F");
   match List.rev !parts with
   | [] -> "true"
   | xs -> String.concat "<BR/>" xs

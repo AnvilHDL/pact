@@ -218,8 +218,6 @@ let rec build_automaton (name : identifier option) (st : session_type)
         TypeAutomaton.add_transition auto current next (Messages msg_set)
           { any_guard with subset_now = msg_set; forbid_clock = false } msg_set;
         if action_is_blocking act then begin
-          let next_i = TypeAutomaton.new_state auto false in
-          set_residual_type auto next_i (delay_then 1 sty);
           TypeAutomaton.add_transition auto current current Epsilon
             {any_guard with forbid_now = msg_set; future_intersects = [msg_set]} msg_set;
           add_blocking_retry auto current [ msg_set ] msg_set (StyAtom (AtomicAct act));
@@ -413,11 +411,17 @@ let rec build_automaton (name : identifier option) (st : session_type)
           group;
         finals := build (continuation_or_true off) target rec_env let_env @ !finals)
       msg_branches;
-    if not (MsgSet.is_empty head_set) then
-      (* If any branch head may still arrive this cycle, xoffer keeps waiting
-         (F ∩ HB ≠ ∅). No clock condition. *)
-      TypeAutomaton.add_transition auto current current Epsilon
-        { any_guard with future_intersects = [ head_set ] } head_set;
+    if not (MsgSet.is_empty head_set) then begin
+      let power_set =
+        SessionAutomaton2.powerset head_set
+        |> List.filter (fun subset -> not (MsgSet.is_empty subset))
+      in
+      List.iter
+        (fun subset ->
+            TypeAutomaton.add_transition auto current current Epsilon
+                { any_guard with future_intersects = [ subset ] } subset;
+        )power_set
+      end;
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in
@@ -472,16 +476,19 @@ let rec build_automaton (name : identifier option) (st : session_type)
         { any_guard with exists_now_groups = branch_groups } MsgSet.empty;
       finals := build target_ty target rec_env let_env @ !finals
     end;
-    if not (MsgSet.is_empty head_set) then
+    if not (MsgSet.is_empty head_set) then begin
       (* While some branch head may still arrive this cycle, the offer keeps
          waiting (F ∩ HB ≠ ∅). No clock condition. *)
-      TypeAutomaton.add_transition auto current current Epsilon
-        {
-          any_guard with
-          missing_now_groups = List.map snd msg_branches;
-          future_intersects = [ head_set ];
-        }
-        head_set;
+      let power_set =
+        SessionAutomaton2.powerset head_set
+        |> List.filter (fun subset -> not (MsgSet.is_empty subset))
+      in
+      List.iter
+        (fun subset ->
+            TypeAutomaton.add_transition auto current current Epsilon
+                { any_guard with future_intersects = [ subset ] } subset;
+        )power_set
+      end;
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in
