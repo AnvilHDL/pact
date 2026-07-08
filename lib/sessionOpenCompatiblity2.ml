@@ -22,9 +22,7 @@ type open_pair_intersection = {
   shared_messages : MsgSet.t;
 }
 
-(* One incremental composition step: compose the running composite with the
-   next member, solve the game, and (on success) hide the just-checked
-   interface to form the residual used by the next step. *)
+(* One incremental composition step: compose, solve the game, and on success hide the just-checked interface into the next step's residual. *)
 type open_step_result = {
   composition_name : string;
   residual_name : string;
@@ -283,20 +281,23 @@ let all_messages_of_inputs inputs =
   inputs |> Array.to_list |> List.map (fun input -> input.op_messages)
   |> msgset_union_list
 
-(* Open product = the SAME unified synchronous product used by the closed/internal
-   cases, driven with the open interface as its boundary. The internal messages
-   (owned by ≥2 members) are synchronized; the rest are boundary, and
-   unified_product records each transition's boundary projection E_B = (U, F) in
-   boundary_now/boundary_future (plus the pending boundary guard) for the arena. *)
+(* Open product reuses the SAME unified_product as closed/internal, driven with the open interface as its boundary (messages owned by ≥2 members are internal, the rest boundary). *)
 let build_open_product ?(verbose = false) name progress_ids inputs =
   let automata = Array.map (fun input -> input.op_automaton) inputs in
   let internal_messages = internal_messages_of_inputs inputs in
   let all_messages = all_messages_of_inputs inputs in
   let boundary_messages = MsgSet.diff all_messages internal_messages in
+  let dead_ends = ref [] in
   let product =
-    unified_product ~progress_ids ~verbose automata ~boundary_messages
+    unified_product ~progress_ids ~verbose ~dead_ends automata ~boundary_messages
       ~use_env:true
   in
+  (* Dead ends are not a hard error here (the game verdict decides compatibility); print for visibility instead of raising. *)
+  (match List.rev !dead_ends with
+  | [] -> ()
+  | ends ->
+      Printf.eprintf "[Open] product %s dead ends:\n%s\n%!" name
+        (String.concat "\n" ends));
   TypeAutomaton.change_name name product;
   recompute_state_summaries product;
   (product, internal_messages, boundary_messages)
@@ -367,9 +368,7 @@ let build_open_arena name product =
       }
       :: !edges
   in
-  (* A state is a player state when it has any real boundary move. The clock is
-     folded into the boundary env (be_clock), so boundary_env_nonempty already
-     covers the clock provide/withhold decision — no special clock casing here. *)
+  (* A state is a player state when it has any real boundary move; be_clock folds the clock in so no special-casing is needed. *)
   let has_player_state state_id =
     Hashtbl.find moves_by_state state_id |> List.exists boundary_env_nonempty
   in
@@ -529,12 +528,7 @@ let residual_guard boundary_messages boundary source_guard =
     |> List.map (fun group -> MsgSet.inter boundary_messages group)
     |> List.filter (fun group -> not (MsgSet.is_empty group))
   in
-  (* future_intersects/exists_now_groups are DISJUNCTIONS (∃G. G ∩ F/Imm ≠ ∅ =
-     some message of G is present). Projecting per-message via project_groups
-     would unsoundly drop a disjunct once its witnessing message is outside
-     boundary_messages, even though a boundary message elsewhere in the same
-     group could still satisfy it. So a group is kept WHOLE when it has any
-     message in boundary_messages, and dropped entirely otherwise. *)
+  (* Disjunctive groups (future_intersects/exists_now_groups) are kept whole on projection, never split per-message, or the OR could lose a still-satisfiable disjunct. *)
   let keep_disjunctive_groups groups =
     groups |> List.filter (fun group -> not (MsgSet.disjoint group boundary_messages))
   in
@@ -550,8 +544,7 @@ let residual_guard boundary_messages boundary source_guard =
     forbid_clock = source_guard.forbid_clock;
   }
 
-(* Map each product state to its arena entry node (player node if the state has
-   boundary moves, else its single q_e0 adversary node). *)
+(* Maps each product state to its arena entry node: player node if it has boundary moves, else its single q_e0 adversary node. *)
 let entry_nodes_by_product_state arena =
   let table = Hashtbl.create 32 in
   List.iter
@@ -565,13 +558,7 @@ let entry_nodes_by_product_state arena =
     arena.arena_nodes;
   table
 
-(* Phase 5: the residual is the WHOLE composed product with the just-checked
-   internal interface hidden. We do NOT prune to the game's winning region or to
-   the player's selected boundary moves: the game verdict only decides
-   compatibility (and stops the pool at the first failure), while the residual
-   must expose the full open behaviour so the next composition step's game sees
-   the true subsystem. Only hide_internal_action (internal Messages -> Epsilon)
-   and the boundary guard projection are applied. *)
+(* The residual is the WHOLE composed product with the internal interface hidden — NOT pruned to the game's winning region, since the next step's game needs to see the true subsystem. *)
 let build_residual_automaton residual_nm product internal_messages
     boundary_messages _arena _game_result =
   let residual = TypeAutomaton.create () in
@@ -599,31 +586,65 @@ let build_residual_automaton residual_nm product internal_messages
   (* Copy every product state so the residual keeps the full graph. *)
   Hashtbl.iter (fun product_state _ -> ignore (copy_state product_state))
     product.states;
+  (* Precompute each transition's residual guard/action once (used both by the
+     monotonic-F prune below and the emit step). *)
+  let residual_edges =
+    List.map
+      (fun (t : transition) ->
+        let boundary = boundary_of_transition t in
+        let action = hide_internal_action internal_messages t.action in
+        let guard = residual_guard boundary_messages boundary t.boundary_guard in
+        (t, boundary, action, guard))
+      product.transitions
+  in
+  (* FD_seen[q] unions every future_disjoint proven on a non-# path reaching q since the last # (reset to ∅ at a # edge); a message once proven absent from F must not be re-demanded into F later this cycle. *)
+  let fd_seen = Hashtbl.create 64 in
+  let get_fd q =
+    match Hashtbl.find_opt fd_seen q with Some s -> s | None -> MsgSet.empty
+  in
+  let changed = ref true in
+  while !changed do
+    changed := false;
+    List.iter
+      (fun ((t : transition), _boundary, action, guard) ->
+        let contrib =
+          match action with
+          | Clock -> MsgSet.empty (* # resets the cycle: successor starts fresh *)
+          | _ -> MsgSet.union (get_fd t.from_state) guard.future_disjoint
+        in
+        let cur = get_fd t.to_state in
+        let next = MsgSet.union cur contrib in
+        if not (MsgSet.equal next cur) then (
+          Hashtbl.replace fd_seen t.to_state next;
+          changed := true))
+      residual_edges
+  done;
+  (* An edge conflicts (and is pruned) if it's non-# and its future_intersects re-demands into F a message already in FD_seen at its source. *)
+  let edge_conflicts (t : transition) (action : action) (guard : guard) =
+    match action with
+    | Clock -> false
+    | _ ->
+        let fd = get_fd t.from_state in
+        List.exists
+          (fun group -> not (MsgSet.disjoint group fd))
+          guard.future_intersects
+  in
   List.iter
-    (fun (t : transition) ->
-      let boundary = boundary_of_transition t in
-      let from_state = copy_state t.from_state in
-      let to_state = copy_state t.to_state in
-      let action = hide_internal_action internal_messages t.action in
-      (* Carry forward the PENDING (boundary) guard, not the already-discharged
-         internal guard: it is the still-live boundary constraint the next
-         composition step must test. *)
-      let guard = residual_guard boundary_messages boundary t.boundary_guard in
-      (* Keep the still-visible (boundary) offers so the next composition step's
-         local environment can see what this subsystem presents. Internal offers
-         were just hidden and must not leak into the next round. *)
-      let offers = MsgSet.diff t.offers internal_messages in
-      TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
-        ~boundary_future:boundary.be_future ~offers
-        ?transition_debug_info:t.transition_debug_info residual from_state
-        to_state action guard)
-    product.transitions;
+    (fun (t, boundary, action, guard) ->
+      if not (edge_conflicts t action guard) then (
+        let from_state = copy_state t.from_state in
+        let to_state = copy_state t.to_state in
+        (* Keep only still-visible (boundary) offers; internal offers were just hidden and must not leak into the next round. *)
+        let offers = MsgSet.diff t.offers internal_messages in
+        TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
+          ~boundary_future:boundary.be_future ~offers
+          ?transition_debug_info:t.transition_debug_info residual from_state
+          to_state action guard))
+    residual_edges;
   recompute_state_summaries residual;
   residual
 
-(* One incremental composition step: compose, build the arena, solve the game,
-   and on success hide the internal interface to form the residual input for the
-   next step. *)
+(* One incremental composition step: compose, build the arena, solve the game, and on success hide the internal interface into the next step's residual. *)
 let build_composition_step ?(verbose = false) composition_name residual_nm
     progress_ids inputs =
   let product, internal_messages, boundary_messages =

@@ -47,7 +47,17 @@ let create_product
       automata_with_ids);
   let automata = automata_with_ids |> List.map fst |> Array.of_list in
   let ids = List.map snd automata_with_ids in
-  let product = closed_product ~progress_ids:ids ~verbose automata sync_messages in
+  let dead_ends = ref [] in
+  let product =
+    closed_product ~progress_ids:ids ~verbose ~dead_ends automata sync_messages
+  in
+  (* Dead ends are the normal closed incompatibility mechanism (the game reports
+     Incompatible), so print the diagnostic rather than raising. *)
+  (match List.rev !dead_ends with
+  | [] -> ()
+  | ends ->
+      Printf.eprintf "Pool %s product dead ends:\n%s\n%!" pool_id
+        (String.concat "\n" ends));
   if verbose then (
     Printf.eprintf
       "Generalized Type v2 product construction completed for pool %s: states=%d transitions=%d\n"

@@ -130,15 +130,7 @@ let project_guard_to universe g =
     |> List.map inter
     |> List.filter (fun s -> not (MsgSet.is_empty s))
   in
-  (* future_intersects and exists_now_groups are DISJUNCTIONS (∃G. G ∩ F/Imm(E)
-     ≠ ∅ = some message of G is present). Unlike missing_now_groups'
-     conjunction, a disjunctive group must not be split per-message across the
-     projection: keeping only G ∩ universe would turn one OR into a stricter
-     condition and could drop the disjunct entirely once its witnessing
-     message is outside the universe, even though the group is still
-     satisfiable by a message that IS in the universe. So a group is kept
-     WHOLE when it has any message in the universe, and dropped entirely when
-     none of its messages are in the universe. *)
+  (* Disjunctive groups (future_intersects/exists_now_groups) are kept whole on projection, never split per-message, or the OR could lose a still-satisfiable disjunct. *)
   let keep_disjunctive_groups groups =
     groups |> List.filter (fun group -> not (MsgSet.disjoint group universe))
   in
@@ -157,9 +149,7 @@ let project_guard_to universe g =
 let string_of_guard g =
   let parts = ref [] in
   let fmt_msgset msgs = "{" ^ string_of_msgset msgs ^ "}" in
-  (* " | " between groups, distinct from the "," inside a group, so a single
-     multi-message group (e.g. {m1,m2}) can't be misread as two 1-message
-     groups (e.g. {m1} | {m2}) or vice versa. *)
+  (* " | " between groups (vs "," within a group) so {m1,m2} can't be misread as {m1} | {m2}. *)
   let fmt_groups groups = groups |> List.map fmt_msgset |> String.concat " | " in
   let add pred =
     parts := pred :: !parts
@@ -196,8 +186,7 @@ type product_component = {
   pc_residual : string option;
 }
 
-(* Head and maybe_ready cache the formal Head/MaybeReady sets.
-   head_clock records whether the clock (#) is in this state's Head  *)
+(* head/maybe_ready cache Head/MaybeReady; head_clock is whether # is in this state's Head. *)
 type state = {
   id : int;
   mutable accepting : bool;
@@ -219,17 +208,8 @@ type transition = {
   guard : guard; (*Env*)
   boundary_now : MsgSet.t;
   boundary_future : MsgSet.t;
-  (* Pending (boundary-projected) guard: the part of the merged product guard
-     that concerns boundary messages and is left for the environment to
-     discharge. guard holds the FULL merged guard (closed game/dead-end
-     analysis rely on it), not just the internal-projected part. Debug only. *)
-  boundary_guard : guard;
-  (* The combined action's message set projected onto internal_messages —
-     i.e. the union of component labels that actually synchronized to
-     satisfy the (internal-projected) guard, as opposed to `action`, which
-     carries the full combined label including boundary messages. Debug
-     only; empty/Epsilon when the picked action has no internal component. *)
-  internal_action : action;
+  boundary_guard : guard; (* pending boundary part of the guard; `guard` keeps the FULL merged guard for closed game/dead-end analysis *)
+  internal_action : action; (* `action` projected onto internal_messages; debug only, Epsilon if no internal component *)
   offers : MsgSet.t;
   mutable maybe_offers : MsgSet.t;
   mutable in_winning : bool;
@@ -497,8 +477,8 @@ let recompute_state_summaries auto =
   done;
   List.iter
     (fun t ->
-      let from_st = Hashtbl.find auto.states t.from_state in
-      t.maybe_offers <- MsgSet.diff from_st.maybe_ready t.offers)
+      let to_st = Hashtbl.find auto.states t.to_state in
+      t.maybe_offers <- MsgSet.diff to_st.maybe_ready t.offers)
     auto.transitions
 
 let messages_of_transition t =
@@ -596,14 +576,9 @@ let add_progress_transition auto from_state to_state ids =
   TypeAutomaton.add_transition auto from_state to_state (Progress id_set)
     any_guard  MsgSet.empty
 
-(* Closed product: all sync_messages must be consumed internally. *)
-(* Unified synchronous product for internal parallel, closed, and open compositions.
-   - boundary_messages: messages visible to the environment (open boundary); empty for internal/closed.
-   - internal_messages = all_messages - boundary_messages must be paired (≥2 components).
-   - use_env: if true, compute environments from partner components' Head/MaybeReady (closed/open).
-     if false, use simple cartesian product (internal parallel). *)
-let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
-    ~use_env =
+(* Unified synchronous product (internal parallel/closed/open): boundary_messages ride the open boundary (empty for closed/internal); internal_messages must be paired by ≥2 components; use_env computes environments from partner Head/MaybeReady, else plain cartesian product. *)
+let unified_product ?progress_ids ?(verbose = false) ?dead_ends automata
+    ~boundary_messages ~use_env =
   let _ = progress_ids in
   Array.iter recompute_state_summaries automata;
   let product_debug_enabled = SessionAutomaton2Debug.enabled ~verbose in
@@ -613,6 +588,38 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
   Hashtbl.add state_map start_vector prod.start_state;
   let outgoing =
     Array.map (fun auto -> build_outgoing_index auto.transitions) automata
+  in
+  (* ?dead_ends, if given, collects one diagnostic per reachable state with no pickable outgoing transition; callers print rather than raise since dead ends are the normal incompatibility signal. *)
+  let record_dead_end current_arr =
+    match dead_ends with
+    | None -> ()
+    | Some acc ->
+        let per_component =
+          Array.mapi
+            (fun i st_id ->
+              let outs = get_outgoing_from_index outgoing.(i) st_id in
+              let name = component_name i automata.(i) in
+              let trans_desc =
+                if outs = [] then "(none)"
+                else
+                  outs
+                  |> List.map (fun t ->
+                         Printf.sprintf "%s->%d [%s | %s]" name t.to_state
+                           (string_of_action t.action) (string_of_guard t.guard))
+                  |> String.concat "; "
+              in
+              Printf.sprintf "  %s:s%d outgoing = %s" name st_id trans_desc)
+            current_arr
+          |> Array.to_list
+          |> String.concat "\n"
+        in
+        let vec =
+          current_arr |> Array.to_list |> List.map string_of_int
+          |> String.concat ","
+        in
+        acc :=
+          Printf.sprintf "DEAD END at product state [%s]:\n%s" vec per_component
+          :: !acc
   in
   let own_messages = Array.map messages_of_automaton automata in
   (* Compute internal messages: all messages except boundary. *)
@@ -690,18 +697,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
         |> List.for_all (fun x -> x)
       in
       if all_accepting then prod_state_info.accepting <- true;
-        (* Unified sync product: every component picks exactly ONE outgoing transition
-           (its real transitions, including guarded self-loops — no synthetic passive).
-           We take the cartesian product, then for each combo:
-             - combine the actions (union messages; clock must be unanimous),
-             - merge the component guards,
-             - in use_env mode, drop the combo if any component's INTERNAL-message
-               guard is not satisfied by its local environment,
-             - apply the sync check (internal messages paired; clock all-or-none),
-           then group combos by (next_state, action) and merge their guards. *)
-
-        (* Per-component outgoing choices: only transitions already present in the
-           component automata are allowed. *)
+        (* Each component picks one real outgoing transition (no synthetic passive); combos are combined, guard-checked internally, sync-checked, then grouped by (next_state, action). *)
         let component_choices =
           Array.mapi
             (fun i st_id -> (i, st_id, get_outgoing_from_index outgoing.(i) st_id))
@@ -716,11 +712,45 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
 
         if List.for_all (fun choices -> choices <> []) component_choices then (
           let combos = cartesian_product component_choices in
+          (* Clock-boundary decision is a product-state invariant (depends only on each partner's CURRENT state, not which transition a combo picks), so it's hoisted out of the per-combo loop. *)
+          let n_components = Array.length current_arr in
+          let has_partner_ps = n_components > 1 in
+          let all_partners_clock_ps =
+            let ok = ref true in
+            Array.iteri
+              (fun i st_id ->
+                if not (Hashtbl.find automata.(i).states st_id).head_clock then
+                  ok := false)
+              current_arr;
+            !ok
+          in
+          let partners_offer_clock_ps = has_partner_ps && all_partners_clock_ps in
+          let clock_is_boundary_ps =
+            (not (MsgSet.is_empty boundary_messages)) && partners_offer_clock_ps
+          in
+          let internal_env_clock_ps =
+            if clock_is_boundary_ps then false else partners_offer_clock_ps
+          in
+          let strip_clock_ps g =
+            if clock_is_boundary_ps then
+              { g with require_clock = false; forbid_clock = false }
+            else g
+          in
+          (* Memoized per product state: project_guard_to+strip_clock don't depend on the combo, so avoid re-projecting the same (component, transition) guard once per combo. *)
+          let projected_guard_memo :
+              (guard, guard) Hashtbl.t = Hashtbl.create 16 in
+          let projected_guard_of g =
+            match Hashtbl.find_opt projected_guard_memo g with
+            | Some pg -> pg
+            | None ->
+                let pg = strip_clock_ps (project_guard_to internal_messages g) in
+                Hashtbl.add projected_guard_memo g pg;
+                pg
+          in
           (* Group by (next_state_vector, action); merge guards of grouped combos. *)
           let grouped = Hashtbl.create 16 in
           List.iter
             (fun combo ->
-              (* combo : (component_index, to_state, action, guard, offers, maybe_offers) list, one per component. *)
               let next =
                 combo
                 |> List.map (fun (i, to_state, _, _, _, _) -> (i, to_state))
@@ -730,8 +760,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
               let actions = List.map (fun (_, _, act, _, _, _) -> act) combo in
               let guards = List.map (fun (_, _, _, g, _, _) -> g) combo in
 
-              let all_partners_clock = ref true in
-              let has_partner = ref false in
+              (* local_envs is combo-dependent (partner offers vary per combo) so it stays here, unlike the hoisted clock decision above; open+environment-has-clock treats # as a boundary action (be_clock), else # is internal. *)
               let local_envs =
                 Array.mapi
                   (fun i _st_id ->
@@ -740,16 +769,13 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                     List.iter
                       (fun (j, _, _, _, offers, _maybe_offers) ->
                         if i <> j then (
-                          has_partner := true;
                           let other =
                             Hashtbl.find automata.(j).states current_arr.(j)
                           in
                           imm := MsgSet.union !imm offers;
                           future :=
                             MsgSet.union !future
-                              (MsgSet.diff other.maybe_ready offers);
-                          if not other.head_clock then
-                            all_partners_clock := false))
+                              (MsgSet.diff other.maybe_ready offers)))
                       combo;
                     let imm =
                       !imm
@@ -761,44 +787,15 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                       |> MsgSet.inter internal_messages
                       |> MsgSet.inter own_messages.(i)
                     in
-                    (* clock resolved per hypothesis below. *)
                     { imm; future; clock = false })
                   current_arr
               in
-              let partners_offer_clock = !has_partner && !all_partners_clock in
-
-              (* Clock treatment during guard satisfaction.
-
-                 Closed (no boundary messages): the clock is internal. Partners must
-                 all tick, so the environment clock is exactly partners_offer_clock
-                 and the clock conditions (require_clock/forbid_clock) are checked
-                 against it internally.
-
-                 Open (some boundary messages): the clock is decided by the current
-                 environment. If the environment HAS the clock (all internal partners
-                 offer it) we treat the clock as a BOUNDARY action: its conditions are
-                 dropped from the internal check and instead ride the boundary env
-                 (be_clock below), so the game/player resolves provide-vs-withhold. If
-                 the environment does NOT have the clock, we treat it as internal and
-                 check the guard against an environment without the clock (clock=false). *)
-              let clock_is_boundary =
-                (not (MsgSet.is_empty boundary_messages)) && partners_offer_clock
-              in
-              let internal_env_clock =
-                if clock_is_boundary then false else partners_offer_clock
-              in
-              let strip_clock g =
-                if clock_is_boundary then
-                  { g with require_clock = false; forbid_clock = false }
-                else g
-              in
+              let internal_env_clock = internal_env_clock_ps in
               let guard_checks =
                 List.map
                   (fun (i, _, _act, g, _, _) ->
                     let env = { local_envs.(i) with clock = internal_env_clock } in
-                    let projected_guard =
-                      strip_clock (project_guard_to internal_messages g)
-                    in
+                    let projected_guard = projected_guard_of g in
                     (i, guard_satisfied env projected_guard, projected_guard, env))
                   combo
               in
@@ -807,10 +804,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                 || List.for_all (fun (_, ok, _, _) -> ok) guard_checks
               in
 
-              (* STEP 2: sync check on actions.
-                 - Clock: all components pick clock, or none do.
-                 - Internal messages: each must be picked by >= 2 components.
-                 - Boundary messages: no constraint. *)
+              (* Sync check: clock is all-or-none, internal messages need ≥2 components, boundary messages are unconstrained. *)
               let clock_count =
                 List.fold_left
                   (fun acc act -> match act with Clock -> acc + 1 | _ -> acc)
@@ -858,41 +852,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                 |> List.fold_left MsgSet.union MsgSet.empty
               in
 
-              (* Boundary projection E_B = (U, F): the mirror of STEP 1's internal
-                 projection. The same merged combo guard is projected onto the
-                 boundary messages (the pending part left for the environment).
-                 U = the boundary messages this round genuinely requires now
-                 (guard.require_now ∪ guard.subset_now ∪ every message across
-                 guard.exists_now_groups, on the boundary side — all three
-                 express "the environment must be offering something from this
-                 set now": require_now/subset_now exactly/subset, and
-                 exists_now_groups as a disjunction where ANY one message from
-                 ANY one group suffices, so its whole message set must surface
-                 in U or a transition guarded only by exists_now_groups (e.g.
-                 L-OfferSome's onward step, "some branch is ready") would get
-                 U = ∅ and collapse into the SAME θ move as a transition whose
-                 guard requires the opposite — missing_now_groups' "no branch
-                 ready" — even though the two are mutually exclusive under any
-                 single concrete Imm(E); a transition guarded only by
-                 subset_now, e.g. a plain message-firing edge, must still
-                 surface its message in U for the same reason); F = boundary
-                 messages that may still arrive this cycle (guard.future_intersects
-                 plus the components' maybe_offers), minus U. Offers presented
-                 now do NOT force a boundary message into U — only
-                 require_now/subset_now/exists_now_groups does, so a combo that
-                 fires just m1 does not spuriously demand m2 from the
-                 environment. Empty when boundary_messages = ∅ (closed).
-
-                 A message the merged guard's future_disjoint already proves
-                 absent from F (e.g. an xoffer/offer "escape" transition taken
-                 exactly because a branch head can no longer arrive this
-                 cycle) must never resurface in F via combined_maybe_offers'
-                 coarse over-approximation: otherwise this transition and its
-                 mutually-exclusive sibling (guarded by future_intersects on
-                 the same message — "might still arrive") get the same (U,F)
-                 boundary projection and collapse into one arena node, even
-                 though the two guards can never both hold under the same
-                 concrete environment. *)
+              (* E_B = (U,F): U is every boundary message this combo's guard genuinely requires now (require_now/subset_now/exists_now_groups — all three, or two mutually-exclusive guards can collapse into the same arena move); F is boundary future_intersects plus maybe_offers, minus U and minus anything future_disjoint already proves absent. *)
               let merged_guard = merge_guards guards in
               let boundary_guard =
                 project_guard_to boundary_messages merged_guard
@@ -969,10 +929,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                   }));
 
               if picked then (
-                (* The transition carries the FULL merged guard (the closed game
-                   and dead-end analysis rely on it). The boundary (pending) part
-                   is kept separately in boundary_guard for the residual/next-step
-                   composition; the internal part is what STEP 1 already checked. *)
+                (* `guard` keeps the FULL merged guard (closed game/dead-end analysis rely on it); the boundary/pending part is kept separately in boundary_guard. *)
                 let guard = merged_guard in
                 let state_key = String.concat "," (List.map string_of_int next) in
                 let action_key = string_of_action combined_action in
@@ -986,9 +943,7 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
                       stored_be_now,
                       stored_be_future,
                       stored_boundary_guard ) ->
-                    (* Merging combos into one grouped edge: union the boundary
-                       availabilities and merge the pending guards, matching how
-                       offers/guards already merge here. *)
+                    (* Merging combos into one grouped edge: union boundary availabilities, merge pending guards. *)
                     Hashtbl.replace grouped key
                       ( stored_next,
                         stored_action,
@@ -1029,12 +984,19 @@ let unified_product ?progress_ids ?(verbose = false) automata ~boundary_messages
               add_product_transition ~boundary_now:be_now
                 ~boundary_future:be_future ~boundary_guard ~internal_action
                 current next combined_action guard combined_offers)
-            grouped))
+            grouped;
+          (* Every component had an outgoing transition but every combo was
+             rejected (guard/sync/clock): a genuine synchronization dead end. *)
+          if Hashtbl.length grouped = 0 then record_dead_end current_arr)
+        else
+          (* Some component has no outgoing transition at all from its state. *)
+          record_dead_end current_arr)
   done;
   recompute_state_summaries prod;
   prod
 
-let closed_product ?progress_ids ?(verbose = false) automata sync_messages =
+let closed_product ?progress_ids ?(verbose = false) ?dead_ends automata
+    sync_messages =
   (* Closed product: all messages except those explicitly in sync_messages are boundary. *)
   let all_messages =
     Array.fold_left
@@ -1042,7 +1004,8 @@ let closed_product ?progress_ids ?(verbose = false) automata sync_messages =
       MsgSet.empty automata
   in
   let boundary_messages = MsgSet.diff all_messages sync_messages in
-  unified_product ?progress_ids ~verbose automata ~boundary_messages ~use_env:true
+  unified_product ?progress_ids ~verbose ?dead_ends automata ~boundary_messages
+    ~use_env:true
 
 (* Local parallel product exposes component messages instead of synchronizing them. *)
 (* Add unguarded epsilon self-loops to all accepting states (for internal parallel preprocessing). *)
@@ -1221,11 +1184,7 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
           else
             html_of_action t.action ^ "<BR/>satisfied: " ^ html_of_guard t.guard
         in
-        (* The internal label is the combined action projected onto
-           internal_messages — what actually synchronized to satisfy the
-           guard, as opposed to `action`'s full (possibly boundary-mixed)
-           label. Only shown when it differs, so closed-product transitions
-           (where every message is internal) stay unchanged. *)
+        (* internal_action is `action` projected onto internal_messages; only shown when it differs from action. *)
         let internal_label =
           if (not show_guards) || t.internal_action = t.action then ""
           else "<BR/>internal: " ^ html_of_action t.internal_action
@@ -1239,8 +1198,12 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
         let boundary =
           html_of_boundary_projection ~show_empty:show_empty_boundary t
         in
+        (* O and MO are independent fields; show each whenever non-empty rather than suppressing one based on the other. *)
         let offers =
-          if MsgSet.is_empty t.offers then "" else "<BR/>O = " ^ html_of_msgset t.offers
+          (if MsgSet.is_empty t.offers then ""
+           else "<BR/>O = " ^ html_of_msgset t.offers)
+          ^ (if MsgSet.is_empty t.maybe_offers then ""
+             else "<BR/>MO = " ^ html_of_msgset t.maybe_offers)
         in
         let debug =
           match show_transition_debug, t.transition_debug_info with

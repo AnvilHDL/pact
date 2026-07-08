@@ -457,12 +457,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
     in
     let branch_groups = List.map snd msg_branches in
     let finals = ref [] in
-    (* L-OfferSome: as soon as some branch's need intersects Imm(E), offer
-       takes an epsilon step into a parallel product of singleton xoffers,
-       one per branch (⊕(skip, ai:Pi)) — each independently resolves via the
-       existing xoffer construction (membership/subset test), rather than
-       enumerating every enabled subset with one combined exact-require_now
-       edge per subset. *)
+    (* Once some branch's need intersects Imm(E), offer steps into a parallel product of singleton xoffers, one per branch, each resolving independently. *)
     if msg_branches <> [] then begin
       let singleton_xoffers =
         List.map

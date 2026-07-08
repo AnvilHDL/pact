@@ -181,16 +181,17 @@
 pool p16{
     ep_le -- ep_ri : ch;
     ip161 : ep.m1;^(ep.m2,ep.m3);#1,
-    ip162 : ^(ep.m1,*);#2,
-    ip163 : ^(ep.m2,*);#3,
-    ip164 : ^(ep.m3,*);#4
+    ip162 : ep.m1;#1,
+    ip163 : ^(ep.m2,*);#2,
+    ip164 : ^(ep.m3,*);#3
 
 }
 
 // pool p12{
 //     ep_le -- ep_ri : ch;
-//     in121 : ep.m1;#ep.m2;#1,
-//     in122 : ep.m1;#1
+//     in121 : (ep.m1||ep.m2);#1,
+//     in122 : (ep.m1||ep.m2);#1
 // }
 
-// interface i1 (ep : left ch) = ^(ep.m2,ep.m3,*);#1
+interface i1 (ep : left ch) = (#ep.m1 || #ep.m2);#1
+interface i2 (ep : right ch) = ^(ep.m1,ep.m2) ;#1
