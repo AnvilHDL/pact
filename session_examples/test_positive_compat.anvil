@@ -132,3 +132,12 @@ pool p23 { // true
     p234 : #ep.m4;#1
 
 }
+
+pool p24{ //demux
+    ep_le -- ep_ri : ch;
+    i1 : slv.awreq;#1;((mst1.aw_req;slv.wreq;mst1.wreq;#1;mst1.b_req) 
+                     + (mst2.aw_req;slv.wreq;mst2.wreq;#1;mst2.b_req) 
+                     + (mst3.aw_req;slv.wreq;mst3.wreq;#1;mst3.b_req) 
+                     + (mst4.aw_req;slv.wreq;mst4.wreq;#1;mst4.b_req));slv.b_res;#1,
+    i2 : slv.wreq;slv.awreq;#1;#1;slv.b_res;#1
+}

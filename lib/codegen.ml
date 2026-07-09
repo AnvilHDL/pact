@@ -277,7 +277,7 @@ let codegen_regs printer (graphs : event_graph_collection) (g : event_graph) =
     )
     visible_regs
 
-let codegen_proc printer (graphs : EventGraph.event_graph_collection) (g : proc_graph) =
+let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.event_graph_collection) (g : proc_graph) =
 
   let uses_anvil_port_layout = match g.extern_module ,g.proc_body with
     | None, _ -> true
@@ -378,7 +378,7 @@ let codegen_proc printer (graphs : EventGraph.event_graph_collection) (g : proc_
       List.iter (fun ((thread : EventGraph.event_graph), reset_by) ->
           CodegenPrinter.print_section printer (Printf.sprintf "Thread %d implementation" thread.thread_id);
           codegen_post_declare printer graphs thread;
-          CodegenStates.codegen_states printer graphs g thread reset_by;
+          CodegenStates.codegen_states printer config graphs g thread reset_by;
       ) g.threads
   );
 
@@ -419,4 +419,4 @@ let generate (out : out_channel)
     ) graphs.event_graphs;
   );
   let printer = CodegenPrinter.create out 2 in
-  List.iter (codegen_proc printer graphs) graphs.event_graphs
+  List.iter (codegen_proc printer config graphs) graphs.event_graphs

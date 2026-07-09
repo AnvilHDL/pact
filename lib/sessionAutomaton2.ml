@@ -929,61 +929,45 @@ let unified_product ?progress_ids ?(verbose = false) ?dead_ends automata
                   }));
 
               if picked then (
-                (* `guard` keeps the FULL merged guard (closed game/dead-end analysis rely on it); the boundary/pending part is kept separately in boundary_guard. *)
+                (* `guard` keeps the FULL merged guard (closed game/dead-end analysis rely on it); the boundary/pending part is kept separately in boundary_guard.
+                   Distinct combos sharing a (next_state, action) key are kept as SEPARATE alternative edges (a list), not merged into one over-constrained
+                   guard: merge_guards is only sound WITHIN one combo (conjoining different components' conditions for that one joint transition), not
+                   ACROSS combos, which can represent mutually-exclusive hypotheses (e.g. different powerset slices of the same wait) that must stay a
+                   disjunction of edges, matching how the paper treats multiple ⟨U,F⟩-labeled transitions between the same states as distinct edges. *)
                 let guard = merged_guard in
                 let state_key = String.concat "," (List.map string_of_int next) in
                 let action_key = string_of_action combined_action in
                 let key = state_key ^ "|" ^ action_key in
-                match Hashtbl.find_opt grouped key with
-                | Some
-                    ( stored_next,
-                      stored_action,
-                      stored_offers,
-                      existing_guard,
-                      stored_be_now,
-                      stored_be_future,
-                      stored_boundary_guard ) ->
-                    (* Merging combos into one grouped edge: union boundary availabilities, merge pending guards. *)
-                    Hashtbl.replace grouped key
-                      ( stored_next,
-                        stored_action,
-                        MsgSet.union stored_offers combined_offers,
-                        merge_guards [ existing_guard; guard ],
-                        MsgSet.union stored_be_now be_now,
-                        MsgSet.union stored_be_future be_future,
-                        merge_guards [ stored_boundary_guard; boundary_guard ] )
-                | None ->
-                    Hashtbl.add grouped key
-                      ( next,
-                        combined_action,
-                        combined_offers,
-                        guard,
-                        be_now,
-                        be_future,
-                        boundary_guard )
+                let alt = (next, combined_action, combined_offers, guard, be_now, be_future, boundary_guard) in
+                let existing =
+                  match Hashtbl.find_opt grouped key with Some alts -> alts | None -> []
+                in
+                Hashtbl.replace grouped key (alt :: existing)
               ))
             combos;
-          (* Emit one transition per grouped (next_state, action). *)
+          (* Emit one transition per alternative (no cross-combo guard merge). *)
           Hashtbl.iter
-            (fun _key
-                 ( next,
-                   combined_action,
-                   combined_offers,
-                   guard,
-                   be_now,
-                   be_future,
-                   boundary_guard ) ->
-              let internal_action =
-                match combined_action with
-                | Messages msgs ->
-                    let internal_msgs = MsgSet.inter msgs internal_messages in
-                    if MsgSet.is_empty internal_msgs then Epsilon
-                    else Messages internal_msgs
-                | other -> other
-              in
-              add_product_transition ~boundary_now:be_now
-                ~boundary_future:be_future ~boundary_guard ~internal_action
-                current next combined_action guard combined_offers)
+            (fun _key alts ->
+              List.iter
+                (fun ( next,
+                       combined_action,
+                       combined_offers,
+                       guard,
+                       be_now,
+                       be_future,
+                       boundary_guard ) ->
+                  let internal_action =
+                    match combined_action with
+                    | Messages msgs ->
+                        let internal_msgs = MsgSet.inter msgs internal_messages in
+                        if MsgSet.is_empty internal_msgs then Epsilon
+                        else Messages internal_msgs
+                    | other -> other
+                  in
+                  add_product_transition ~boundary_now:be_now
+                    ~boundary_future:be_future ~boundary_guard ~internal_action
+                    current next combined_action guard combined_offers)
+                alts)
             grouped;
           (* Every component had an outgoing transition but every combo was
              rejected (guard/sync/clock): a genuine synchronization dead end. *)
@@ -1091,6 +1075,22 @@ let html_of_text_block text =
   |> String.split_on_char '\n'
   |> List.map escape_html
   |> String.concat "<BR/>"
+
+let without_projected_guard_debug text =
+  let rec loop dropping acc = function
+    | [] -> List.rev acc
+    | line :: rest ->
+        let trimmed = String.trim line in
+        if trimmed = "projected guard checks:" then
+          loop true acc rest
+        else if dropping && trimmed = "------------------------------------------------------------" then
+          loop false (line :: acc) rest
+        else if dropping then
+          loop true acc rest
+        else
+          loop false (line :: acc) rest
+  in
+  text |> String.split_on_char '\n' |> loop false [] |> String.concat "\n"
 
 let html_of_action = function
   | Epsilon -> "α = ε"
@@ -1209,7 +1209,9 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
           match show_transition_debug, t.transition_debug_info with
           | false, _ -> ""
           | true, None -> ""
-          | true, Some info -> "<BR/>" ^ html_of_text_block info
+          | true, Some info ->
+              let info = without_projected_guard_debug info in
+              if info = "" then "" else "<BR/>" ^ html_of_text_block info
         in
         base ^ internal_label ^ pending ^ offers ^ boundary ^ debug
       in

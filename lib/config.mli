@@ -12,7 +12,8 @@ type compile_config = {
   disable_compat_checks : bool; (** disable all compatibility checks *)
   weak_typecasts : bool; (** allow weak typecasts
                              between data types of different widths *)
-  opt_level : int; (** optimisation level *)                             
+  opt_level : int; (** optimisation level *)
+  merge_reg_writes : bool; (** merge each multi-writer register into one always_comb next-state signal instead of per-event non-blocking assigns; off by default *)
   output_filename : string option; (** optional output filename *)
 
   just_check : bool; (** only typecheck and validate the input files without generating output *)

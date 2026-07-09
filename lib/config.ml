@@ -9,6 +9,7 @@ type compile_config = {
   disable_compat_checks : bool;
   weak_typecasts : bool;
   opt_level : int;
+  merge_reg_writes : bool;
   output_filename : string option;
   just_check : bool;
   two_round_graph: bool;
@@ -24,6 +25,7 @@ let parse_args () : compile_config =
   let disable_session_checks = ref false in
   let strong_typecasts = ref false in
   let opt_level = ref 2 in
+  let merge_reg_writes = ref false in
   let debug_choice = ref (-1) in
   let stdin = ref false in
   let two_round_graph = ref false in
@@ -45,6 +47,7 @@ let parse_args () : compile_config =
       ("-disable-compat-checks", Arg.Set disable_compat_checks, "Disable compatibility checks");
       ("-debug-choice", Arg.Set_int debug_choice, "Set debug choice for testing");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default)");
+      ("-merge-reg-writes", Arg.Set merge_reg_writes, "Merge multi-writer registers into one always_comb next-state signal instead of one guarded non-blocking assign per writer event (behaviour-preserving; off by default, see Config.mli)");
       ("-o", Arg.String (fun s -> output_filename := Some s), "Set output filename");
       ("-just-check", Arg.Set just_check, "Only typecheck and validate the input files");
       ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds");
@@ -64,6 +67,7 @@ let parse_args () : compile_config =
     disable_compat_checks = !disable_compat_checks;
     weak_typecasts = not !strong_typecasts;
     opt_level = !opt_level;
+    merge_reg_writes = !merge_reg_writes;
     two_round_graph = !two_round_graph;
     json_output = !json_output;
     input_filenames = !input_filenames;

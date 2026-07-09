@@ -287,7 +287,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
     | StyChoice (left, right) ->
         mark_nonfinal ();
         TypeAutomaton.make_adversary auto current;
-        if infer_fair_choice left right then
+        (* if infer_fair_choice left right then *)
           TypeAutomaton.make_fair auto current;
         let left_start = TypeAutomaton.new_state auto false in
         let right_start = TypeAutomaton.new_state auto false in
@@ -472,8 +472,6 @@ let rec build_automaton (name : identifier option) (st : session_type)
       finals := build target_ty target rec_env let_env @ !finals
     end;
     if not (MsgSet.is_empty head_set) then begin
-      (* While some branch head may still arrive this cycle, the offer keeps
-         waiting (F ∩ HB ≠ ∅). No clock condition. *)
       let power_set =
         SessionAutomaton2.powerset head_set
         |> List.filter (fun subset -> not (MsgSet.is_empty subset))

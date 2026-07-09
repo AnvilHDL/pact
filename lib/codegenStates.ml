@@ -557,12 +557,77 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
 
   List.iter print_compute_next g.events
 
-let codegen_actions printer (g : EventGraph.event_graph) =
+(* Every RegAssign to reg_name, in event order, across the whole graph. *)
+let collect_reg_assigns (g : EventGraph.event_graph) : (string, (EventGraph.event * EventGraph.lvalue_info * EventGraph.lowering_data) list) Hashtbl.t =
+  let open EventGraph in
+  let table = Hashtbl.create 16 in
+  List.iter (fun (e : event) ->
+    List.iter (fun (a : action Lang.ast_node) ->
+      match a.d with
+      | RegAssign (lval_info, td) ->
+        let name = lval_info.lval_range.subreg_name in
+        let prev = Hashtbl.find_opt table name |> Option.value ~default:[] in
+        Hashtbl.replace table name (prev @ [(e, lval_info, td)])
+      | _ -> ()
+    ) e.actions
+  ) g.events;
+  table
+
+(* Registers written from 2+ distinct events; only these get merged into one always_comb next-state signal. *)
+let multi_writer_reg_names (reg_assigns : (string, 'a list) Hashtbl.t) : Utils.StringSet.t =
+  Hashtbl.fold (fun name sites acc ->
+    let distinct_events = List.length (List.sort_uniq (fun (e1, _, _) (e2, _, _) -> compare e1.EventGraph.id e2.EventGraph.id) sites) in
+    if distinct_events >= 2 then Utils.StringSet.add name acc else acc
+  ) reg_assigns Utils.StringSet.empty
+
+(* For every multi-writer register: one always_comb block holding data_n = data_q, then one guarded override per writer event, in event order. *)
+let codegen_reg_next_state printer (graphs : EventGraph.event_graph_collection) (g : EventGraph.event_graph)
+    (reg_assigns : (string, (EventGraph.event * EventGraph.lvalue_info * EventGraph.lowering_data) list) Hashtbl.t)
+    (multi_writer : Utils.StringSet.t) =
+  let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) =
+    CodegenPrinter.print_line printer ~lvl_delta_pre:lvl_delta_pre ~lvl_delta_post:lvl_delta_post in
+  if not (Utils.StringSet.is_empty multi_writer) then (
+    Utils.StringSet.iter (fun name ->
+      let (r : Lang.reg_def) = Utils.StringMap.find name g.regs in
+      Printf.sprintf "%s %s;"
+        (CodegenFormat.format_dtype graphs.typedefs graphs.macro_defs r.d_type)
+        (CodegenFormat.format_regname_next name)
+      |> print_line
+    ) multi_writer;
+    Printf.sprintf "always_comb begin : _thread_%d_reg_next_state" g.thread_id
+    |> print_line ~lvl_delta_post:1;
+    Utils.StringSet.iter (fun name ->
+      Printf.sprintf "%s = %s;" (CodegenFormat.format_regname_next name) (CodegenFormat.format_regname_current name)
+      |> print_line;
+      Hashtbl.find reg_assigns name
+      |> List.iter (fun ((e : EventGraph.event), (lval_info : EventGraph.lvalue_info), (td : EventGraph.lowering_data)) ->
+        let (le, len) = lval_info.lval_range.subreg_range_interval in
+        let w = Option.get td.w in
+        Printf.sprintf "if (%s) %s[%s +: %d] = %s;"
+          (EventStateFormatter.format_current g.thread_id e.id)
+          (CodegenFormat.format_regname_next name)
+          (MaybeConst.map (fun (td : EventGraph.lowering_data) -> Option.get td.w) le |> CodegenFormat.format_wire_maybe_const)
+          len
+          (CodegenFormat.format_wirename w.thread_id w.id)
+        |> print_line
+      )
+    ) multi_writer;
+    print_line ~lvl_delta_pre:(-1) "end"
+  )
+
+let codegen_actions printer (g : EventGraph.event_graph) (multi_writer : Utils.StringSet.t) =
   let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) =
     CodegenPrinter.print_line printer ~lvl_delta_pre:lvl_delta_pre ~lvl_delta_post:lvl_delta_post in
   let open EventGraph in
+  (* True iff the action emits a line below; PutShared/Immediate* never do, and a multi-writer RegAssign is handled by codegen_reg_next_state instead. *)
+  let action_prints_line (a : action Lang.ast_node) =
+    match a.d with
+    | DebugPrint _ | DebugFinish -> true
+    | RegAssign (lval_info, _) -> not (Utils.StringSet.mem lval_info.lval_range.subreg_name multi_writer)
+    | PutShared _ | ImmediateRecv _ | ImmediateSend _ -> false
+  in
   let print_event_actions (e : event) =
-    if e.actions <> [] then begin
+    if List.exists action_prints_line e.actions then begin
       print_line @@ Printf.sprintf "// event %d actions" e.id;
       EventStateFormatter.format_current g.thread_id e.id
       |> Printf.sprintf "if (%s) begin" |> print_line ~lvl_delta_post:1;
@@ -578,14 +643,17 @@ let codegen_actions printer (g : EventGraph.event_graph) =
         | DebugFinish ->
           print_line "$finish;"
         | RegAssign (lval_info, td) ->
-          let (le, len) = lval_info.lval_range.subreg_range_interval in
-          let w = Option.get td.w in
-          Printf.sprintf "%s[%s +: %d] <= %s;"
-            (CodegenFormat.format_regname_current lval_info.lval_range.subreg_name)
-            (MaybeConst.map (fun td -> Option.get td.w) le |> CodegenFormat.format_wire_maybe_const)
-            len
-            (CodegenFormat.format_wirename w.thread_id w.id)
-            |> print_line
+          if Utils.StringSet.mem lval_info.lval_range.subreg_name multi_writer then ()
+          else (
+            let (le, len) = lval_info.lval_range.subreg_range_interval in
+            let w = Option.get td.w in
+            Printf.sprintf "%s[%s +: %d] <= %s;"
+              (CodegenFormat.format_regname_current lval_info.lval_range.subreg_name)
+              (MaybeConst.map (fun td -> Option.get td.w) le |> CodegenFormat.format_wire_maybe_const)
+              len
+              (CodegenFormat.format_wirename w.thread_id w.id)
+              |> print_line
+          )
         | PutShared _ -> ()
         | ImmediateRecv _ -> ()
         | ImmediateSend _ -> ()
@@ -597,7 +665,7 @@ let codegen_actions printer (g : EventGraph.event_graph) =
   List.iter print_event_actions g.events
 
 
-let codegen_transition printer (_graphs : EventGraph.event_graph_collection)
+let codegen_transition printer (config : Config.compile_config) (graphs : EventGraph.event_graph_collection)
                                (g : EventGraph.event_graph) (reset_by : Lang.message_specifier option) =
   let open EventGraph in
   let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) =
@@ -607,6 +675,14 @@ let codegen_transition printer (_graphs : EventGraph.event_graph_collection)
 
   let owned_regs = GraphAnalysis.graph_owned_regs g |> Utils.StringSet.of_list in
   let owned_regs = Utils.StringMap.filter (fun name _ -> Utils.StringSet.mem name owned_regs) g.regs in
+
+  (* Merge only applies when reset_by is None: reset_by re-resets registers later in the same always_ff, and reg_n doesn't account for that override yet. *)
+  let reg_assigns = collect_reg_assigns g in
+  let multi_writer =
+    if config.merge_reg_writes && Option.is_none reset_by then multi_writer_reg_names reg_assigns
+    else Utils.StringSet.empty
+  in
+  codegen_reg_next_state printer graphs g reg_assigns multi_writer;
 
   CodegenPrinter.print_section printer (Printf.sprintf "Thread %d state transition" g.thread_id);
   Printf.sprintf "always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_%d_st_transition" g.thread_id |> print_line ~lvl_delta_post:1;
@@ -621,7 +697,7 @@ let codegen_transition printer (_graphs : EventGraph.event_graph_collection)
   List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= '0;" sn |> print_line) reg_states;
   print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 "end else begin";
   (* actions *)
-  codegen_actions printer g;
+  codegen_actions printer g multi_writer;
   (
     match reset_by with
     | None -> ()
@@ -642,6 +718,9 @@ let codegen_transition printer (_graphs : EventGraph.event_graph_collection)
   print_line @@ Printf.sprintf "_init_%d <= 1'b0;" g.thread_id;
   (* next states *)
   List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= %s_n;" sn sn |> print_line) reg_states;
+  Utils.StringSet.iter (fun name ->
+    Printf.sprintf "%s <= %s;" (CodegenFormat.format_regname_current name) (CodegenFormat.format_regname_next name) |> print_line
+  ) multi_writer;
   if Option.is_some reset_by then print_line ~lvl_delta_pre:(-1) "end";
   print_line ~lvl_delta_pre:(-1) "end";
   print_line ~lvl_delta_pre:(-1) "end"
@@ -935,6 +1014,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
   )
 
 let codegen_states printer
+  (config : Config.compile_config)
   (graphs : EventGraph.event_graph_collection)
   (pg : EventGraph.proc_graph)
   (g : EventGraph.event_graph)
@@ -945,7 +1025,7 @@ let codegen_states printer
     codegen_decl printer g;
     codegen_next printer graphs pg g;
     codegen_sustained_actions printer graphs pg g;
-    codegen_transition printer graphs g reset_by
+    codegen_transition printer config graphs g reset_by
   )
 
 let codegen_proc_states printer proc =
