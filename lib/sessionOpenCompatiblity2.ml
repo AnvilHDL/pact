@@ -522,7 +522,7 @@ let hide_internal_action internal_messages = function
 
 (* Residual guards keep the boundary projection of the source guard so the next
    composition step still tests genuine boundary availability. *)
-let residual_guard boundary_messages boundary source_guard =
+let residual_guard boundary_messages source_guard =
   let project_groups groups =
     groups
     |> List.map (fun group -> MsgSet.inter boundary_messages group)
@@ -533,7 +533,7 @@ let residual_guard boundary_messages boundary source_guard =
     groups |> List.filter (fun group -> not (MsgSet.disjoint group boundary_messages))
   in
   {
-    require_now = boundary.be_now;
+    require_now = MsgSet.inter boundary_messages source_guard.require_now;
     forbid_now = MsgSet.inter boundary_messages source_guard.forbid_now;
     missing_now_groups = project_groups source_guard.missing_now_groups;
     exists_now_groups = keep_disjunctive_groups source_guard.exists_now_groups;
@@ -593,7 +593,7 @@ let build_residual_automaton residual_nm product internal_messages
       (fun (t : transition) ->
         let boundary = boundary_of_transition t in
         let action = hide_internal_action internal_messages t.action in
-        let guard = residual_guard boundary_messages boundary t.boundary_guard in
+        let guard = residual_guard boundary_messages t.boundary_guard in
         (t, boundary, action, guard))
       product.transitions
   in

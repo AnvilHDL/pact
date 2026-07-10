@@ -457,7 +457,31 @@ let rec build_automaton (name : identifier option) (st : session_type)
     in
     let branch_groups = List.map snd msg_branches in
     let finals = ref [] in
-    (* Once some branch's need intersects Imm(E), offer steps into a parallel product of singleton xoffers, one per branch, each resolving independently. *)
+    let else_target =
+      match wildcard_continuation_opt offerings with
+      | Some else_ty ->
+          let else_target = TypeAutomaton.new_state auto false in
+          TypeAutomaton.add_transition auto current else_target Epsilon
+            (xoffer_else_guard branch_groups head_set)
+            head_set;
+          finals := build else_ty else_target rec_env let_env @ !finals;
+          Some else_target
+      | None ->
+          if all_blocking && not (MsgSet.is_empty head_set) then begin
+            let next_i = TypeAutomaton.new_state auto false in
+            set_residual_type auto next_i (delay_then 1 (StyOffer offerings));
+            TypeAutomaton.add_transition auto current next_i Epsilon
+              (xoffer_else_guard ~require_clock:false branch_groups head_set)
+              head_set;
+            TypeAutomaton.add_transition auto next_i current Clock
+              { any_guard with require_clock = true; forbid_clock = false }
+              MsgSet.empty;
+            TypeAutomaton.add_transition auto next_i next_i Epsilon
+              { any_guard with forbid_clock = true } MsgSet.empty
+          end;
+          None
+    in
+
     if msg_branches <> [] then begin
       let singleton_xoffers =
         List.map
@@ -466,33 +490,37 @@ let rec build_automaton (name : identifier option) (st : session_type)
           msg_branches
       in
       let target_ty = parallel_of_list singleton_xoffers in
-      let target = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current target Epsilon
-        { any_guard with exists_now_groups = branch_groups } MsgSet.empty;
-      finals := build target_ty target rec_env let_env @ !finals
-    end;
-    if not (MsgSet.is_empty head_set) then begin
-      let power_set =
-        SessionAutomaton2.powerset head_set
-        |> List.filter (fun subset -> not (MsgSet.is_empty subset))
+      let before_count = List.length auto.transitions in
+      finals := build target_ty current rec_env let_env @ !finals;
+      let added_count = List.length auto.transitions - before_count in
+      let added, prior =
+        let rec split n acc = function
+          | xs when n <= 0 -> (acc, xs)
+          | x :: rest -> split (n - 1) (x :: acc) rest
+          | [] -> (acc, [])
+        in
+        split added_count [] auto.transitions
       in
-      List.iter
-        (fun subset ->
-            TypeAutomaton.add_transition auto current current Epsilon
-                { any_guard with future_intersects = [ subset ] } subset;
-        )power_set
-      end;
-    (match wildcard_continuation_opt offerings with
-    | Some else_ty ->
-        let else_target = TypeAutomaton.new_state auto false in
-        TypeAutomaton.add_transition auto current else_target Epsilon
-          (xoffer_else_guard branch_groups head_set)
-          MsgSet.empty;
-        finals := build else_ty else_target rec_env let_env @ !finals
-    | None ->
-        if all_blocking && not (MsgSet.is_empty head_set) then
-          add_blocking_retry auto current branch_groups head_set
-            (StyOffer offerings));
+      let is_all_else_edge t =
+        t.from_state = current
+        && t.action = Epsilon
+        && MsgSet.equal t.guard.future_disjoint head_set
+        && List.exists (MsgSet.equal head_set) t.guard.missing_now_groups
+      in
+      let rerouted =
+        List.filter_map
+          (fun t ->
+            if is_all_else_edge t then
+              Option.map (fun target -> { t with to_state = target }) else_target
+            else Some t)
+          added
+      in
+      auto.transitions <- prior @ rerouted
+    end;
+    if not (MsgSet.is_empty head_set) then
+      TypeAutomaton.add_transition auto current current Epsilon
+        { any_guard with future_intersects = [ head_set ]; missing_now_groups = [ head_set ] }
+        head_set;
     !finals
   in
   ignore (build st auto.start_state [] [] : int list);
