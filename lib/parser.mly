@@ -158,18 +158,6 @@ import_directive:
 
 proc_def:
 | KEYWORD_PROC; ident = IDENT;
-  LEFT_PAREN; RIGHT_PAREN;
-  LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
-  {
-    {
-      name = ident;
-      interface = [];
-      args = [];
-      params = [];
-      body = let open Lang in Native body
-    } : Lang.proc_def
-  }
-| KEYWORD_PROC; ident = IDENT;
   LEFT_PAREN; args = proc_def_arg_list_nonempty; RIGHT_PAREN;
   LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
   {
@@ -178,18 +166,6 @@ proc_def:
       interface = [];
       args = args;
       params = [];
-      body = let open Lang in Native body
-    } : Lang.proc_def
-  }
-| KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
-  LEFT_PAREN; RIGHT_PAREN;
-  LEFT_BRACE; body = proc_def_body; RIGHT_BRACE
-  {
-    {
-      name = ident;
-      interface = [];
-      args = [];
-      params = params;
       body = let open Lang in Native body
     } : Lang.proc_def
   }
