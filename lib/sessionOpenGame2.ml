@@ -73,12 +73,12 @@ type open_game_arena = {
 
 let string_of_edge_label = function
   | BoundaryChoice env -> "θ: " ^ string_of_boundary_env env
-  | ActionLabel action -> string_of_action action
+  | ActionLabel action -> "α = " ^(string_of_action action)
   | EpsilonLabel -> "ε"
 
 let html_of_edge_label = function
   | BoundaryChoice env -> "θ: " ^ html_of_boundary_env env
-  | ActionLabel action -> html_of_action action
+  | ActionLabel action -> "α = " ^ (string_of_action action)
   | EpsilonLabel -> "ε"
 
 let node_table arena =
@@ -106,7 +106,7 @@ let arena_outgoing index node_id =
 
 let edge_progress_ids edge =
   match edge.arena_edge_action with
-  | Some (Progress ids) -> ids
+  | Some act -> progress_ids_of_action act
   | _ -> StringSet.empty
 
 (* ---- Open Rabin game ---- *)

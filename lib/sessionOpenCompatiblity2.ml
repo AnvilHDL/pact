@@ -128,7 +128,7 @@ let add_member_progress_loop member_id auto =
   TypeAutomaton.accepting_states auto
   |> List.iter (fun final_state ->
          TypeAutomaton.add_transition auto final_state auto.start_state
-           (Progress (StringSet.singleton member_id))
+           (progress_action member_id)
            { any_guard with forbid_clock = false } MsgSet.empty);
   recompute_state_summaries auto
 
@@ -515,31 +515,28 @@ let residual_dot_path residual_name =
 (* hide_I : internal messages disappear from the boundary; a purely
    internal message step becomes ε; #, $id, and fair markers are preserved. *)
 let hide_internal_action internal_messages = function
-  | Messages msgs ->
+  | Observations obs ->
+    let msgs =
+      ObservationSet.fold
+        (fun obs acc ->
+          match obs with
+          | Message msg -> MsgSet.add msg acc
+          | _ -> acc)
+        obs MsgSet.empty
+      in
       let visible = MsgSet.diff msgs internal_messages in
-      if MsgSet.is_empty visible then Epsilon else Messages visible
-  | (Epsilon | Clock | Progress _ | FairBranch _) as action -> action
+      if MsgSet.is_empty visible then epsilon else message_actions visible
+  | _ as act -> act
 
 (* Residual guards keep the boundary projection of the source guard so the next
    composition step still tests genuine boundary availability. *)
 let residual_guard boundary_messages source_guard =
-  let project_groups groups =
-    groups
-    |> List.map (fun group -> MsgSet.inter boundary_messages group)
-    |> List.filter (fun group -> not (MsgSet.is_empty group))
-  in
   (* Disjunctive groups (future_intersects/exists_now_groups) are kept whole on projection, never split per-message, or the OR could lose a still-satisfiable disjunct. *)
-  let keep_disjunctive_groups groups =
-    groups |> List.filter (fun group -> not (MsgSet.disjoint group boundary_messages))
-  in
   {
     require_now = MsgSet.inter boundary_messages source_guard.require_now;
     forbid_now = MsgSet.inter boundary_messages source_guard.forbid_now;
-    missing_now_groups = project_groups source_guard.missing_now_groups;
-    exists_now_groups = keep_disjunctive_groups source_guard.exists_now_groups;
-    future_intersects = keep_disjunctive_groups source_guard.future_intersects;
+    future_members = MsgSet.inter boundary_messages source_guard.future_members;
     future_disjoint = MsgSet.inter boundary_messages source_guard.future_disjoint;
-    subset_now = MsgSet.inter boundary_messages source_guard.subset_now;
     require_clock = source_guard.require_clock;
     forbid_clock = source_guard.forbid_clock;
   }
@@ -559,9 +556,10 @@ let entry_nodes_by_product_state arena =
   table
 
 (* The residual is the WHOLE composed product with the internal interface hidden — NOT pruned to the game's winning region, since the next step's game needs to see the true subsystem. *)
+
 let build_residual_automaton residual_nm product internal_messages
     boundary_messages _arena _game_result =
-  let residual = TypeAutomaton.create () in
+  let residual = TypeAutomaton.create boundary_messages in
   TypeAutomaton.change_name residual_nm residual;
   let state_map = Hashtbl.create 32 in
   let copy_state product_state =
@@ -619,15 +617,14 @@ let build_residual_automaton residual_nm product internal_messages
           changed := true))
       residual_edges
   done;
-  (* An edge conflicts (and is pruned) if it's non-# and its future_intersects re-demands into F a message already in FD_seen at its source. *)
+  (* An edge conflicts (and is pruned) if it's non-# and its future_members re-demands into F a message already in FD_seen at its source. *)
   let edge_conflicts (t : transition) (action : action) (guard : guard) =
     match action with
     | Clock -> false
     | _ ->
         let fd = get_fd t.from_state in
-        List.exists
           (fun group -> not (MsgSet.disjoint group fd))
-          guard.future_intersects
+          guard.future_members
   in
   List.iter
     (fun (t, boundary, action, guard) ->

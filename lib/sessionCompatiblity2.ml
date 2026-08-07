@@ -24,7 +24,7 @@ let create_product
         |> List.iter (fun final_state ->
                (* Each member emits its interface ID when one protocol iteration ends. *)
                TypeAutomaton.add_transition auto final_state auto.start_state
-                 (Progress (StringSet.singleton intf_id))
+                 (progress_action intf_id)
                  { any_guard with forbid_clock = false } MsgSet.empty);
         recompute_state_summaries auto;
         if verbose then (

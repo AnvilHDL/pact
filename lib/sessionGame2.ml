@@ -3,7 +3,8 @@ open SessionAutomaton2
 module IntSet = Set.Make (Int)
 
 let transition_has_id (t : transition) (req_id : string) =
-  transition_has_progress t req_id
+  let progress_ids = progress_ids_of_action t.action in
+  StringSet.mem req_id progress_ids
 
 let indent_block prefix text =
   text
