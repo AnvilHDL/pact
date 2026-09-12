@@ -36,7 +36,7 @@ let print_string_of_head_cont_pair hc =
     | Atom act -> string_of_atomic_action_with_gap act
     | Offers off -> string_of_protocol (StyOffer off)
     | XOffers xoff -> string_of_protocol (StyXOffer xoff)
-    | Terminal ParallelDone -> string_of_protocol StyTrue
+    | Terminal ParallelDone -> string_of_protocol StySkip
     | Terminal RecurseJump -> "recurse"
   in
   let cont_str = match hc.cont with
@@ -113,7 +113,7 @@ let trigger_matches_msg_group trigger msg_group =
 
 let session_of_atomic_actions actions =
   match actions with
-  | [] -> StyTrue
+  | [] -> StySkip
   | first :: rest ->
       List.fold_left (fun acc act ->
         StyParallel (acc, StyAtom (AtomicAct act))
@@ -121,22 +121,22 @@ let session_of_atomic_actions actions =
 
 let seq_if_needed head cont =
   match head, cont with
-  | StyTrue, cont -> cont
-  | head, StyTrue -> head
+  | StySkip, cont -> cont
+  | head, StySkip -> head
   | _ -> StySeq (head, cont)
 
 type session_residual = session_type option
 
 let residual_with_head head cont : session_residual =
   match head, cont with
-  | StyTrue, None -> None
-  | StyTrue, Some cont -> Some cont
+  | StySkip, None -> None
+  | StySkip, Some cont -> Some cont
   | head, Some cont -> Some (seq_if_needed head cont)
   | head, None -> Some head
 
 let continuation_or_true = function
   | Some sty -> sty
-  | None -> StyTrue
+  | None -> StySkip
 
 let offering_body_session (offering : offering_session_type) =
   match offering.trigger with
@@ -153,7 +153,7 @@ let offering_body_session (offering : offering_session_type) =
 
 let rec build_choice_from_xofferings offerings =
   match offerings with
-  | [] -> StyTrue
+  | [] -> StySkip
   | [only] -> offering_body_session only
   | first :: rest ->
       StyChoice (offering_body_session first, build_choice_from_xofferings rest)
@@ -177,7 +177,7 @@ let offering_session_after_msg ?kind (offering : offering_session_type) msg =
       else
         let remaining_session =
           match remaining with
-          | [] -> StyTrue
+          | [] -> StySkip
           | _ -> session_of_atomic_actions remaining
         in
         Some (residual_with_head remaining_session offering.continuation)
@@ -228,16 +228,16 @@ let normalize_for_match (recvar_map : (identifier * session_type) list) sty =
         let head' = aux head in
         let tail' = aux tail in
         (match head', tail' with
-        | StyTrue, tail'' -> tail''
-        | head'', StyTrue -> head''
+        | StySkip, tail'' -> tail''
+        | head'', StySkip -> head''
         | _ -> StySeq (head', tail'))
     | StyParallel (left, right) ->
         let left' = aux left in
         let right' = aux right in
         (match left', right' with
-        | StyTrue, StyTrue -> StyTrue
-        | StyTrue, right'' -> right''
-        | left'', StyTrue -> left''
+        | StySkip, StySkip -> StySkip
+        | StySkip, right'' -> right''
+        | left'', StySkip -> left''
         | _ -> StyParallel (left', right'))
     | StyChoice (left, right) -> StyChoice (aux left, aux right)
     | _ -> st'
@@ -305,7 +305,7 @@ let string_of_residual = function
 
 let residual_to_choice_arm = function
   | Some sty -> sty
-  | None -> StyTrue
+  | None -> StySkip
 
 let choice_of_residuals lhs rhs =
   Some (StyChoice (residual_to_choice_arm lhs, residual_to_choice_arm rhs))
@@ -316,7 +316,7 @@ let residual_of_head_cont hc =
     | Atom act -> Some (StyAtom act)
     | Offers offerings -> Some (StyOffer offerings)
     | XOffers offerings -> Some (StyXOffer offerings)
-    | Terminal ParallelDone -> Some StyTrue
+    | Terminal ParallelDone -> Some StySkip
     | Terminal RecurseJump -> None
   in
   match head_sty, hc.cont with
@@ -327,7 +327,7 @@ let parallel_of_residuals residuals =
   let sessions =
     List.filter_map (function
       | None -> None
-      | Some StyTrue -> None
+      | Some StySkip -> None
       | Some sty -> Some sty
     ) residuals
   in
@@ -402,8 +402,8 @@ let node_of_residual protocol_node = function
   | None -> None
 
 let rec consume_parallel_done_from_sty = function
-  | StyTrue -> Some None
-  | StySeq (StyTrue, tail) -> Some (Some tail)
+  | StySkip -> Some None
+  | StySeq (StySkip, tail) -> Some (Some tail)
   | StySeq (head, tail) ->
       (match consume_parallel_done_from_sty head with
       | Some None -> Some (Some tail)
@@ -451,7 +451,7 @@ let rec get_head_continuation_pair
   | StyParallel (s1, s2) ->
   (
     match s1, s2 with
-    | StyTrue, StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = rec_var_context}]
+    | StySkip, StySkip -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; recvar_map = rec_var_context}]
     | _ ->
      (
       let head_conts1 =
@@ -464,13 +464,13 @@ let rec get_head_continuation_pair
       let head_conts_transform_1 =
         List.map
           (fun hc ->
-            {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)})
+            {hc with cont = seq_of_sty_opt hc.cont (Some StySkip)})
           head_conts1
       in
       let head_conts_transform_2 =
         List.map
           (fun hc ->
-            {hc with cont = seq_of_sty_opt hc.cont (Some StyTrue)})
+            {hc with cont = seq_of_sty_opt hc.cont (Some StySkip)})
           head_conts2
       in
       head_conts_transform_1 @ head_conts_transform_2
@@ -490,7 +490,7 @@ let rec get_head_continuation_pair
       [{default_head_continuation_pair with head = XOffers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
       [{default_head_continuation_pair with head = Offers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
-  | StyTrue -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StySkip -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyRec(id,s') -> get_head_continuation_pair ~inside_parallel s' sp ((id, sty_node)::rec_var_context)
   | StyVar id -> 
     (
@@ -592,7 +592,7 @@ let extract_delay_continuation init n' hc =
         (acc, st')
     | StyOffer _ ->
         (acc, st')
-    | StyTrue -> (acc, st')
+    | StySkip -> (acc, st')
     | _ -> raise (Except.TypeError [Text "Unsupported session type for delay extraction"])
   )
   | _ -> extract_delay (Some init) acc
@@ -606,9 +606,9 @@ let delay_continuation_after_terminal_closure n sp head_conts init =
       match hc.head with
       | Atom (AtomDelay m) ->
           if n <= m then begin
-            let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StyTrue in
+            let remaining_delay = if n < m then StyAtom (AtomDelay (m - n)) else StySkip in
             let new_cont = match remaining_delay with
-              | StyTrue -> hc.cont
+              | StySkip -> hc.cont
               | _ -> seq_of_sty_opt (Some remaining_delay) hc.cont
             in
             hc.visited <- true;
@@ -640,7 +640,7 @@ let delay_continuation_after_terminal_closure n sp head_conts init =
                     hc.visited <- true;
                     let delayed_cont =
                       match terminal_kind with
-                      | ParallelDone -> seq_of_sty_opt (Some StyTrue) found_cont
+                      | ParallelDone -> seq_of_sty_opt (Some StySkip) found_cont
                       | RecurseJump -> found_cont
                     in
                     Some (delayed_cont, found_map)
@@ -1176,7 +1176,7 @@ let check_generalized_session
                   (match hc.head with
                   | XOffers off | Offers off -> string_of_protocol (StyOffer off)
                   | Atom act -> string_of_atomic_action_with_gap act
-                  | Terminal ParallelDone -> string_of_protocol StyTrue
+                  | Terminal ParallelDone -> string_of_protocol StySkip
                   | Terminal RecurseJump -> "recurse")
                   (string_of_residual hc.cont))
                 g.thread_codespan module_name

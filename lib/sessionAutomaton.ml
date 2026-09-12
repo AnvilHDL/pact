@@ -379,7 +379,7 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
     | Lang.StyParallel (s1, s2) -> (first_messages s1) @ (first_messages s2)
     | Lang.StyFuture s -> first_messages s
     | Lang.StyAtom (Lang.AtomDelay _) -> []
-    | Lang.StyTrue -> []
+    | Lang.StySkip -> []
     | Lang.StyRec (_, body) -> first_messages body
     | Lang.StyVar _ -> []
     | _ -> raise (TypeError [Text ("Unsupported session type for fair choice inference "^(string_of_protocol st))])

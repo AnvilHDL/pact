@@ -104,18 +104,19 @@ and atomic_action_with_gap =
   | AtomConjunction of atomic_action list
 
 and session_type =
+  | StyEnd of identifier (** progress marker $ *)
   | StySeq of session_type * session_type (** sequence *)
   | StyChoice of session_type * session_type (** internal choice (+ operator) *)
   | StyXOffer of offering_session_type list (** dual choice (XOR operator) *)
   | StyAtom of atomic_action_with_gap (** single atomic action *)
   | StyParallel of session_type * session_type (** parallel composition of session types *)
   | StyFuture of session_type (** future operator (F) **)
-  | StyTrue (** true session type **)
+  | StySkip (** skip session type **)
   | StyOffer of offering_session_type list (** offer operator (dual of choice) **)
   | StyLet of identifier * session_type * session_type (** let binding for session types **)
   | StyRec of identifier * session_type (** recursive session type **)
-  | StyVar of identifier (** session type variable **)
-  | StyForall of quant_operator*identifier*quant_type*session_type*(quant_member option)
+  | StyVar of identifier (** [metaprogramming] session type variable **)
+  | StyForall of quant_operator*identifier*quant_type*session_type*(quant_member option)  (** [metaprogramming] session type variable **)
 
 
 and quant_operator =
@@ -1103,8 +1104,10 @@ let rec aux p =
   match p with
   | StySeq (p1, p2) ->
       aux p1 ^ ";" ^ aux p2 
-  | StyTrue ->
+  | StySkip ->
       "∅"
+  | StyEnd id ->
+      "$" ^ id
   | StyChoice (p1, p2) ->
       "( " ^ aux p1 ^ "\n+\n" ^ aux p2 ^ " )"
   | StyOffer ps ->
@@ -1168,8 +1171,10 @@ let rec aux p =
   match p with
   | StySeq (p1, p2) ->
       aux p1 ^ ";" ^ aux p2 
-  | StyTrue ->
+  | StySkip ->
       "∅"
+  | StyEnd id ->
+      "$" ^ id
   | StyChoice (p1, p2) ->
       "(" ^ aux p1 ^ "+" ^ aux p2 ^ ")"
   | StyOffer ps ->

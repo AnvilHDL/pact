@@ -207,6 +207,7 @@ type transition = {
   boundary_guard : guard; (* pending boundary part of the guard; `guard` keeps the FULL merged guard for closed game/dead-end analysis *)
   internal_action : action; (* `action` projected onto internal_messages; debug only, epsilon if no internal component *)
   offers : MsgSet.t;
+  offers_pending : MsgSet.t; (* effective offer is this intersected with F *)
   mutable maybe_offers : MsgSet.t;
   mutable in_winning : bool;
   transition_debug_info : string option;
@@ -329,7 +330,8 @@ module TypeAutomaton = struct
 
   let add_transition_full ?(boundary_now = MsgSet.empty)
       ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard)
-      ?internal_action ?(offers = MsgSet.empty) ?transition_debug_info auto
+      ?internal_action ?(offers = MsgSet.empty) ?(offers_pending = MsgSet.empty)
+      ?transition_debug_info auto
       from_state to_state action guard =
     let trans =
       {
@@ -343,6 +345,7 @@ module TypeAutomaton = struct
         internal_action = Option.value internal_action ~default:action;
         maybe_offers = MsgSet.empty;
         offers;
+        offers_pending;
         in_winning = false;
         transition_debug_info;
       }
@@ -350,8 +353,12 @@ module TypeAutomaton = struct
     if not (List.exists (( = ) trans) auto.transitions) then
       auto.transitions <- trans :: auto.transitions
 
-  let add_transition auto from_state to_state action guard offer =
-    add_transition_full auto from_state to_state  action guard ~offers:offer
+  let add_transition ?offers_pending auto from_state to_state action guard offer =
+    add_transition_full ?offers_pending auto from_state to_state action guard ~offers:offer
+
+  let effective_offers env t =
+    if MsgSet.is_empty t.offers_pending then t.offers
+    else MsgSet.union t.offers (MsgSet.inter t.offers_pending env.future)
 
   let accepting_states auto =
     Hashtbl.fold
@@ -454,6 +461,10 @@ let recompute_state_summaries auto =
         let st = Hashtbl.find auto.states t.from_state in
         st.head <- MsgSet.union st.head offered;
         st.maybe_ready <- MsgSet.union st.maybe_ready offered);
+      (* Conditional on the environment, so only a maybe-offer. *)
+      if not (MsgSet.is_empty t.offers_pending) then (
+        let st = Hashtbl.find auto.states t.from_state in
+        st.maybe_ready <- MsgSet.union st.maybe_ready t.offers_pending);
       match t.action with
       | Clock ->
           (* The clock is part of Head. *)
@@ -513,6 +524,7 @@ let import_automaton_into ~dst ~src ~at_start =
         ~boundary_future:t.boundary_future
         ~boundary_guard:t.boundary_guard
         ~offers:t.offers
+        ~offers_pending:t.offers_pending
         ?transition_debug_info:t.transition_debug_info dst
         (Hashtbl.find state_map t.from_state)
         (Hashtbl.find state_map t.to_state)
@@ -770,6 +782,8 @@ let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)
         let offers =
           (if MsgSet.is_empty t.offers then ""
            else "<BR/>O = " ^ html_of_msgset t.offers)
+          ^ (if MsgSet.is_empty t.offers_pending then ""
+             else "<BR/>O? = " ^ html_of_msgset t.offers_pending)
           ^ (if MsgSet.is_empty t.maybe_offers then ""
              else "<BR/>MO = " ^ html_of_msgset t.maybe_offers)
         in

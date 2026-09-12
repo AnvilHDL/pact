@@ -33,7 +33,7 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
         )
 
     | StyFuture s -> highest_level_endpoint s
-    | StyTrue -> []
+    | StySkip -> []
     | StyRec (_, ty) -> highest_level_endpoint ty
     | StyVar _ -> []
     | StyLet (_, s1, s2) -> highest_level_endpoint s1 @ highest_level_endpoint s2
@@ -154,7 +154,8 @@ let rec substitute_quantified_var (var_name : identifier) (value : int) (sty : s
         }
       in
       StyOffer (List.map subst_offering offerings)
-  | StyTrue -> StyTrue
+  | StySkip -> StySkip
+  | StyEnd id -> StyEnd id
   | StyRec (id, s) -> 
       StyRec (id, substitute_quantified_var var_name value s)
   | StyVar id -> 
@@ -229,7 +230,7 @@ let expand_single_quantifier
   let values = generate_quantifier_values qty exclusions in
   
   if values = [] then
-    StyTrue
+    StySkip
   else
     let quantified = is_quantified (Some body) var_name in
     let out_op = match op with
@@ -244,7 +245,7 @@ let expand_single_quantifier
     | QuantSum ->
         let rec unfold_sum lst =
           match lst with
-          | [] -> StyTrue
+          | [] -> StySkip
           | [x] -> x
           | x::xs -> StyChoice (x, unfold_sum xs)
         in
@@ -253,7 +254,7 @@ let expand_single_quantifier
     | QuantProduct ->
         let rec unfold_prod lst =
           match lst with
-          | [] -> StyTrue
+          | [] -> StySkip
           | [x] -> x
           | x::xs -> StyParallel (x, unfold_prod xs)
         in
@@ -352,7 +353,8 @@ let rec expand_quantifiers (sty : session_type) : session_type =
         }
       in
       StyOffer (List.map expand_offering offerings)
-  | StyTrue -> StyTrue
+  | StySkip -> StySkip
+  | StyEnd id -> StyEnd id
   | StyRec (id, s) -> 
       StyRec (id, expand_quantifiers s)
   | StyVar id -> 
@@ -415,7 +417,8 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
           }
         in
         Lang.StyOffer (List.map process_offering offerings)
-    | Lang.StyTrue -> Lang.StyTrue
+    | Lang.StySkip -> Lang.StySkip
+    | Lang.StyEnd id -> Lang.StyEnd id
     | Lang.StyRec (id, s) -> Lang.StyRec (id, preprocess_sty s)
     | Lang.StyVar id -> Lang.StyVar id
     | Lang.StyLet (id, s1, s2) -> Lang.StyLet (id, preprocess_sty s1, preprocess_sty s2)

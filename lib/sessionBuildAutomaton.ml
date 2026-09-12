@@ -57,7 +57,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       | None ->
         (match offering.continuation with
         | Some cont -> cont
-        | None -> StyTrue)
+        | None -> StySkip)
     in
     match s_type with
     | Lang.StyAtom at ->
@@ -137,8 +137,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       TypeAutomaton.reroute_transitions auto left_end choice_state var_map;
       TypeAutomaton.reroute_transitions auto right_end choice_state var_map;
       choice_state
-    | Lang.StyTrue -> 
-      (* StyTrue represents successful termination - just return current state as accepting *)
+    | Lang.StySkip -> 
+      (* StySkip represents successful termination - just return current state as accepting *)
       (Hashtbl.find auto.states current).accepting <- true;
       current
     | Lang.StyXOffer offerings ->

@@ -376,7 +376,7 @@ session_def:
   
 local_session_type:
 | LEFT_PAREN; RIGHT_PAREN
-  { Lang.StyTrue }
+  { Lang.StySkip }
 | SHARP; n = INT
   { Lang.StyAtom (Lang.AtomDelay n) }
 | KEYWORD_LET; id = IDENT; EQUAL; ex = local_session_type; KEYWORD_IN; body = local_session_type
@@ -404,14 +404,14 @@ local_session_type:
 | sum_symbol;LEFT_PAREN; choice_list = separated_list(COMMA, local_session_type); RIGHT_PAREN
   { let rec unfold_sum lst =
     match lst with
-    | [] -> Lang.StyTrue
+    | [] -> Lang.StySkip
     | x::xs -> Lang.StyChoice (x, unfold_sum xs)
   in
   unfold_sum choice_list }
 | prod_sym; LEFT_PAREN; par_list = separated_list(COMMA, local_session_type); RIGHT_PAREN
   { let rec unfold_prod lst =
     match lst with
-    | [] -> Lang.StyTrue
+    | [] -> Lang.StySkip
     | x::xs -> Lang.StyParallel (x, unfold_prod xs)
   in
   unfold_prod par_list }
