@@ -76,16 +76,35 @@ let is_blocking_atomic_action = function
   | Lang.AtomBMsg _ -> true
   | Lang.AtomNBMsg _ -> false
 
+(* [AtomBMsg] describes a blocking action, [AtomNBMsg] an instantaneous one. *)
+let atomic_action_matches_kind (kind : Lang.handshake_kind) = function
+  | Lang.AtomBMsg _ -> kind = Lang.Blocking
+  | Lang.AtomNBMsg _ -> kind = Lang.Instant
+
+let string_of_handshake_kind = function
+  | Lang.Blocking -> "blocking"
+  | Lang.Instant -> "instantaneous"
+
 let trigger_msg_group = function
   | Lang.AtomicAct act -> Some [msg_spec_of_atomic_action act]
   | Lang.AtomConjunction acts -> Some (List.map msg_spec_of_atomic_action acts)
   | Lang.AtomDelay _ -> Some [wildcard_msg_spec]
   | Lang.AtomTerminal _ -> None
 
-let trigger_matches_msg trigger msg =
-  match trigger_msg_group trigger with
-  | Some msgs -> List.exists (msg_spec_equal msg) msgs
-  | None -> false
+(* When [kind] is given, the trigger's blocking-ness must agree with it. *)
+let trigger_matches_msg ?kind trigger msg =
+  let kind_ok =
+    match kind, trigger with
+    | None, _ -> true
+    | Some k, Lang.AtomicAct act -> atomic_action_matches_kind k act
+    | Some k, Lang.AtomConjunction acts ->
+      List.for_all (atomic_action_matches_kind k) acts
+    | Some _, _ -> true
+  in
+  kind_ok &&
+  (match trigger_msg_group trigger with
+   | Some msgs -> List.exists (msg_spec_equal msg) msgs
+   | None -> false)
 
 let trigger_matches_msg_group trigger msg_group =
   match trigger_msg_group trigger with
@@ -139,15 +158,19 @@ let rec build_choice_from_xofferings offerings =
   | first :: rest ->
       StyChoice (offering_body_session first, build_choice_from_xofferings rest)
 
-let offering_session_after_msg (offering : offering_session_type) msg =
+let offering_session_after_msg ?kind (offering : offering_session_type) msg =
+  let act_matches act =
+    msg_spec_equal (msg_spec_of_atomic_action act) msg
+    && (match kind with
+        | None -> true
+        | Some k -> atomic_action_matches_kind k act)
+  in
   match offering.trigger with
-  | Lang.AtomicAct act when msg_spec_equal (msg_spec_of_atomic_action act) msg ->
+  | Lang.AtomicAct act when act_matches act ->
       Some offering.continuation
   | Lang.AtomConjunction actions ->
       let matching, remaining =
-        List.partition
-          (fun act -> msg_spec_equal (msg_spec_of_atomic_action act) msg)
-          actions
+        List.partition act_matches actions
       in
       if matching = [] then
         None
@@ -161,14 +184,25 @@ let offering_session_after_msg (offering : offering_session_type) msg =
   | _ -> None
 
 (* Match offerings with messages *)
-let match_offerings_with_msgs
+(* [kind] is the handshake of the offer/xoffer in the event graph; when given,
+   each matching offering's blocking-ness must agree with it. *)
+let match_offerings_with_msgs ?kind
     (offerings : offering_session_type list)
     (msg_groups : Lang.message_specifier list list) : bool =
+    let kind_ok trigger =
+      match kind, trigger with
+      | None, _ -> true
+      | Some k, Lang.AtomicAct act -> atomic_action_matches_kind k act
+      | Some k, Lang.AtomConjunction acts ->
+        List.for_all (atomic_action_matches_kind k) acts
+      | Some _, _ -> true
+    in
     List.for_all (fun msg_group ->
       List.exists (fun offering ->
-        match trigger_msg_group offering.trigger with
-        | Some offering_group -> same_msg_spec_set offering_group msg_group
-        | None -> false
+        kind_ok offering.trigger &&
+        (match trigger_msg_group offering.trigger with
+         | Some offering_group -> same_msg_spec_set offering_group msg_group
+         | None -> false)
       ) offerings
     ) msg_groups
 
@@ -306,16 +340,16 @@ let offerings_of_head = function
   | Offers offerings | XOffers offerings -> Some offerings
   | _ -> None
 
-let choice_residual_for_head msg_list hc =
+let choice_residual_for_head ?kind msg_list hc =
   match hc.head with
-  | Offers offerings when match_offerings_with_msgs offerings msg_list ->
+  | Offers offerings when match_offerings_with_msgs ?kind offerings msg_list ->
       Some (residual_of_head_cont hc)
-  | XOffers offerings when match_offerings_with_msgs offerings msg_list ->
+  | XOffers offerings when match_offerings_with_msgs ?kind offerings msg_list ->
       Some (seq_of_sty_opt (Some (build_choice_from_xofferings offerings)) hc.cont)
   | _ -> None
 
-let head_matches_offer_choice msg_list hc =
-  match choice_residual_for_head msg_list hc with
+let head_matches_offer_choice ?kind msg_list hc =
+  match choice_residual_for_head ?kind msg_list hc with
   | Some _ -> true
   | None -> false
 
@@ -764,15 +798,20 @@ let check_generalized_session
                       (string_of_residual residual))
                     g.thread_codespan module_name
           in
-          let head_matches_msg msg = function
-            | Atom (AtomicAct (AtomBMsg m))
-            | Atom (AtomicAct (AtomNBMsg m)) -> msg_spec_equal m msg
+          (* [kind] is the handshake used at the event graph site; when given, the
+             session type's blocking-ness must agree with it. *)
+          let head_matches_msg ?kind msg = function
+            | Atom (AtomicAct act) ->
+              msg_spec_equal (msg_spec_of_atomic_action act) msg
+              && (match kind with
+                  | None -> true
+                  | Some k -> atomic_action_matches_kind k act)
             | _ -> false
           in
-          let assign_msg_from_heads child_ev msg err_label =
+          let assign_msg_from_heads ?kind child_ev msg err_label =
             let matched = ref false in
             List.iter (fun hc ->
-              if head_matches_msg msg hc.head then begin
+              if head_matches_msg ?kind msg hc.head then begin
                 matched := true;
                 hc.visited <- true;
                 assign_child_residual ~allow_choice:true child_ev hc.recvar_map hc.cont
@@ -780,7 +819,7 @@ let check_generalized_session
                 match offerings_of_head hc.head with
                 | Some offerings ->
                     List.iter (fun offering ->
-                      match offering_session_after_msg offering msg with
+                      match offering_session_after_msg ?kind offering msg with
                       | Some offering_residual ->
                           matched := true;
                           hc.visited <- true;
@@ -796,7 +835,10 @@ let check_generalized_session
             ) head_conts;
             if not !matched then
               error_handler g
-                (Printf.sprintf "Expected %s message (%s) at event %d | However found %s"
+                (Printf.sprintf "Expected %s%s message (%s) at event %d | However found %s"
+                  (match kind with
+                   | None -> ""
+                   | Some k -> string_of_handshake_kind k ^ " ")
                   err_label
                   (string_of_msg_spec msg)
                   child_ev.id
@@ -823,9 +865,9 @@ let check_generalized_session
                 | Some residual' -> residual_after_msgs recvars residual' rest
                 | None -> None)
           in
-          let assign_immediate_msg branches child_ev msg =
+          let assign_immediate_msg ?kind branches child_ev msg =
             let offering_matches_immediate_msg offering =
-              trigger_matches_msg offering.trigger msg
+              trigger_matches_msg ?kind offering.trigger msg
             in
             let found_hc_opt =
               List.find_opt (fun hc ->
@@ -864,8 +906,8 @@ let check_generalized_session
                             assign_child_residual other_ev hc.recvar_map other_residual
                         | _ -> ())
                     | [] -> ())
-                | [] -> assign_msg_from_heads child_ev msg "Immediate")
-            | None -> assign_msg_from_heads child_ev msg "Immediate"
+                | [] -> assign_msg_from_heads ?kind child_ev msg "Immediate")
+            | None -> assign_msg_from_heads ?kind child_ev msg "Immediate"
           in
           let assign_select_arm child_ev msg_group =
             let matched = ref false in
@@ -896,10 +938,10 @@ let check_generalized_session
           List.iter (fun child_ev ->
             let rec assign_session_type src =
               match src with
-              | `Seq (_, `Choice (msg_list, _)) ->
+              | `Seq (_, `Choice (msg_list, kind)) ->
                   let matched = ref false in
                   List.iter (fun hc ->
-                    match choice_residual_for_head msg_list hc with
+                    match choice_residual_for_head ~kind msg_list hc with
                     | Some residual ->
                       matched := true;
                       hc.visited <- true;
@@ -912,11 +954,11 @@ let check_generalized_session
                         child_ev.id (string_of_residual current_residual))
                       g.thread_codespan module_name
 
-              | `Seq (_, `Send (msg, _)) ->
-                  assign_msg_from_heads child_ev msg "Send"
+              | `Seq (_, `Send (msg, kind)) ->
+                  assign_msg_from_heads ~kind child_ev msg "Send"
 
-              | `Seq (_, `Recv (msg, _)) ->
-                  assign_msg_from_heads child_ev msg "Recv"
+              | `Seq (_, `Recv (msg, kind)) ->
+                  assign_msg_from_heads ~kind child_ev msg "Recv"
 
               | `Seq (_, `Cycles n) ->
                   (match delay_continuation_after_terminal_closure
@@ -947,9 +989,9 @@ let check_generalized_session
                   if has_immediate_actions <> [] then
                     List.iter (fun ia ->
                       match ia.d with
-                      | ImmediateRecv (msg, _)
-                      | ImmediateSend (msg, _, _) ->
-                          assign_immediate_msg branches child_ev msg
+                      | ImmediateRecv (msg, kind)
+                      | ImmediateSend (msg, _, kind) ->
+                          assign_immediate_msg ~kind branches child_ev msg
                       | _ -> ()
                     ) has_immediate_actions
                   else if has_immediate_sibling then
