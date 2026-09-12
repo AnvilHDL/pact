@@ -107,8 +107,11 @@ Below is a categorized list of the available examples, along with brief descript
 | [test_chan_multi_dimmension](test_chan_array_multidim.anvil)| Multi-dimensional channel arrays with concrete size instantiation |
 | [test_chan_array_parametric](test_chan_array_parametric.anvil)| Multi-dimensional channel arrays with parametric size instantiation |
 | [test_chan_generate](test_chan_generate.anvil) | Indexed endpoint access in `generate` blocks        |
+| [instantaneous_msg](instantaneous_msg.anvil) | `isend` / `irecv` one-way handshake |
+| [instantaneous_mixed](instantaneous_mixed.anvil) | One message used with both `isend` and `send` |
+| [instantaneous_handshake](instantaneous_handshake.anvil) | Pinning the handshake with `>>` / `<<` |
 
-> **Total:** 13 examples
+> **Total:** 16 examples
 
 ---
 

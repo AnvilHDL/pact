@@ -1,0 +1,12 @@
+// irecv asserts ready, which a valid/ack message does not have.
+chan ch {
+    left req : (logic[2]@#1) >>
+}
+proc receiver(e : left ch) {
+    loop { let v = irecv e.req >> dprint "got %d" (v); cycle 1 }
+}
+proc top() {
+    chan a_le -- a_ri : ch;
+    spawn receiver(a_le);
+    loop { send a_ri.req(2'd1) >> cycle 1 }
+}

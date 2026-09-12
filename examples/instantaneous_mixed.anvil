@@ -1,0 +1,25 @@
+// One message sent both instantaneously and blockingly: the isend value (1)
+// and the send value (2) alternate on the same wire.
+chan ch {
+    left req : (logic[2]@#1)
+}
+
+proc receiver(e : left ch) {
+    reg cyc : logic[8];
+    loop {
+        let v = recv e.req >>
+        dprint "[Cycle %d] recv got %d" (*cyc, v);
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc instantaneous_mixed() {
+    chan e_le -- e_ri : ch;
+    spawn receiver(e_le);
+    loop {
+        isend e_ri.req(2'd1) >>
+        cycle 1 >>
+        send e_ri.req(2'd2) >>
+        cycle 1
+    }
+}

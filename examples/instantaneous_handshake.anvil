@@ -1,0 +1,38 @@
+// An explicit >> or << pins the handshake for every use site.
+chan ch_ready {
+    left req : (logic[2]@#1) <<
+}
+
+chan ch_ack {
+    left resp : (logic[2]@#1) >>
+}
+
+proc r_ready(e : left ch_ready) {
+    reg cyc : logic[8];
+    loop { let v = recv e.req >> dprint "[Cycle %d] ready got %d" (*cyc,v); cycle 1 }
+    loop {set cyc := *cyc + 8'd1}
+}
+
+proc r_ack(e : left ch_ack) {
+    reg cyc : logic[8];
+    loop {set cyc := *cyc + 8'd1}
+    loop { let v = recv e.resp >> dprint "[Cycle %d] ack got %d" (*cyc,v); cycle 1 }
+}
+
+proc instantaneous_handshake() {
+    chan a_le -- a_ri : ch_ready;
+    chan b_le -- b_ri : ch_ack;
+    spawn r_ready(a_le);
+    spawn r_ack(b_le);
+    loop {
+        send a_ri.req(2'd1) >>
+        cycle 10 >>
+        send b_ri.resp(2'd2) >>
+        cycle 1
+    }
+    loop{
+        cycle 40 >>
+        dfinish
+
+    }
+}

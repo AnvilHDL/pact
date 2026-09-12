@@ -1,0 +1,23 @@
+// isend and irecv: neither waits for its peer, so a transfer happens
+// every cycle.
+chan ch {
+    left req : (logic[2]@#1)
+}
+
+proc ireceiver(e : left ch) {
+    reg cyc : logic[8];
+    loop {
+        let v = irecv e.req >>
+        dprint "[Cycle %d] irecv got %d" (*cyc, v);
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc instantaneous_msg() {
+    chan e_le -- e_ri : ch;
+    spawn ireceiver(e_le);
+    loop {
+        isend e_ri.req(2'd1) >>
+        cycle 1
+    }
+}

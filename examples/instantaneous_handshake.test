@@ -1,0 +1,8 @@
+[Cycle   0] ready got 1
+[Cycle  10] ack got 2
+[Cycle  11] ready got 1
+[Cycle  21] ack got 2
+[Cycle  22] ready got 1
+[Cycle  32] ack got 2
+[Cycle  33] ready got 1
+- instantaneous_handshake.anvil.sv:318: Verilog $finish
