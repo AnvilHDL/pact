@@ -1,0 +1,18 @@
+// Single-branch xoffer with a blocking branch: no else branch is permitted and
+// the construct waits until the peer sends.
+chan ch { left req : (logic[2]@#1) }
+
+proc recvr(ep : left ch){
+    reg cyc : logic[8];
+    loop{
+       xoffer{ x = recv ep.req => ( dprint "[Cycle %d] GOT %d" (*cyc, x) ) } >>
+       cycle 1
+    }
+    loop{ set cyc := *cyc + 8'd1 }
+}
+
+proc xoffer_single_blocking(){
+    chan a -- b : ch;
+    spawn recvr(a);
+    loop{ send b.req(2'd1) >> cycle 3 }
+}

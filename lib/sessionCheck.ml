@@ -322,7 +322,7 @@ let head_matches_offer_choice msg_list hc =
 let choice_msg_lists_of_children child_events =
   List.filter_map (fun child_ev ->
     match child_ev.source with
-    | `Seq (_, `Choice msg_list) -> Some msg_list
+    | `Seq (_, `Choice (msg_list, _)) -> Some msg_list
     | _ -> None
   ) child_events
 
@@ -896,7 +896,7 @@ let check_generalized_session
           List.iter (fun child_ev ->
             let rec assign_session_type src =
               match src with
-              | `Seq (_, `Choice msg_list) ->
+              | `Seq (_, `Choice (msg_list, _)) ->
                   let matched = ref false in
                   List.iter (fun hc ->
                     match choice_residual_for_head msg_list hc with

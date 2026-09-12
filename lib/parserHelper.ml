@@ -63,3 +63,15 @@ let hex_literal_of_string (s : string) : literal =
   String.fold_left (fun hm c -> let d = hexit_of_char c in d::hm) [] in
   let len = String.split_on_char '\'' s |> List.hd |> int_of_string in
   Hexadecimal (len, base)
+
+(* Appends an [else] block to an offer/xoffer as a wildcard arm. *)
+let add_offer_else (arms : (offer_arm_type * expr_node) list)
+                   (else_body : expr_node option) =
+  match else_body with
+  | None -> arms
+  | Some body -> arms @ [(OfferAtom OfferWildcard, body)]
+
+let warn_deprecated_wildcard_arm (span : code_span) =
+  SpanPrinter.warn
+    "The '#' wildcard arm is deprecated; use an 'else { ... }' block instead."
+    span ""

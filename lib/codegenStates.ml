@@ -43,7 +43,7 @@ let describe_atomic_delay = function
   | `Recv (msg, kind) ->
     Printf.sprintf "%s %s" (match kind with Lang.Instant -> "irecv" | Lang.Blocking -> "recv")
       (Lang.string_of_msg_spec msg)
-  | `Choice msg_groups ->
+  | `Choice (msg_groups, _) ->
     Printf.sprintf "choice among %s"
       (msg_groups |> List.map format_msg_group |> String.concat " | ")
   | `Sync shared_ident -> Printf.sprintf "sync on %s" shared_ident
@@ -52,7 +52,7 @@ let describe_branch_side (br_side_info : EventGraph.branch_side_info) =
   match br_side_info.owner_branch.branch_cond with
   | EventGraph.TrueFalse ->
     if br_side_info.branch_side_sel = 0 then "true branch" else "false branch"
-  | EventGraph.MatchCases _ ->
+  | EventGraph.MatchCases _ | EventGraph.MatchCasesNoDefault _ ->
     Printf.sprintf "match case %d" br_side_info.branch_side_sel
 
 let describe_event_source (source : EventGraph.event_source) =
@@ -110,8 +110,9 @@ let collect_reg_states g =
       | `Send _ | `Recv _| `Sync _ ->
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
-      |  `Choice msg_list ->
-        if is_wildcard_present msg_list then
+      |  `Choice (msg_list, kind) ->
+        (* An instantaneous choice never waits, so it needs no syncstate. *)
+        if kind = Lang.Instant || is_wildcard_present msg_list then
           []
         else
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
@@ -301,11 +302,11 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
               | None ->
                   Printf.sprintf "assign %s = %s || %s_q %s ;" cn cn' sn trigger |> print_line;
                   Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line)
-            | `Choice msg_groups ->
+            | `Choice (msg_groups, choice_kind) ->
               let msg_list = flatten_choice_msg_groups msg_groups in
               let is_wildcard_present = is_wildcard_present msg_groups in
               (*For this we want to wait till or of the valid/ready port becomes 1 *)
-              let sn_opt = if is_wildcard_present then
+              let sn_opt = if is_wildcard_present || choice_kind = Lang.Instant then
                 None
               else
                 Some (EventStateFormatter.format_syncstate g.thread_id e.id) in
@@ -334,7 +335,10 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                     else None
               ) msg_list in
 
-              if handshake_signals <> [] && not is_wildcard_present then (
+              (* An instantaneous choice completes in the cycle it is reached:
+                 it never latches a syncstate to wait for a peer. *)
+              if handshake_signals <> [] && not is_wildcard_present
+                 && choice_kind <> Lang.Instant then (
                 (* No wildcard: wait for one of the signals *)
               if Option.is_none sn_opt then raise (Failure "Internal error: syncstate expected in Choice without wildcard");
                 let sn = Option.get sn_opt in
@@ -425,7 +429,13 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                       Printf.sprintf "assign %s = (%s && !%s) %s;" cn cn' wn trigger
                 )
               )
-            | MatchCases pats ->
+            | MatchCases _ | MatchCasesNoDefault _ ->
+              let (pats, has_default) =
+                match br_side_info.owner_branch.branch_cond with
+                | MatchCases p -> (p, true)
+                | MatchCasesNoDefault p -> (p, false)
+                | TrueFalse -> ([], true)
+              in
               let fst_valid_idx = List.find_index (fun (e : EventGraph.event) -> not e.removed) br_side_info.owner_branch.branches_to |> Option.get in
               if br_side_info.branch_side_sel = fst_valid_idx then (
                 CodegenPrinter.print_line ~lvl_delta_post:1 printer
@@ -448,7 +458,8 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                 (* cases: *)
                 let branches_to_no_default =
                   List.to_seq br_side_info.owner_branch.branches_to
-                  |> Seq.take (br_side_info.owner_branch.branch_count - 1)
+                  |> Seq.take (if has_default then br_side_info.owner_branch.branch_count - 1
+                               else br_side_info.owner_branch.branch_count)
                 in
                 Seq.iter2 (fun (td_pat : EventGraph.lowering_data) (br_to : EventGraph.event) ->
                   let wp = Option.get td_pat.w in
@@ -462,14 +473,19 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                 ) (List.to_seq pats) branches_to_no_default;
 
                 (* default case *)
-                let default_case = List.nth br_side_info.owner_branch.branches_to (br_side_info.owner_branch.branch_count - 1) in
                 CodegenPrinter.print_line ~lvl_delta_post:1 printer "default:";
-                if default_case.removed then
-                  CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
-                    @@ Printf.sprintf ";"
-                else
-                  CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
-                    @@ Printf.sprintf "%s = 1'b1;" @@ EventStateFormatter.format_current g.thread_id default_case.id;
+                if not has_default then
+                  (* No else arm: nothing is enabled when no case matches. *)
+                  CodegenPrinter.print_line ~lvl_delta_post:(-1) printer ";"
+                else (
+                  let default_case = List.nth br_side_info.owner_branch.branches_to (br_side_info.owner_branch.branch_count - 1) in
+                  if default_case.removed then
+                    CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
+                      @@ Printf.sprintf ";"
+                  else
+                    CodegenPrinter.print_line ~lvl_delta_post:(-1) printer
+                      @@ Printf.sprintf "%s = 1'b1;" @@ EventStateFormatter.format_current g.thread_id default_case.id
+                );
 
                 CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "endcase";
 
@@ -888,9 +904,10 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
 
     (* Handle Choice events: assert signals while waiting for handshake *)
     match e.source with
-    | `Seq (choice_parent, `Choice msg_groups) ->
+    | `Seq (choice_parent, `Choice (msg_groups, choice_kind)) ->
       let msg_list = flatten_choice_msg_groups msg_groups in
-      let is_wildcard = is_wildcard_present msg_groups in
+      (* An instantaneous choice has no syncstate to sustain the assertion. *)
+      let is_wildcard = is_wildcard_present msg_groups || choice_kind = Lang.Instant in
       let parent_current = EventStateFormatter.format_current g.thread_id choice_parent.id in
       let activated =
         if not is_wildcard then

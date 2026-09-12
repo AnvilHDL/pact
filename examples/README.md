@@ -110,8 +110,10 @@ Below is a categorized list of the available examples, along with brief descript
 | [instantaneous_msg](instantaneous_msg.anvil) | `isend` / `irecv` one-way handshake |
 | [instantaneous_mixed](instantaneous_mixed.anvil) | One message used with both `isend` and `send` |
 | [instantaneous_handshake](instantaneous_handshake.anvil) | Pinning the handshake with `>>` / `<<` |
+| [xoffer_single_instant](xoffer_single_instant.anvil) | Single-branch `xoffer` with `else`; never blocks |
+| [xoffer_single_blocking](xoffer_single_blocking.anvil) | Single-branch blocking `xoffer`; waits for the peer |
 
-> **Total:** 16 examples
+> **Total:** 18 examples
 
 ---
 
@@ -173,4 +175,4 @@ Keeping this README up to date helps maintain clarity and usability for future u
 
 ---
 
-> **Current Example Count:** 53
+> **Current Example Count:** 59

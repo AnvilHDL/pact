@@ -1,0 +1,19 @@
+// Single-branch xoffer with an instantaneous branch: fires every cycle, taking
+// the else branch when the peer has not asserted valid.
+chan ch { left req : (logic[2]@#1) }
+
+proc recvr(ep : left ch){
+    reg cyc : logic[8];
+    loop{
+       xoffer{ x = irecv ep.req => ( dprint "[Cycle %d] HIT %d" (*cyc, x) ) }
+       else { dprint "[Cycle %d] MISS" (*cyc) } >>
+       cycle 1
+    }
+    loop{ set cyc := *cyc + 8'd1 }
+}
+
+proc xoffer_single_instant(){
+    chan a -- b : ch;
+    spawn recvr(a);
+    loop{ isend b.req(2'd1) >> cycle 3 }
+}

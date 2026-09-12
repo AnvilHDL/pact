@@ -30,9 +30,4 @@ proc instantaneous_handshake() {
         send b_ri.resp(2'd2) >>
         cycle 1
     }
-    loop{
-        cycle 40 >>
-        dfinish
-
-    }
 }

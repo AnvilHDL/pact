@@ -4,6 +4,14 @@
 
 open Lang
 
+(* Use sites whose protocol demand is waived: a single-branch xoffer (and the
+   try constructs) asserts its own signal unconditionally, so it works under
+   either protocol. Registered by the graph builder as it lowers them. *)
+let protocol_agnostic_spans : (Lang.code_span, unit) Hashtbl.t = Hashtbl.create 16
+
+let mark_protocol_agnostic (span : Lang.code_span) =
+  Hashtbl.replace protocol_agnostic_spans span ()
+
 (* (canonical endpoint name, message name) within one process. *)
 module Key = struct
   type t = identifier * identifier
@@ -24,6 +32,8 @@ type use = {
     [valid] unconditionally, which each fit only one protocol. Blocking ops fit
     either, so they require nothing. *)
 let demanded_mode (u : use) : handshake_modes option =
+  if Hashtbl.mem protocol_agnostic_spans u.use_span then None
+  else
   match u.use_kind, u.use_is_recv with
   | Instant, true -> Some ValidReady
   | Instant, false -> Some ValidAck

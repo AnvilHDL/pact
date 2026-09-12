@@ -575,7 +575,7 @@ let events_max_dist events lookup_message ev =
         | Static _ | Dependent _ -> 0
         | _ -> event_distance_max
       )
-    | `Choice msg_groups ->
+    | `Choice (msg_groups, _) ->
       List.fold_left (fun mx m ->
         let wild_card = {msg="*"; endpoint = "*"  } in
         if m = wild_card then
@@ -630,11 +630,14 @@ let events_max_dist events lookup_message ev =
       | `Seq (e', d') ->
         update_min2_outs (-(pred_min_dist.(e.id) + (get_min_delay d'))) e e'
       | `Root (Some (e', br_side)) ->
-        let other_side =
+        let other_side_idx =
           if br_side.branch_side_sel = 0 then 1 else 0
         in
-        let other_side = List.nth br_side.owner_branch.branches_to other_side in
-        if not (is_pred other_side) || br_side.branch_side_sel = 0 then (
+        (* A branch may have a single side (e.g. a one-armed xoffer with no
+           else), in which case there is no other side to consult. *)
+        let other_side = List.nth_opt br_side.owner_branch.branches_to other_side_idx in
+        if (match other_side with Some o -> not (is_pred o) | None -> true)
+           || br_side.branch_side_sel = 0 then (
           let m =
             List.fold_left (fun v e ->
               if is_pred e then

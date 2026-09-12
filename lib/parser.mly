@@ -851,12 +851,15 @@ expr:
   { Lang.Debug Lang.DebugFinish }
 | LEFT_BRACKET; li = separated_list(COMMA, node(expr)); RIGHT_BRACKET
   { Lang.List li }
-| KEYWORD_XOFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
-  { Lang.XOffer (offer_arms, None) }
-| KEYWORD_XOFFER; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
-  { Lang.XOffer (offer_arms, Some selector) }
-| KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE
-  { Lang.Offer offer_arms }
+| KEYWORD_XOFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  else_v = offer_else_branch?
+  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, None) }
+| KEYWORD_XOFFER; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  else_v = offer_else_branch?
+  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some selector) }
+| KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  else_v = offer_else_branch?
+  { Lang.Offer (ParserHelper.add_offer_else offer_arms else_v) }
 expr_in_parenthese:
   LEFT_PAREN; e = expr; RIGHT_PAREN
   { e }
@@ -995,13 +998,20 @@ match_arm:
   { (pattern, Some body_opt) }
 ;
 
+// The else branch of an offer/xoffer; desugars to a wildcard arm.
+offer_else_branch:
+| KEYWORD_ELSE; LEFT_BRACE; body = node(expr); RIGHT_BRACE
+  { body }
+;
+
 offer_arm:
 | arm = offer_arm_atom; EQ_GT; body = node(expr)
   { (Lang.OfferAtom arm, body) }
 | LEFT_BRACE; arms = separated_nonempty_list(SEMICOLON, offer_arm_atom); RIGHT_BRACE; EQ_GT; body = node(expr)
   { (Lang.OfferConjunction arms, body) }
 | SHARP; EQ_GT; body = node(expr)
-  { (Lang.OfferAtom Lang.OfferWildcard, body) }
+  { ParserHelper.warn_deprecated_wildcard_arm {Lang.st = $startpos; Lang.ed = $endpos};
+    (Lang.OfferAtom Lang.OfferWildcard, body) }
 ;
 offer_arm_atom:
 | KEYWORD_SEND; send_pack = send_pack

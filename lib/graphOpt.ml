@@ -524,6 +524,8 @@ module CombSimplPass = struct
         | TrueFalse -> TrueFalse
         | MatchCases cases ->
           MatchCases (List.map replace_lowering_data cases)
+        | MatchCasesNoDefault cases ->
+          MatchCasesNoDefault (List.map replace_lowering_data cases)
       in
 
       let merge_event old_id ev =

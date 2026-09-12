@@ -32,7 +32,8 @@ type atomic_delay = [
     (** sending of a message; [Instant] sends complete in the same cycle *)
   | `Recv of Lang.message_specifier * Lang.handshake_kind
     (** receiving of a message; [Instant] receives complete in the same cycle *)
-  | `Choice of Lang.message_specifier list list (** making a choice among message groups *)
+  | `Choice of Lang.message_specifier list list * Lang.handshake_kind
+    (** making a choice among message groups; an [Instant] choice does not wait *)
   | `Sync of Lang.identifier (** synchronising on a local shared value *)
 ]
 
@@ -139,6 +140,8 @@ and event = {
 and branch_cond =
   | TrueFalse
   | MatchCases of lowering_data list
+  | MatchCasesNoDefault of lowering_data list
+    (** like {!MatchCases} but no branch is enabled when nothing matches *)
 
 (** Describes branching information. *)
 and branch_info = {

@@ -24,6 +24,43 @@ List.iter (fun ((msg_spec : message_specifier), message_def) ->
       Except.codespan_local span])
   ) msg_list
 
+(* The handshake kind of each non-wildcard atom in an offer arm. *)
+let offer_arm_kinds (arm : offer_arm_type) : handshake_kind list =
+  let of_atom = function
+    | OfferSend sp -> [sp.send_handshake]
+    | OfferRecv (_, rp) -> [rp.recv_handshake]
+    | OfferWildcard -> []
+  in
+  match arm with
+  | OfferAtom atom -> of_atom atom
+  | OfferConjunction atoms -> List.concat_map of_atom atoms
+
+(* The handshake kind of a construct: [Instant] if any branch is instantaneous
+   (mixing is rejected separately), else [Blocking]. *)
+let offer_construct_kind (arms : (offer_arm_type * 'a) list) : handshake_kind =
+  if List.exists (fun (arm, _) -> List.mem Instant (offer_arm_kinds arm)) arms
+  then Instant else Blocking
+
+(* Blocking and instantaneous branches may not be mixed, and a blocking
+   construct may not have an else branch. *)
+let check_offer_arm_kinds (construct : string)
+    (arms : (offer_arm_type * 'a) list) (has_else : bool) (span : code_span) =
+  let kinds = List.concat_map (fun (arm, _) -> offer_arm_kinds arm) arms in
+  let has_blocking = List.mem Blocking kinds
+  and has_instant = List.mem Instant kinds in
+  if has_blocking && has_instant then
+    raise (Except.TypeError [
+      Text (Printf.sprintf
+        "In %s: blocking (send/recv) and instantaneous (isend/irecv) branches cannot be mixed"
+        construct);
+      Except.codespan_local span]);
+  if has_blocking && has_else then
+    raise (Except.TypeError [
+      Text (Printf.sprintf
+        "In %s: a blocking (send/recv) construct cannot have an else branch"
+        construct);
+      Except.codespan_local span])
+
 
 
 let binop_td_const graph (ci:cunit_info) _ctx span op n td =
@@ -487,6 +524,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       | _ -> raise (event_graph_error_default "Invalid if expression!" e.span)
     )
   | TrySend (send_pack, e1, e2) ->
+    (* try behaves as a single-branch xoffer: it asserts its own signal
+       unconditionally, so either declared protocol works. *)
+    HandshakeResolve.mark_protocol_agnostic e.span;
     (* data to send *)
     let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
       |> unwrap_or_err "Invalid message specifier in try send" e.span in
@@ -552,6 +592,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       | _ -> raise (event_graph_error_default "Invalid try send expression!" e.span)
     )
   | TryRecv (ident, recv_pack, e1, e2) ->
+    (* try behaves as a single-branch xoffer: it asserts its own signal
+       unconditionally, so either declared protocol works. *)
+    HandshakeResolve.mark_protocol_agnostic e.span;
     let wires, w_cond = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs recv_pack.recv_msg_spec graph.wires in
     let td_cond = {
       w = Some w_cond;
@@ -823,10 +866,12 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     ntd
 | Offer offer_arms ->
+    check_offer_arm_kinds "offer" offer_arms
+      (List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms) e.span;
     let offer_msg_groups =
       List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
     in
-    let cond_td = Typing.offer_condition graph ctx offer_msg_groups in
+    let cond_td = Typing.offer_condition graph ctx offer_msg_groups (offer_construct_kind offer_arms) in
     let ctx_after_choice = BuildContext.wait graph ctx cond_td.ld.lt.live in
     let only_wildcard_offer =
       match offer_arms with
@@ -888,6 +933,12 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     )
     
   | XOffer (offer_arms, state_selector) ->
+    check_offer_arm_kinds "xoffer" offer_arms
+      (List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms) e.span;
+    (* A single-branch xoffer asserts its own signal unconditionally, so it
+       works under either declared protocol. *)
+    if List.length (List.filter (fun (arm, _) -> not (is_wildcard_arm arm)) offer_arms) = 1 then
+      HandshakeResolve.mark_protocol_agnostic e.span;
     let offer_msg_groups =
       List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
     in
@@ -905,13 +956,21 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     in
     do_sanity_check_offer (List.flatten non_wildcard_msg_defs) e.span;
 
-    let cond_td = Typing.offer_condition graph ctx offer_msg_groups in
+    let cond_td = Typing.offer_condition graph ctx offer_msg_groups (offer_construct_kind offer_arms) in
     let ctx = BuildContext.wait graph ctx cond_td.ld.lt.live in
     
     (*==================== At this point one of the messages must have been received ==========================================================*)
     (* Now we match 1'd1 with respective valid ready port of branch conditions *)
     let length_offering = List.length offer_arms in
-    let bit_len = (Utils.int_log2 length_offering) in
+    (* A single-branch xoffer still needs a one-bit selector; a zero-width wire
+       is not valid Verilog. Without an else arm the selector also needs a spare
+       encoding meaning "no arm matched", so widen it enough to hold one. *)
+    let needs_none_code =
+      not (List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms)
+      && offer_construct_kind offer_arms = Instant
+    in
+    let bit_len =
+      max 1 (Utils.int_log2 (if needs_none_code then length_offering + 1 else length_offering)) in
 
     let find_wire_ctx ct id =
       let binding = Typing.context_lookup ct id in
@@ -977,10 +1036,14 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       ) [] selector_indexes in
 
       let cond_value_pairs = List.combine sw_cond_wires selector_indexes in
-      (* take the last value out *)
-      let cond_value_pairs_filtered = List.filteri (fun i _ -> i < (max_len - 1)) cond_value_pairs in
+      (* With an else arm the last arm is the unconditional fallback. Without
+         one, every arm is guarded and the fallback is an index no arm uses, so
+         no branch is enabled when nothing matched. *)
+      let keep_n = if needs_none_code then length_offering else max_len - 1 in
+      let cond_value_pairs_filtered = List.filteri (fun i _ -> i < keep_n) cond_value_pairs in
+      let fallback_idx = if needs_none_code then length_offering else max_len - 1 in
 
-      let (wires, cond_w) = WireCollection.add_switch graph.thread_id ci.typedefs cond_value_pairs_filtered (List.nth selector_indexes (max_len - 1)) graph.wires in
+      let (wires, cond_w) = WireCollection.add_switch graph.thread_id ci.typedefs cond_value_pairs_filtered (List.nth selector_indexes fallback_idx) graph.wires in
       graph.wires <- wires;
 
     
@@ -996,7 +1059,13 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let branch_count = List.length offer_arms in
     let branch_info = {
       branch_cond_v = {w = Some cond_w; lt = EventGraphOps.lifetime_const ctx.current; reg_borrows = []; dtype = unit_dtype};
-      branch_cond = MatchCases (List.map (fun td -> td.ld) required_branch_conditions);
+      (* Without an else arm an instantaneous xoffer enables no branch when no
+         handshake succeeds, rather than falling through to the last one. *)
+      branch_cond =
+        (let cases = List.map (fun td -> td.ld) required_branch_conditions in
+         if is_wildcard_present || offer_construct_kind offer_arms <> Instant then
+           MatchCases cases
+         else MatchCasesNoDefault cases);
       branch_count = branch_count;
       branches_to = [];
       branches_val = [];
