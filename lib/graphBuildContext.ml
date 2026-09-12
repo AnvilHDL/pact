@@ -111,8 +111,8 @@ module Typing = struct
       let reg_borrows' = List.concat_map (fun x -> x.reg_borrows) tds in
       {ld = {w; lt = lt'; reg_borrows = reg_borrows'; dtype}}
   let derived_data (w : wire option) (td : lowering_data) = {ld = {td with w}}
-  let send_msg_data g (msg : message_specifier) (current : event) =
-    let live_event = event_create g (`Seq (current, `Send msg)) in
+  let send_msg_data g (msg : message_specifier) (kind : handshake_kind) (current : event) =
+    let live_event = event_create g (`Seq (current, `Send (msg, kind))) in
     {ld = {w = None; lt = {live = live_event; dead = [(live_event, `Eternal)]}; reg_borrows = []; dtype = unit_dtype}}
 
   let sync_event_data g ident gtd current =
@@ -125,8 +125,8 @@ module Typing = struct
     );
     {ld = {w = gtd.w; lt = {live = event_synced; dead = [(event_synced, dpat)]}; reg_borrows = []; dtype = gtd.gdtype}}
 
-  let recv_msg_data g (w : wire option) (msg : message_specifier) (msg_def : message_def) (current : event) =
-    let event_received = event_create g (`Seq (current, `Recv msg)) in
+  let recv_msg_data g (w : wire option) (msg : message_specifier) (msg_def : message_def) (kind : handshake_kind) (current : event) =
+    let event_received = event_create g (`Seq (current, `Recv (msg, kind))) in
     let stype = List.hd msg_def.sig_types in
     let e = delay_pat_globalise msg.endpoint stype.lifetime.e in
     {ld = {w; lt = {live = event_received; dead = [(event_received, e)]}; reg_borrows = []; dtype = stype.dtype}}

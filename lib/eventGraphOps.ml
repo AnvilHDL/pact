@@ -106,8 +106,8 @@ let print_dot_graph g out =
         | Some act ->
           let act_string =
             match act.Lang.d with
-            | ImmediateRecv ms -> (Lang.string_of_msg_spec ms)^"?"
-            | ImmediateSend (ms, _) -> (Lang.string_of_msg_spec ms)^"!"
+            | ImmediateRecv (ms, _) -> (Lang.string_of_msg_spec ms)^"?"
+            | ImmediateSend (ms, _, _) -> (Lang.string_of_msg_spec ms)^"!"
             | _ -> failwith "Unexpected action"
           in
           print_edge ev' ev act_string

@@ -368,6 +368,16 @@ type handshake_modes =
   | ValidAck  (** valid/ack handshake *)
   | ValidReady (** valid/ready handshake *)
 
+(** Whether a message operation waits for its peer. A property of the
+    operation, not of the message type. *)
+type handshake_kind =
+  | Blocking (** two-way handshake ([send]/[recv]) *)
+  | Instant (** one-way handshake ([isend]/[irecv]) *)
+
+let string_of_handshake_kind = function
+  | Blocking -> "blocking"
+  | Instant -> "instantaneous"
+
 
 
 (** A message type definition, as part of a channel definition. *)
@@ -376,7 +386,8 @@ type message_def = {
   dir: message_direction;
   send_sync: message_sync_mode; (** how to synchronise when data is available *)
   recv_sync: message_sync_mode; (** how to synchronise when data is acknowledged *)
-  handshake_mode: handshake_modes; 
+  handshake_mode: handshake_modes option;
+    (** explicit handshake override; [None] means it is derived from use *)
   sig_types: sig_type_chan_local list; (** the signal types of the values carried in the message *)
   span: code_span; (** code span of the message definition *)
 }
@@ -467,11 +478,13 @@ type 'a singleton_or_list = [
 type send_pack = {
   send_msg_spec: message_specifier;
   send_data: expr_node;
+  send_handshake: handshake_kind; (** [Blocking] for [send], [Instant] for [isend] *)
 }
 
 (** Information specified in a message receive operation. *)
 and recv_pack = {
   recv_msg_spec: message_specifier;
+  recv_handshake: handshake_kind; (** [Blocking] for [recv], [Instant] for [irecv] *)
 }
 and constructor_spec = {
   variant_ty_name: identifier;
@@ -733,9 +746,11 @@ let rec string_of_expr (e : expr) : string =
       "TrySend " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")" ^
       " { ok: " ^ string_of_expr ok_e.d ^ ", fail: " ^ string_of_expr fail_e.d ^ " }"
   | Send sp ->
-      "Send " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
+      (match sp.send_handshake with Instant -> "ISend " | Blocking -> "Send ")
+      ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
   | Recv rp ->
-      "Recv " ^ string_of_msg_spec rp.recv_msg_spec
+      (match rp.recv_handshake with Instant -> "IRecv " | Blocking -> "Recv ")
+      ^ string_of_msg_spec rp.recv_msg_spec
   | Construct (spec, e_opt) ->
       let payload = match e_opt with Some e -> "(" ^ string_of_expr e.d ^ ")" | None -> "" in
       "Construct " ^ spec.variant_ty_name ^ "::" ^ spec.variant ^ payload
@@ -788,9 +803,11 @@ let rec string_of_expr (e : expr) : string =
 and string_of_offer_arm_type arm : string =
   match arm with
   | OfferSend sp ->
-      "Send " ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
+      (match sp.send_handshake with Instant -> "ISend " | Blocking -> "Send ")
+      ^ string_of_msg_spec sp.send_msg_spec ^ "(" ^ string_of_expr sp.send_data.d ^ ")"
   | OfferRecv (id, rp) ->
-      "Recv " ^ id ^ " <- " ^ string_of_msg_spec rp.recv_msg_spec
+      (match rp.recv_handshake with Instant -> "IRecv " | Blocking -> "Recv ")
+      ^ id ^ " <- " ^ string_of_msg_spec rp.recv_msg_spec
   | OfferWildcard -> "_"
 
 and string_of_offer_arm (arm : offer_arm_type) : string =
@@ -917,10 +934,11 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | Assign (lv, e) ->
       let new_lv = substitute_lvalue id value idx lv in
       Assign (new_lv, subst e)
-  | Send {send_msg_spec; send_data} ->
+  | Send {send_msg_spec; send_data; send_handshake} ->
       Send {
         send_msg_spec = sub_ep_index send_msg_spec idx id;
-        send_data = subst send_data
+        send_data = subst send_data;
+        send_handshake
       }
   | Debug (DebugPrint (msg, exprs)) ->
       Debug (DebugPrint (msg, List.map subst exprs))
@@ -944,13 +962,13 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | TryRecv (ident, recv_pack, e1, e2) ->
     TryRecv (
       ident,
-      {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id},
+      {recv_pack with recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id},
       subst e1,
       subst e2
     )
   | TrySend (send_pack, e1, e2) ->
     TrySend (
-      {send_msg_spec = sub_ep_index send_pack.send_msg_spec idx id; send_data = subst send_pack.send_data},
+      {send_pack with send_msg_spec = sub_ep_index send_pack.send_msg_spec idx id; send_data = subst send_pack.send_data},
       subst e1,
       subst e2
     )
@@ -984,7 +1002,7 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | Recurse | Literal _ | Cycle _ | Recursor _ 
   | Identifier _ | Ready _ | Probe _-> expr.d
   | Recv recv_pack ->
-      let new_recv_pack = {recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id} in
+      let new_recv_pack = {recv_pack with recv_msg_spec = sub_ep_index recv_pack.recv_msg_spec idx id} in
       Recv new_recv_pack
   | Sync _ -> expr.d
 

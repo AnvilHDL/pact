@@ -148,7 +148,7 @@ let find_first_msg_after (ev : event) (msg: Lang.message_specifier) inclusive =
     (fun ev' ->
       List.find_map (fun sa ->
         match sa.d.ty with
-        | Send (msg', _) | Recv msg' ->
+        | Send (msg', _, _) | Recv (msg', _) ->
             if msg' = msg then Some (ev', sa) else None
       ) ev'.sustained_actions
       |> Option.map (fun (ev', sa) -> if inclusive then sa.d.until else ev')
@@ -565,9 +565,12 @@ let events_max_dist events lookup_message ev =
   let get_max_delay =
     function
     | `Cycles n -> n
-    | `Send m  ->
+    | `Send (m, kind)  ->
       let msg_def = lookup_message m |> Option.get in
       (
+        (* Instantaneous sends add no delay. *)
+        if not (CodegenPort.site_blocks msg_def kind) then 0
+        else
         match msg_def.recv_sync with
         | Static _ | Dependent _ -> 0
         | _ -> event_distance_max
@@ -585,9 +588,12 @@ let events_max_dist events lookup_message ev =
         in
         Int.max mx d
       ) 0 (List.flatten msg_groups)
-    | `Recv m ->
+    | `Recv (m, kind) ->
       let msg_def = lookup_message m |> Option.get in
       (
+        (* Instantaneous receives add no delay. *)
+        if not (CodegenPort.site_blocks msg_def kind) then 0
+        else
         match msg_def.send_sync with
         | Static _ | Dependent _ -> 0
         | _ -> event_distance_max
@@ -701,14 +707,14 @@ let events_max_dist events lookup_message ev =
 let event_is_msg_end msg e =
   List.exists (fun ac_span ->
     match ac_span.d with
-    | ImmediateSend (msg', _)
-    | ImmediateRecv msg' ->
+    | ImmediateSend (msg', _, _)
+    | ImmediateRecv (msg', _) ->
       msg' = msg
     | _ -> false
   ) e.actions
   ||
   match e.source with
-  | `Seq (_, `Send msg') | `Seq (_, `Recv msg') ->
+  | `Seq (_, `Send (msg', _)) | `Seq (_, `Recv (msg', _)) ->
     msg' = msg
   | _ -> false
 
@@ -719,7 +725,7 @@ let events_start_msg events msg =
   List.filter (fun e ->
       List.exists (fun sa ->
         match sa.d.ty with
-        | Send (msg', _) | Recv msg' -> msg' = msg
+        | Send (msg', _, _) | Recv (msg', _) -> msg' = msg
       ) e.sustained_actions
     ) events
 

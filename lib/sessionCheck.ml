@@ -226,19 +226,19 @@ let event_session_action_msgs (ev : event) =
   let immediate_msgs =
     List.filter_map (fun action ->
       match action.d with
-      | ImmediateRecv msg | ImmediateSend (msg, _) -> Some msg
+      | ImmediateRecv (msg, _) | ImmediateSend (msg, _, _) -> Some msg
       | _ -> None
     ) ev.actions
   in
   let sustained_msgs =
     List.map (fun sustained_action ->
       match sustained_action.d.ty with
-      | Send (msg, _) | Recv msg -> msg
+      | Send (msg, _, _) | Recv (msg, _) -> msg
     ) ev.sustained_actions
   in
   let source_msgs =
     match ev.source with
-    | `Seq (_, `Send msg) | `Seq (_, `Recv msg) -> [msg]
+    | `Seq (_, `Send (msg, _)) | `Seq (_, `Recv (msg, _)) -> [msg]
     | _ -> []
   in
   immediate_msgs @ sustained_msgs @ source_msgs
@@ -912,10 +912,10 @@ let check_generalized_session
                         child_ev.id (string_of_residual current_residual))
                       g.thread_codespan module_name
 
-              | `Seq (_, `Send msg) ->
+              | `Seq (_, `Send (msg, _)) ->
                   assign_msg_from_heads child_ev msg "Send"
 
-              | `Seq (_, `Recv msg) ->
+              | `Seq (_, `Recv (msg, _)) ->
                   assign_msg_from_heads child_ev msg "Recv"
 
               | `Seq (_, `Cycles n) ->
@@ -947,8 +947,8 @@ let check_generalized_session
                   if has_immediate_actions <> [] then
                     List.iter (fun ia ->
                       match ia.d with
-                      | ImmediateRecv msg
-                      | ImmediateSend (msg, _) ->
+                      | ImmediateRecv (msg, _)
+                      | ImmediateSend (msg, _, _) ->
                           assign_immediate_msg branches child_ev msg
                       | _ -> ()
                     ) has_immediate_actions

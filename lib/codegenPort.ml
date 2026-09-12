@@ -6,14 +6,39 @@ type t = {
   name: identifier;
 }
 
+(* A message has [valid] plus exactly one reverse port, [ack] or [ready].
+   Which one is decided per process by {!HandshakeResolve}. *)
+
 let message_has_valid_port (msg : message_def) : bool = msg.send_sync = Dynamic
-let message_has_ack_port (msg : message_def) : bool = (msg.recv_sync = Dynamic) && (msg.handshake_mode = ValidAck)
 
-let message_has_ready_port (msg : message_def) : bool = (msg.recv_sync = Dynamic) && (msg.handshake_mode = ValidReady)
+let message_has_ack_port ?(mode = ValidAck) (msg : message_def) : bool =
+  (msg.recv_sync = Dynamic) && (mode = ValidAck)
 
+let message_has_ready_port ?(mode = ValidAck) (msg : message_def) : bool =
+  (msg.recv_sync = Dynamic) && (mode = ValidReady)
+
+(* The reverse signal under the resolved mode, or [None] when the message has
+   no dynamic reverse port. *)
+type reverse_signal = UsesAck | UsesReady
+
+let site_reverse_signal ?(mode = ValidAck) (msg : message_def) : reverse_signal option =
+  if msg.recv_sync <> Dynamic then None
+  else match mode with
+    | ValidAck -> Some UsesAck
+    | ValidReady -> Some UsesReady
+
+(* Whether a use site waits for its peer. *)
+let site_blocks ?(mode = ValidAck) (msg : message_def) (kind : handshake_kind) : bool =
+  kind = Blocking && site_reverse_signal ~mode msg <> None
 
 let message_has_data_port (msg : message_def) (idx : int) : bool = (List.nth msg.sig_types idx).dtype <> unit_dtype
-let gather_ports_from_endpoint (channel_classes : channel_class_def list) (endpoint : endpoint_def) : t list =
+
+(* Resolved handshake mode per (endpoint, message) for one process. *)
+type resolver = identifier -> identifier -> handshake_modes
+
+let default_resolver : resolver = fun _ _ -> ValidAck
+
+let gather_ports_from_endpoint ?(resolve = default_resolver) (channel_classes : channel_class_def list) (endpoint : endpoint_def) : t list =
   let cc = (MessageCollection.lookup_channel_class channel_classes endpoint.channel_class) in
   let cc = match cc with
     | Some cc -> cc
@@ -40,17 +65,18 @@ let gather_ports_from_endpoint (channel_classes : channel_class_def list) (endpo
         valid_port::res
       else res
     in
-      if message_has_ack_port msg then
+      let mode = resolve endpoint.name msg.name in
+      if message_has_ack_port ~mode msg then
         let ack_port = {name = CodegenFormat.format_msg_ack_signal_name endpoint.name msg.name; dir = reverse msg_data_dir; dtype = `Logic} in
-         ack_port::res
-     else if message_has_ready_port msg then
-      let ready_port = {name = CodegenFormat.format_msg_ready_signal_name endpoint.name msg.name; dir = reverse msg_data_dir; dtype = `Logic} in
-      ready_port::res
-    else res 
+        ack_port::res
+      else if message_has_ready_port ~mode msg then
+        let ready_port = {name = CodegenFormat.format_msg_ready_signal_name endpoint.name msg.name; dir = reverse msg_data_dir; dtype = `Logic} in
+        ready_port::res
+      else res 
   in List.concat_map gen_endpoint_ports cc.messages
 
-let gather_ports (channel_classes : channel_class_def list) (endpoints : endpoint_def list) : t list =
-  List.concat_map (gather_ports_from_endpoint channel_classes) endpoints
+let gather_ports ?(resolve = default_resolver) (channel_classes : channel_class_def list) (endpoints : endpoint_def list) : t list =
+  List.concat_map (gather_ports_from_endpoint ~resolve channel_classes) endpoints
 
 let clk = {dir = Inp; dtype = `Logic; name = "clk_i"}
 let rst = {dir = Inp; dtype = `Logic; name = "rst_ni"}

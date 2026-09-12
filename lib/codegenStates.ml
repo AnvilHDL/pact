@@ -37,8 +37,12 @@ let plural count singular plural_form =
 
 let describe_atomic_delay = function
   | `Cycles n -> Printf.sprintf "delay %d %s" n (plural n "cycle" "cycles")
-  | `Send msg -> Printf.sprintf "send %s" (Lang.string_of_msg_spec msg)
-  | `Recv msg -> Printf.sprintf "recv %s" (Lang.string_of_msg_spec msg)
+  | `Send (msg, kind) ->
+    Printf.sprintf "%s %s" (match kind with Lang.Instant -> "isend" | Lang.Blocking -> "send")
+      (Lang.string_of_msg_spec msg)
+  | `Recv (msg, kind) ->
+    Printf.sprintf "%s %s" (match kind with Lang.Instant -> "irecv" | Lang.Blocking -> "recv")
+      (Lang.string_of_msg_spec msg)
   | `Choice msg_groups ->
     Printf.sprintf "choice among %s"
       (msg_groups |> List.map format_msg_group |> String.concat " | ")
@@ -180,14 +184,17 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
   let print_line = CodegenPrinter.print_line printer in
   let print_lines = List.iter print_line in
   let lookup_msg_def msg = MessageCollection.lookup_message pg.messages msg graphs.channel_classes in
+  let resolve_mode = HandshakeResolve.resolver_for graphs pg in
+  let mode_of (msg : Lang.message_specifier) =
+    resolve_mode (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
   let readiness_signal_of_msg (msg : Lang.message_specifier) =
     let msg_def = lookup_msg_def msg |> Option.get in
     match msg_def.dir with
     | Out ->
-      if CodegenPort.message_has_ack_port msg_def then
+      if CodegenPort.message_has_ack_port ~mode:(mode_of msg) msg_def then
         CodegenFormat.format_msg_ack_signal_name
           (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
-      else if CodegenPort.message_has_ready_port msg_def then
+      else if CodegenPort.message_has_ready_port ~mode:(mode_of msg) msg_def then
         CodegenFormat.format_msg_ready_signal_name
           (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
       else
@@ -273,24 +280,27 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
               )
             | `Cycles _ ->
               failwith "Invalid number of cycles" (* TODO: proper handling *)
-            | `Send msg ->
+            | `Send (msg, kind) ->
               let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
               let msg_def = lookup_msg_def msg |> Option.get in
-              if CodegenPort.message_has_ack_port msg_def then (
+              (* Only a blocking send waits on the reverse signal. *)
+              let mode = mode_of msg in
+              (match (if CodegenPort.site_blocks ~mode msg_def kind then
+                        CodegenPort.site_reverse_signal ~mode msg_def
+                      else None) with
+              | Some CodegenPort.UsesAck ->
                 (* Valid-Ack: sender asserts valid and waits for ack to come back *)
                 let ack_n = CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
                 Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn ack_n trigger |> print_line;
                 Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ack_n |> print_line
-              ) 
-            else if CodegenPort.message_has_ready_port msg_def then (
+              | Some CodegenPort.UsesReady ->
                 (* Valid-Ready: sender waits for ready, then asserts valid *)
                 let ready_n = CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
                   Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn ready_n trigger |> print_line;
                   Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ready_n |> print_line
-              ) else (
+              | None ->
                   Printf.sprintf "assign %s = %s || %s_q %s ;" cn cn' sn trigger |> print_line;
-                  Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line
-              )
+                  Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line)
             | `Choice msg_groups ->
               let msg_list = flatten_choice_msg_groups msg_groups in
               let is_wildcard_present = is_wildcard_present msg_groups in
@@ -309,10 +319,10 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                   match msg_def.dir with
                   | Out -> 
                     (* Output message (Send): wait for ready port *)
-                    if CodegenPort.message_has_ready_port msg_def then
+                    if CodegenPort.message_has_ready_port ~mode:(mode_of msg) msg_def then
                       Some (CodegenFormat.format_msg_ready_signal_name 
                         (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
-                    else if CodegenPort.message_has_ack_port msg_def then
+                    else if CodegenPort.message_has_ack_port ~mode:(mode_of msg) msg_def then
                       Some (CodegenFormat.format_msg_ack_signal_name 
                         (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
                     else None
@@ -336,18 +346,12 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                   Printf.sprintf "assign %s = %s %s;" cn cn' trigger |> print_line
               )
               
-            | `Recv msg ->
+            | `Recv (msg, kind) ->
               let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
               let msg_def = lookup_msg_def msg |> Option.get in
-              if CodegenPort.message_has_ready_port msg_def then (
-                (* Valid-Ready: assert ready and wait for valid to come back *)
-                let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
-                [
-                  Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn vld_n trigger;
-                  Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
-                ] |> print_lines
-              ) else if CodegenPort.message_has_valid_port msg_def then (
-                (* Valid-Ack: wait for valid then assert ack *)
+              (* Only a blocking recv waits on valid. *)
+              if CodegenPort.site_blocks ~mode:(mode_of msg) msg_def kind
+                 && CodegenPort.message_has_valid_port msg_def then (
                 let vld_n = CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
                 [
                   Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn vld_n trigger;
@@ -747,6 +751,9 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     )
   in
   let lookup_msg_def msg = MessageCollection.lookup_message pg.messages msg graphs.channel_classes in
+  let resolve_mode = HandshakeResolve.resolver_for graphs pg in
+  let mode_of (msg : Lang.message_specifier) =
+    resolve_mode (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
   let open Lang in
   let print_send_recv (e : EventGraph.event) =
     let open EventGraph in
@@ -770,30 +777,32 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
       | Some sources -> Some (Printf.sprintf "(%s)" (String.concat " || " sources))
       | None -> None
     in
-    let print_recv ?attempt_cond activated msg =
+    let print_recv ?attempt_cond kind activated msg =
         let msg_def = lookup_msg_def msg |> Option.get in
-        let has_ack_port = CodegenPort.message_has_ack_port msg_def in
-        let has_ready_port = CodegenPort.message_has_ready_port msg_def in
-
-        if has_ready_port then
+        ignore kind;
+        match CodegenPort.site_reverse_signal ~mode:(mode_of msg) msg_def with
+        | Some CodegenPort.UsesReady ->
           insert_to recv_or_assigns
             (CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
-            has_ready_port
+            true
             (Option.value attempt_cond ~default:activated)
-        else
-        insert_to recv_or_assigns
-          (CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
-          has_ack_port
-          activated
-        
+        | Some CodegenPort.UsesAck ->
+          insert_to recv_or_assigns
+            (CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+            true
+            activated
+        | None -> ()
     in
-    let print_send ?attempt_cond activated msg td =
+    let print_send ?attempt_cond kind activated msg td =
       let msg_def = lookup_msg_def msg |> Option.get in
+      let uses_ack =
+        CodegenPort.site_reverse_signal ~mode:(mode_of msg) msg_def = Some CodegenPort.UsesAck in
+      ignore kind;
       let has_valid_port = CodegenPort.message_has_valid_port msg_def in
       (* The parent Choice drives valid for offer sends; reusing an ack-gated
          Select root here recreates a valid/ack combinational loop. *)
       let select_valid_ack_send =
-        msg_def.handshake_mode = Lang.ValidAck
+        uses_ack
         && (match e.source with
             | `Select _ -> true
             | _ -> false)
@@ -801,7 +810,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
       let valid_cond =
         if select_valid_ack_send then
           None
-        else if msg_def.handshake_mode = Lang.ValidAck then
+        else if uses_ack then
           Some (Option.value attempt_cond ~default:activated)
         else
           Some activated
@@ -830,41 +839,50 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     in
 
     List.iter (fun (sa : EventGraph.sustained_action Lang.ast_node) ->
-      let msg_def_opt = match sa.d.ty with
-        | Send (msg, _) -> Some (lookup_msg_def msg)
-        | Recv msg -> Some (lookup_msg_def msg)
+      let (msg_def, kind) = match sa.d.ty with
+        | Send (msg, _, k) -> (lookup_msg_def msg |> Option.get, k)
+        | Recv (msg, k) -> (lookup_msg_def msg |> Option.get, k)
       in
-      let msg_def = Option.get msg_def_opt |> Option.get in
-      
+
       (* Protocol-specific signal assertion:
          - ValidAck Send: assert valid while waiting for ack (sustained)
          - ValidAck Recv: assert ack only when valid arrives (immediate)
          - ValidReady Send: assert valid only when ready arrives (immediate)
-         - ValidReady Recv: assert ready while waiting for valid (sustained) *)
-      let use_sustained = match sa.d.ty with
-        | Send _ -> msg_def.handshake_mode = Lang.ValidAck
-        | Recv _ -> msg_def.handshake_mode = Lang.ValidReady
+         - ValidReady Recv: assert ready while waiting for valid (sustained)
+         An instantaneous op never waits, so its assertion is a single-cycle
+         pulse rather than a sustained one. *)
+      let sa_mode = (match sa.d.ty with
+        | Send (msg, _, _) | Recv (msg, _) -> mode_of msg) in
+      let use_sustained =
+        CodegenPort.site_blocks ~mode:sa_mode msg_def kind &&
+        (match sa.d.ty, CodegenPort.site_reverse_signal ~mode:sa_mode msg_def with
+         | Send _, Some CodegenPort.UsesAck -> true
+         | Recv (_, _), Some CodegenPort.UsesReady -> true
+         | _ -> false)
       in
-      
+
       let activated = 
         if use_sustained then
           Printf.sprintf "(%s || %s_q)"
             (EventStateFormatter.format_current g.thread_id e.id)
             (EventStateFormatter.format_syncstate g.thread_id sa.d.until.id)
-        else
+        else if CodegenPort.site_blocks ~mode:sa_mode msg_def kind then
           EventStateFormatter.format_current g.thread_id sa.d.until.id
+        else
+          (* Instantaneous: fires in the cycle the event is reached. *)
+          EventStateFormatter.format_current g.thread_id e.id
       in
       match sa.d.ty with
-      | Send (msg, td) -> print_send activated msg td
-      | Recv msg -> print_recv activated msg
+      | Send (msg, td, k) -> print_send k activated msg td
+      | Recv (msg, k) -> print_recv k activated msg
     ) e.sustained_actions;
 
     let activated = (EventStateFormatter.format_current g.thread_id e.id) in
     let attempt_cond = true_branch_attempt_condition () in
     List.iter (fun (ac : EventGraph.action Lang.ast_node) ->
       match ac.d with
-      | ImmediateSend (msg, td) -> print_send ?attempt_cond activated msg td
-      | ImmediateRecv msg -> print_recv ?attempt_cond activated msg
+      | ImmediateSend (msg, td, k) -> print_send ?attempt_cond k activated msg td
+      | ImmediateRecv (msg, k) -> print_recv ?attempt_cond k activated msg
       | _ -> ()
     ) e.actions;
 
@@ -888,7 +906,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
             match msg_def.dir with
             | Out ->
               (* Output message (Send): assert valid only for ValidAck protocol *)
-              if msg_def.handshake_mode = Lang.ValidAck then
+              if CodegenPort.message_has_ack_port ~mode:(mode_of msg) msg_def then
                 insert_to choice_valid_asserts
                   (CodegenFormat.format_msg_valid_signal_name 
                     (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
@@ -896,7 +914,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
                   activated
             | Inp ->
               (* Input message (Recv): assert ready only for ValidReady protocol *)
-              if msg_def.handshake_mode = Lang.ValidReady then
+              if CodegenPort.message_has_ready_port ~mode:(mode_of msg) msg_def then
                 insert_to recv_or_assigns
                   (CodegenFormat.format_msg_ready_signal_name 
                     (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)

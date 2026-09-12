@@ -72,6 +72,8 @@
 %token KEYWORD_LET          (* let *)
 %token KEYWORD_SEND         (* send *)
 %token KEYWORD_RECV         (* recv *)
+%token KEYWORD_ISEND        (* isend *)
+%token KEYWORD_IRECV        (* irecv *)
 %token KEYWORD_IN          (* in *)
 %token KEYWORD_ETERNAL      (* eternal *)
 %token KEYWORD_TYPE         (* type *)
@@ -790,9 +792,13 @@ expr:
 | v = node(expr); SEMICOLON; body = node(expr)
   { Lang.Join (v, body) }
 | KEYWORD_SEND; send_pack = send_pack
-  { Lang.Send send_pack }
+  { Lang.Send (send_pack Lang.Blocking) }
 | KEYWORD_RECV; recv_pack = recv_pack
-  { Lang.Recv recv_pack }
+  { Lang.Recv (recv_pack Lang.Blocking) }
+| KEYWORD_ISEND; send_pack = send_pack
+  { Lang.Send (send_pack Lang.Instant) }
+| KEYWORD_IRECV; recv_pack = recv_pack
+  { Lang.Recv (recv_pack Lang.Instant) }
 | v = node(expr); DOUBLE_GT; body = node(expr)
   { Lang.Wait (v, body) }
 | KEYWORD_GENERATE; LEFT_PAREN; i=IDENT; COLON; start = INT; COMMA; end_v = INT; COMMA;
@@ -862,14 +868,20 @@ if_branch:
   { Lang.IfExpr (cond, then_v, Option.value ~default:Lang.dummy_unit_node else_v) }
 // | KEYWORD_TRY; ident = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack
 //   { Lang.TryRecv (ident, recv_pack, Lang.dummy_unit_node, Lang.dummy_unit_node) }
+| KEYWORD_TRY; ident = IDENT; EQUAL; KEYWORD_IRECV; recv_pack = recv_pack;
+  LEFT_BRACE; then_v = node(expr); RIGHT_BRACE; else_v = node(else_branch)?
+  { Lang.TryRecv (ident, recv_pack Lang.Instant, then_v, Option.value ~default:Lang.dummy_unit_node else_v) }
+| KEYWORD_TRY; KEYWORD_ISEND; send_pack = send_pack;
+  LEFT_BRACE; then_v = node(expr); RIGHT_BRACE; else_v = node(else_branch)?
+  { Lang.TrySend (send_pack Lang.Instant, then_v, Option.value ~default:(Lang.dummy_ast_node_of_data @@ Lang.Tuple []) else_v) }
 | KEYWORD_TRY; ident = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack;
   LEFT_BRACE; then_v = node(expr); RIGHT_BRACE; else_v = node(else_branch)?
-  { Lang.TryRecv (ident, recv_pack, then_v, Option.value ~default:Lang.dummy_unit_node else_v) }
+  { Lang.TryRecv (ident, recv_pack Lang.Blocking, then_v, Option.value ~default:Lang.dummy_unit_node else_v) }
 // | KEYWORD_TRY; KEYWORD_SEND; send_pack = send_pack
 //   { Lang.TrySend (send_pack, Lang.dummy_unit_node, Lang.dummy_unit_node) }
 | KEYWORD_TRY; KEYWORD_SEND; send_pack = send_pack;
   LEFT_BRACE; then_v = node(expr); RIGHT_BRACE; else_v = node(else_branch)?
-  { Lang.TrySend (send_pack, then_v, Option.value ~default:(Lang.dummy_ast_node_of_data @@ Lang.Tuple []) else_v) }
+  { Lang.TrySend (send_pack Lang.Blocking, then_v, Option.value ~default:(Lang.dummy_ast_node_of_data @@ Lang.Tuple []) else_v) }
 ;
 
 else_branch:
@@ -896,9 +908,10 @@ send_pack:
   msg_specifier = message_specifier;
   LEFT_PAREN; data = node(expr); RIGHT_PAREN
   {
-    {
+    fun handshake -> {
       Lang.send_msg_spec = msg_specifier;
       Lang.send_data = data;
+      Lang.send_handshake = handshake;
     }
   }
 ;
@@ -906,8 +919,9 @@ send_pack:
 recv_pack:
   msg_specifier = message_specifier
   {
-    {
-      Lang.recv_msg_spec = msg_specifier
+    fun handshake -> {
+      Lang.recv_msg_spec = msg_specifier;
+      Lang.recv_handshake = handshake;
     }
   }
 ;
@@ -991,9 +1005,13 @@ offer_arm:
 ;
 offer_arm_atom:
 | KEYWORD_SEND; send_pack = send_pack
-  { Lang.OfferSend send_pack }
+  { Lang.OfferSend (send_pack Lang.Blocking) }
 | id = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack
-  { Lang.OfferRecv (id, recv_pack) }
+  { Lang.OfferRecv (id, recv_pack Lang.Blocking) }
+| KEYWORD_ISEND; send_pack = send_pack
+  { Lang.OfferSend (send_pack Lang.Instant) }
+| id = IDENT; EQUAL; KEYWORD_IRECV; recv_pack = recv_pack
+  { Lang.OfferRecv (id, recv_pack Lang.Instant) }
 ;  
 
 //Definition of messages: To Do: Doesnt support custom lifetime types, just sync?
@@ -1014,7 +1032,7 @@ message_def:
       dir = dir;
       send_sync = send_sync_mode;
       recv_sync = recv_sync_mode;
-      handshake_mode = Lang.ValidAck;
+      handshake_mode = None;
       sig_types = data;
       span = {st = $startpos; ed = $endpos}
     } : Lang.message_def
@@ -1027,7 +1045,7 @@ DOUBLE_LEFT_ABRACK;
       dir = dir;
       send_sync = Lang.Dynamic;
       recv_sync = Lang.Dynamic;
-      handshake_mode = Lang.ValidReady;
+      handshake_mode = Some Lang.ValidReady;
       sig_types = data;
       span = {st = $startpos; ed = $endpos}
     } : Lang.message_def
@@ -1040,7 +1058,7 @@ DOUBLE_GT;
       dir = dir;
       send_sync = Lang.Dynamic;
       recv_sync = Lang.Dynamic;
-      handshake_mode = Lang.ValidAck;
+      handshake_mode = Some Lang.ValidAck;
       sig_types = data;
       span = {st = $startpos; ed = $endpos}
     } : Lang.message_def

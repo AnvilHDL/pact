@@ -32,16 +32,16 @@ let check_linear (config : Config.compile_config) lookup_message (g : event_grap
           reg_ops := (ev, lv.lval_range, ac_span.span)::!reg_ops
         | PutShared (_, _, _td) ->
           ()
-        | ImmediateRecv msg ->
-          add_msg msg ev ({d = {ty = Recv msg; until = ev}; span = ac_span.span})
-        | ImmediateSend (msg, td) ->
-          add_msg msg ev ({d = {ty = Send (msg, td); until = ev}; span = ac_span.span})
+        | ImmediateRecv (msg, k) ->
+          add_msg msg ev ({d = {ty = Recv (msg, k); until = ev}; span = ac_span.span})
+        | ImmediateSend (msg, td, k) ->
+          add_msg msg ev ({d = {ty = Send (msg, td, k); until = ev}; span = ac_span.span})
           (* add_reg_ops_td ev td *)
       ) ev.actions;
       List.iter (fun sa_span ->
         match sa_span.d.ty with
-        | Send (msg, _)
-        | Recv msg -> add_msg msg ev sa_span
+        | Send (msg, _, _)
+        | Recv (msg, _) -> add_msg msg ev sa_span
       ) ev.sustained_actions
     )
     events_rev;
@@ -283,7 +283,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       | DebugFinish -> ()
       | PutShared (_, si, td) ->
         td_to_live_until := (td, (ev, si.value.glt.e))::!td_to_live_until
-      | ImmediateSend (msg, td) ->
+      | ImmediateSend (msg, td, _) ->
         let msg_d = lookup_message msg |> Option.get in
         let stype = List.hd msg_d.sig_types in
         let e_dpat = delay_pat_globalise msg.endpoint stype.lifetime.e |> delay_pat_reduce_cycles 1 in
@@ -292,12 +292,12 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     )
     (fun _ev sa ->
       match sa.d.ty with
-      | Send (msg, td) ->
+      | Send (msg, td, _) ->
         let msg_d = lookup_message msg |> Option.get in
         let stype = List.hd msg_d.sig_types in
         let e_dpat = delay_pat_globalise msg.endpoint stype.lifetime.e |> delay_pat_reduce_cycles 1 in
         td_to_live_until := (td, (sa.d.until, e_dpat))::!td_to_live_until
-      | Recv _ -> ()
+      | Recv (_, _) -> ()
     )
     g.events;
   List.iter (fun (td, dead) ->
@@ -398,15 +398,15 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                   Except.codespan_local a.span
                 ])
         else ()
-      | ImmediateSend (msg, td) ->
+      | ImmediateSend (msg, td, _) ->
         check_send msg td ev ev a.span
       | ImmediateRecv _ -> ()
     )
     (fun ev sa ->
       match sa.d.ty with
-      | Send (msg, td) ->
+      | Send (msg, td, _) ->
         check_send msg td ev sa.d.until sa.span
-      | Recv _ -> ()
+      | Recv (_, _) -> ()
     )
     g.events;
 
@@ -440,8 +440,8 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
           (fun _ _ -> ())
           (fun _ev sa ->
             let (msg, msg_gap) = match sa.d.ty with
-            | Send (msg, _) -> (msg, get_msg_gap true msg)
-            | Recv msg -> (msg, get_msg_gap false msg)
+            | Send (msg, _, _) -> (msg, get_msg_gap true msg)
+            | Recv (msg, _) -> (msg, get_msg_gap false msg)
             in
             match msg_gap with
             | None -> ()
@@ -486,13 +486,13 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     let has_msg msg ev =
       let res = List.find_map (fun ac_span ->
         match ac_span.d with
-        | ImmediateSend (msg', td) ->
+        | ImmediateSend (msg', td, k) ->
           if (msg_ident msg') = msg then
-            Some {d = {until = ev; ty = Send (msg', td)}; span = ac_span.span }
+            Some {d = {until = ev; ty = Send (msg', td, k)}; span = ac_span.span }
           else None
-        | ImmediateRecv msg' ->
+        | ImmediateRecv (msg', k) ->
           if (msg_ident msg') = msg then
-            Some {d = {until = ev; ty = Recv msg'}; span = ac_span.span }
+            Some {d = {until = ev; ty = Recv (msg', k)}; span = ac_span.span }
           else None
         | _ -> None
       ) ev.actions in
@@ -501,8 +501,8 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
         List.find_map
         (fun sa ->
           match sa.d.ty with
-          | Send (msg', _)
-          | Recv msg' -> (
+          | Send (msg', _, _)
+          | Recv (msg', _) -> (
             let mi' = msg_ident msg' in
             if mi' = msg then
               Some sa
@@ -569,8 +569,8 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       let has_msg_end msg ev =
         let res = List.find_map (fun ac_span ->
           match ac_span.d with
-          | ImmediateSend (msg', _)
-          | ImmediateRecv msg' ->
+          | ImmediateSend (msg', _, _)
+          | ImmediateRecv (msg', _) ->
             if (msg_ident msg') = msg then
               Some ev
             else None
@@ -579,8 +579,8 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
         if Option.is_some res then res
           else (
           match ev.source with
-          | `Seq (ev', `Send msg')
-          | `Seq (ev', `Recv msg') ->
+          | `Seq (ev', `Send (msg', _))
+          | `Seq (ev', `Recv (msg', _)) ->
             if (msg_ident msg') = msg then
               Some ev'
             else

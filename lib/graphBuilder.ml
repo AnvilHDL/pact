@@ -15,10 +15,11 @@ let unwrap_or_err err_msg err_span opt =
 let do_sanity_check_offer (msg_list : (message_specifier * message_def) list) (span : code_span)  =
 
 List.iter (fun ((msg_spec : message_specifier), message_def) ->
-  if message_def.dir == Out && message_def.handshake_mode != ValidReady then
+  (* Only an explicit override can conflict here. *)
+  if message_def.dir == Out && message_def.handshake_mode = Some ValidAck then
     raise (Except.TypeError [Text ("In exclusive offer: Outbound message " ^ msg_spec.msg ^ " must use ready/valid handshake");
       Except.codespan_local span])
-  else if message_def.dir == Inp && message_def.handshake_mode != ValidAck then
+  else if message_def.dir == Inp && message_def.handshake_mode = Some ValidReady then
     raise (Except.TypeError [Text ("In exclusive offer: Inbound message " ^ msg_spec.msg ^ " must use valid/ack handshake");
       Except.codespan_local span])
   ) msg_list
@@ -173,7 +174,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       let wires, msg_valid_port = WireCollection.add_msg_valid_port graph.thread_id ci.typedefs msg_spec graph.wires in
       graph.wires <- wires;
       msg_valid_port
-    else if msg_def.handshake_mode = Lang.ValidAck then
+    else if msg_def.handshake_mode <> Some Lang.ValidReady then
       let wires, msg_ack_port = WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
       graph.wires <- wires;
       msg_ack_port
@@ -209,9 +210,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         let err_string = Printf.sprintf "In offer send: Invalid data type for message %s: expected %s but got %s"
           send_pack.send_msg_spec.endpoint (string_of_data_type msg_dtype) (string_of_data_type td_data.ld.dtype) in
         check_dtype err_string (Some msg_dtype) td_data.ld.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
-        let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx_root.current in
+        let ntd = Typing.send_msg_data graph send_pack.send_msg_spec send_pack.send_handshake ctx_root.current in
         ctx_root.current.sustained_actions <-
-          ({until = ntd.ld.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data.ld)} |> tag_with_span e.span)::ctx_root.current.sustained_actions;
+          ({until = ntd.ld.lt.live; ty = EventGraph.Send (send_pack.send_msg_spec, td_data.ld, send_pack.send_handshake)} |> tag_with_span e.span)::ctx_root.current.sustained_actions;
         (ctx_bindings, ntd.ld.lt.live, None)
     | OfferRecv (id, recv_pack) ->
         let msg = MessageCollection.lookup_message graph.messages recv_pack.recv_msg_spec ci.channel_classes
@@ -220,9 +221,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
           raise (event_graph_error_default "Mismatching message direction!" e.span);
         let wires, w = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
         graph.wires <- wires;
-        let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg ctx_root.current in
+        let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg recv_pack.recv_handshake ctx_root.current in
         ctx_root.current.sustained_actions <-
-          ({until = ntd.ld.lt.live; ty = EventGraph.Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx_root.current.sustained_actions;
+          ({until = ntd.ld.lt.live; ty = EventGraph.Recv (recv_pack.recv_msg_spec, recv_pack.recv_handshake)} |> tag_with_span e.span)::ctx_root.current.sustained_actions;
         (BuildContext.add_binding ctx_bindings id ntd.ld, ntd.ld.lt.live, Some (id, ntd.ld))
     | OfferWildcard ->
         raise (event_graph_error_default "Wildcard offer arm cannot be lowered as a message action" e.span)
@@ -439,7 +440,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
   | Probe msg_spec ->
     let m = MessageCollection.lookup_message graph.messages msg_spec ci.channel_classes
     |> unwrap_or_err "Invalid message specifier in probe" e.span in
-    let wires, msg_ack_port = if m.handshake_mode = Lang.ValidReady then (
+    let wires, msg_ack_port = if m.handshake_mode = Some Lang.ValidReady then (
       WireCollection.add_msg_ready_port graph.thread_id ci.typedefs msg_spec graph.wires
     )
     else WireCollection.add_msg_ack_port graph.thread_id ci.typedefs msg_spec graph.wires in
@@ -490,10 +491,13 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let msg = MessageCollection.lookup_message graph.messages send_pack.send_msg_spec ci.channel_classes
       |> unwrap_or_err "Invalid message specifier in try send" e.span in
     let td_send_data = construct_graphIR graph ci ctx send_pack.send_data in
+    (* Runs before handshake resolution, so use the declared annotation. *)
     let wires, w_cond =
-      if msg.handshake_mode <> Lang.ValidAck then
+      match CodegenPort.site_reverse_signal
+              ?mode:msg.handshake_mode msg with
+      | Some CodegenPort.UsesReady ->
         WireCollection.add_msg_ready_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
-      else
+      | _ ->
         WireCollection.add_msg_ack_port graph.thread_id ci.typedefs send_pack.send_msg_spec graph.wires
     in
     let td_cond = {
@@ -529,7 +533,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
 
     BuildContext.branch_merge ctx [ctx_true; ctx_false];
 
-    ctx_true.current.actions <- (ImmediateSend (send_pack.send_msg_spec, td_send_data.ld) |> tag_with_span e.span)::ctx_true.current.actions;
+    ctx_true.current.actions <- (ImmediateSend (send_pack.send_msg_spec, td_send_data.ld, send_pack.send_handshake) |> tag_with_span e.span)::ctx_true.current.actions;
 
     let ctx_br = BuildContext.branch graph ctx branch_info ci.file_name in
     br_side_true.branch_event <- Some ctx_br.current;
@@ -591,7 +595,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
 
     BuildContext.branch_merge ctx [ctx_true_no_binding; ctx_false];
 
-    ctx_true.current.actions <- (ImmediateRecv recv_pack.recv_msg_spec |> tag_with_span e.span)::ctx_true.current.actions;
+    ctx_true.current.actions <- (ImmediateRecv (recv_pack.recv_msg_spec, recv_pack.recv_handshake) |> tag_with_span e.span)::ctx_true.current.actions;
 
     let ctx_br = BuildContext.branch graph ctx branch_info ci.file_name in
     br_side_true.branch_event <- Some ctx_br.current;
@@ -811,11 +815,11 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let msg_dtype = (List.hd msg.sig_types).dtype in
     let err_string = DTypeCheck.fmt_send send_pack.send_msg_spec.endpoint msg_dtype td.ld.dtype in
     check_dtype err_string (Some msg_dtype) td.ld.dtype e.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;
-    let ntd = Typing.send_msg_data graph send_pack.send_msg_spec ctx.current in
+    let ntd = Typing.send_msg_data graph send_pack.send_msg_spec send_pack.send_handshake ctx.current in
     ctx.current.sustained_actions <-
       ({
         until = ntd.ld.lt.live;
-        ty = Send (send_pack.send_msg_spec, td.ld)
+        ty = Send (send_pack.send_msg_spec, td.ld, send_pack.send_handshake)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     ntd
 | Offer offer_arms ->
@@ -1051,9 +1055,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     );
     let (wires', w) = WireCollection.add_msg_port graph.thread_id ci.typedefs ci.macro_defs recv_pack.recv_msg_spec 0 msg graph.wires in
     graph.wires <- wires';
-    let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg ctx.current in
+    let ntd = Typing.recv_msg_data graph w recv_pack.recv_msg_spec msg recv_pack.recv_handshake ctx.current in
     ctx.current.sustained_actions <-
-      ({until = ntd.ld.lt.live; ty = Recv recv_pack.recv_msg_spec} |> tag_with_span e.span)::ctx.current.sustained_actions;
+      ({until = ntd.ld.lt.live; ty = Recv (recv_pack.recv_msg_spec, recv_pack.recv_handshake)} |> tag_with_span e.span)::ctx.current.sustained_actions;
     ntd
   | Indirect (e', fieldname) ->
     let td = construct_graphIR graph ci ctx e' in

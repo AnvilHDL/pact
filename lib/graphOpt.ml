@@ -75,17 +75,24 @@ module CombSimplPass = struct
           changed := true
         )
       )
-      | `Seq (ev', (`Send msg as delay)) | `Seq (ev', (`Recv msg as delay)) ->
+      | `Seq (ev', ((`Send (msg, _)) as delay)) | `Seq (ev', ((`Recv (msg, _)) as delay)) ->
         (* check if this msg takes any bit of time *)
         if (not for_lt_check) && not (event_is_control_boundary ev)
           && not (event_is_control_boundary ev') && not (event_is_branch_root ev') then (
           let msg_def = MessageCollection.lookup_message graph.messages msg ci.channel_classes |> Option.get in
+          let kind = match delay with
+            | `Send (_, k) | `Recv (_, k) -> k
+          in
+          (* Instantaneous ops take no time, so they collapse like static ones. *)
           let immediate =
-            (
-              match delay with
-              | `Send _ -> true
-              | `Recv _ -> false
-            ) |> GraphAnalysis.message_is_immediate msg_def
+            (not (CodegenPort.site_blocks msg_def kind))
+            || (
+              (
+                match delay with
+                | `Send _ -> true
+                | `Recv _ -> false
+              ) |> GraphAnalysis.message_is_immediate msg_def
+            )
           in
           if immediate then (
             union_ufs event_ufs ev.id ev'.id;
@@ -510,8 +517,8 @@ module CombSimplPass = struct
         {lval_info with lval_range = {lval_info.lval_range with subreg_range_interval = range}}
       in
       let replace_sa_type = function
-        | Send (msg, td) -> Send (msg, replace_lowering_data td)
-        | Recv msg -> Recv msg
+        | Send (msg, td, k) -> Send (msg, replace_lowering_data td, k)
+        | Recv (msg, k) -> Recv (msg, k)
       in
       let replace_branch_cond = function
         | TrueFalse -> TrueFalse
@@ -526,8 +533,8 @@ module CombSimplPass = struct
           | RegAssign (lval_info, td) -> RegAssign (replace_lvalue_info lval_info, replace_lowering_data td)
           | PutShared (s, svi, td) -> PutShared (s, svi, replace_lowering_data td)
           | DebugFinish -> DebugFinish
-          | ImmediateRecv msg -> ImmediateRecv msg
-          | ImmediateSend (msg, td) -> ImmediateSend (msg, replace_lowering_data td)
+          | ImmediateRecv (msg, k) -> ImmediateRecv (msg, k)
+          | ImmediateSend (msg, td, k) -> ImmediateSend (msg, replace_lowering_data td, k)
           in
           {action with d}
         ) ev.actions in
@@ -553,8 +560,8 @@ module CombSimplPass = struct
         let actions = (
           List.map (fun sa_span ->
             match sa_span.d.ty with
-            | Send (msg, td) -> { d = ImmediateSend (msg, td); span = sa_span.span }
-            | Recv msg -> { d = ImmediateRecv msg; span = sa_span.span }
+            | Send (msg, td, k) -> { d = ImmediateSend (msg, td, k); span = sa_span.span }
+            | Recv (msg, k) -> { d = ImmediateRecv (msg, k); span = sa_span.span }
           ) immediate_sa
         ) @ actions in
         if to_keep.(old_id) then (

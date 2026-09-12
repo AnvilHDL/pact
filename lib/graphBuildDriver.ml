@@ -297,6 +297,10 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
   ) cunit.procs;
 
   let graphs = List.map (build_proc config sched module_name param_values ci ) cunit.procs in
+  (* Resolve handshakes here so [-just-check] reports conflicts too. *)
+  List.iter (fun g ->
+    ignore (HandshakeResolve.resolve_proc cunit.channel_classes g)
+  ) graphs;
   {
     event_graphs = graphs;
     typedefs;

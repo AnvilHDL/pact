@@ -9,9 +9,9 @@ module Format = CodegenFormat
 type port_def = CodegenPort.t
 
 
-let codegen_ports printer (graphs : event_graph_collection)
+let codegen_ports ?(resolve = CodegenPort.default_resolver) printer (graphs : event_graph_collection)
                       (endpoints : endpoint_def list) (is_mod_comb : bool)=
-  let port_list = CodegenPort.gather_ports graphs.channel_classes endpoints in
+  let port_list = CodegenPort.gather_ports ~resolve graphs.channel_classes endpoints in
   let rec print_port_list port_list =
   match port_list with
   | [] -> ()
@@ -54,6 +54,8 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
     (thread : EventGraph.event_graph).comb
   ) spawned_proc.threads) && uses_anvil_port_layout in
 
+    let child_resolve = HandshakeResolve.resolver_for graphs spawned_proc in
+
     CodegenPrinter.print_comment printer (Printf.sprintf "spawn %s instance %d" module_name idx);
     Printf.sprintf "%s _spawn_%d (" module_name idx|> CodegenPrinter.print_line printer ~lvl_delta_post:1;
 
@@ -75,11 +77,13 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
               (Format.format_msg_valid_signal_name parent_endpoint_name msg.name)]
           else [])
           @
-          (if CodegenPort.message_has_ack_port msg then
+          (* Connect the reverse port the child resolved for itself. *)
+          (let child_mode = child_resolve arg_endpoint.name msg.name in
+           if CodegenPort.message_has_ack_port ~mode:child_mode msg then
             [format_connection
               (Format.format_msg_ack_signal_name arg_endpoint.name msg.name)
               (Format.format_msg_ack_signal_name parent_endpoint_name msg.name)]
-          else if CodegenPort.message_has_ready_port msg then
+          else if CodegenPort.message_has_ready_port ~mode:child_mode msg then
             [format_connection
               (Format.format_msg_ready_signal_name arg_endpoint.name msg.name)
               (Format.format_msg_ready_signal_name parent_endpoint_name msg.name)]
@@ -111,7 +115,7 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
     CodegenPrinter.print_line printer ~lvl_delta_pre:(-1) ");"
   in List.iteri gen_spawn g.spawns
 
-let codegen_endpoints printer (graphs : event_graph_collection) (g : event_graph) =
+let codegen_endpoints ?(resolve = CodegenPort.default_resolver) printer (graphs : event_graph_collection) (g : event_graph) =
   let print_port_signal_decl = fun (port : port_def) ->
     if port.dtype <> Lang.unit_dtype then
     Printf.sprintf "%s %s;" (Format.format_dtype graphs.typedefs graphs.macro_defs port.dtype) (port.name) |>
@@ -119,7 +123,7 @@ let codegen_endpoints printer (graphs : event_graph_collection) (g : event_graph
   in
   let local_endpoint_ports =
     List.filter (fun (p : endpoint_def) -> p.dir = Left) g.messages.endpoints
-    |> CodegenPort.gather_ports graphs.channel_classes
+    |> CodegenPort.gather_ports ~resolve graphs.channel_classes
   in
   if local_endpoint_ports <> [] then
     CodegenPrinter.print_section printer (Printf.sprintf "Thread %d local endpoint mirrors" g.thread_id);
@@ -295,7 +299,8 @@ let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.e
   Printf.sprintf "module %s (" g.name |> CodegenPrinter.print_line printer ~lvl_delta_post:1;
 
   CodegenPrinter.print_comment printer "ports";
-  let _ = codegen_ports printer graphs g.messages.args is_mod_comb in
+  let resolve = HandshakeResolve.resolver_for graphs g in
+  let _ = codegen_ports ~resolve printer graphs g.messages.args is_mod_comb in
   CodegenPrinter.print_line printer ~lvl_delta_pre:(-1) ~lvl_delta_post:1 ");";
 
   (
@@ -352,7 +357,7 @@ let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.e
         print_msg_port_opt format_msg_ack_signal_name extern_ack_opt
       ) body.msg_ports;
       CodegenPrinter.print_line printer  ~lvl_delta_pre:(-1) ");";
-      let ports = CodegenPort.gather_ports graphs.channel_classes g.messages.args in
+      let ports = CodegenPort.gather_ports ~resolve graphs.channel_classes g.messages.args in
       List.iter (fun p ->
         let open CodegenPort in
         match p.dir with
@@ -368,7 +373,7 @@ let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.e
     | _ ->
       let initEvents = fst @@ List.hd g.threads in
 
-      codegen_endpoints printer graphs initEvents;
+      codegen_endpoints ~resolve printer graphs initEvents;
 
       codegen_spawns printer graphs g;
 

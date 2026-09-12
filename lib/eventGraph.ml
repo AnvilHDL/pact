@@ -28,8 +28,10 @@ type wire_collection = WireCollection.t
 (** An event that may lead to delay in time. *)
 type atomic_delay = [
   | `Cycles of int (** elapse of a specific number of cycles *)
-  | `Send of Lang.message_specifier (** sending of a message *)
-  | `Recv of Lang.message_specifier (** receiving of a message *)
+  | `Send of Lang.message_specifier * Lang.handshake_kind
+    (** sending of a message; [Instant] sends complete in the same cycle *)
+  | `Recv of Lang.message_specifier * Lang.handshake_kind
+    (** receiving of a message; [Instant] receives complete in the same cycle *)
   | `Choice of Lang.message_specifier list list (** making a choice among message groups *)
   | `Sync of Lang.identifier (** synchronising on a local shared value *)
 ]
@@ -91,14 +93,14 @@ and action =
   | DebugFinish (** [dfinish] *)
   | RegAssign of lvalue_info * lowering_data (** register assignment (technically this is not performed instantly) *)
   | PutShared of string * shared_var_info * lowering_data
-  | ImmediateSend of Lang.message_specifier * lowering_data
-  | ImmediateRecv of Lang.message_specifier
+  | ImmediateSend of Lang.message_specifier * lowering_data * Lang.handshake_kind
+  | ImmediateRecv of Lang.message_specifier * Lang.handshake_kind
 
 (** Type of an action that may take multiple cycles. Those
 are basically those that synchronise through message passing. *)
 and sustained_action_type =
-  | Send of Lang.message_specifier * lowering_data
-  | Recv of Lang.message_specifier
+  | Send of Lang.message_specifier * lowering_data * Lang.handshake_kind
+  | Recv of Lang.message_specifier * Lang.handshake_kind
 
 (** A condition.
 

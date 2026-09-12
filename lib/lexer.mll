@@ -89,6 +89,8 @@ rule read =
   | "else"    { KEYWORD_ELSE }
   | "send"    { KEYWORD_SEND }
   | "recv"    { KEYWORD_RECV }
+  | "isend"   { KEYWORD_ISEND }
+  | "irecv"   { KEYWORD_IRECV }
   | "eternal" { KEYWORD_ETERNAL }
   | "type"    { KEYWORD_TYPE }
   | "set"     { KEYWORD_SET }
