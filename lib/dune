@@ -5,6 +5,6 @@
 
 (library
  (name anvil)
- (public_name anvil)
+ (public_name pact.anvil)
  (libraries menhirLib yojson unix)
 )

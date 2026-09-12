@@ -1,4 +1,4 @@
 (executable
- (public_name anvil)
+ (public_name pact)
  (name main)
  (libraries anvil))
