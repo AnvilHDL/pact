@@ -1,24 +1,24 @@
 (lang dune 3.20)
 
-(name anvil)
+(name pact)
 
 (generate_opam_files true)
 
 (source
- (github jasonyu1996/anvil))
+ (github arj4web/pact))
 
-(authors "Jason Yu")
+(authors "Team Anvil")
 
-(maintainers "Jason Yu")
+(maintainers "Team Anvil")
 
 (license MIT)
 
 ; (documentation https://url/to/documentation)
 
 (package
- (name anvil)
+ (name pact)
  (synopsis "An HDL that helps avoid mistakes")
- (description "Anvil is a hardware description language with a type system designed to help the user avoid mistakes.")
+ (description "Pact is an extension of anvil with a type system for communication safe hardware design.")
  (depends
   (ocaml (>= 4.14.0))
   (dune (>= 3.8))
