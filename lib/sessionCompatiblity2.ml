@@ -8,6 +8,7 @@ type product_input = {
   member_id : identifier;
   automaton : typeAutomaton;
   messages : MsgSet.t;
+  progress_ids : identifier list; (* Original members, including those hidden by composition. *)
 }
 
 let lookup_channel_class channel_classes class_id span =
@@ -107,7 +108,7 @@ let build_members message_sets session_ids verbose =
     if verbose then
       write_automaton_dot verbose
         (sanitize_filename member_id ^ "_generalized_v2_automaton.dot") automaton;
-    { member_id; automaton; messages }) session_ids
+    { member_id; automaton; messages; progress_ids = [member_id] }) session_ids
 
 let compose verbose name inputs =
   let all_messages, internal_messages = List.fold_left
@@ -128,7 +129,7 @@ let create_product ?(message_sets = []) session_ids verbose pool_id =
   product
 
 (* Stage the full product with internal messages hidden; retain progress and fair markers. *)
-let residual_input name product boundary_messages =
+let residual_input name product boundary_messages progress_ids =
   let visible_action = function
     | Clock -> Clock
     | Observations observations ->
@@ -143,59 +144,35 @@ let residual_input name product boundary_messages =
     transitions = List.map (fun t ->
       { t with action = visible_action t.action }) product.transitions;
   } in
-  { member_id = name; automaton; messages = boundary_messages }
+  { member_id = name; automaton; messages = boundary_messages; progress_ids }
 
-let check_stage verbose artifact_name progress_ids inputs =
-  let product, internal_messages, boundary_messages = compose verbose artifact_name inputs in
-  let arena = SessionGame2.build_arena artifact_name product in
+let explain_result name (game : SessionGame2.game_result) =
+  let message = if game.compatible then game.summary
+    else "Compatibility failed at " ^ name ^ ". " ^ game.summary in
+  let message = match game.counterexample_trace with
+    | None -> message
+    | Some trace -> message ^ "\n" ^ trace
+  in
+  (game.compatible, message)
+
+(* A residual is itself an input, retaining every original progress obligation. *)
+let check_compatibility_multiparty inputs pool_id verbose =
+  if inputs = [] then
+    raise (TypeError [Text ("Pool " ^ pool_id ^ " has no interface members")]);
+  let progress_ids = List.concat_map (fun input -> input.progress_ids) inputs in
+  let product, internal_messages, boundary_messages = compose verbose pool_id inputs in
+  let arena = SessionGame2.build_arena pool_id product in
   let game = SessionGame2.play_arena arena ~progress_ids in
-  let path = sanitize_filename artifact_name in
+  let path = sanitize_filename pool_id in
   write_automaton_dot verbose ("product_" ^ path ^ ".dot") product;
   SessionGame2.print_arena_dot ("arena_" ^ path ^ ".dot") arena;
   if verbose then (
     Printf.eprintf "Compatibility stage %s (I={%s}; B={%s}): %s\n"
-      artifact_name (string_of_msgset internal_messages)
+      pool_id (string_of_msgset internal_messages)
       (string_of_msgset boundary_messages) game.summary;
     Option.iter (fun trace -> Printf.eprintf "%s\n" trace) game.counterexample_trace);
-  let residual = residual_input artifact_name product boundary_messages in
+  let residual = residual_input pool_id product boundary_messages progress_ids in
   if game.compatible then
     write_automaton_dot verbose ("residual_" ^ path ^ ".dot") residual.automaton;
-  (residual, game)
-
-let check_compatibility_multiparty ?(sequential = false) ?(message_sets = [])
-    session_ids pool_id verbose =
-  let members = build_members message_sets session_ids verbose in
-  let explain name (game : SessionGame2.game_result) =
-    let message = if game.compatible then game.summary
-      else "Compatibility failed at " ^ name ^ ". " ^ game.summary in
-    let message = match game.counterexample_trace with
-      | None -> message
-      | Some trace -> message ^ "\n" ^ trace
-    in
-    (game.compatible, message)
-  in
-  match members with
-  | [] -> raise (TypeError [Text ("Pool " ^ pool_id ^ " has no interface members")])
-  | first :: rest when sequential && rest <> [] ->
-      let rec next_stage stage accumulated progress_ids consumed = function
-        | [] -> assert false
-        | next :: rest ->
-            let hidden = MsgSet.diff consumed accumulated.messages in
-            let reused = MsgSet.inter hidden next.messages in
-            if not (MsgSet.is_empty reused) then
-              raise (TypeError [Text (Printf.sprintf
-                "Sequential composition cannot add %s: {%s} are already internal to the accumulated product. Use mode 3 to compose these members together."
-                next.member_id (string_of_msgset reused))]);
-            let name = Printf.sprintf "%s_sequential_%d" pool_id stage in
-            let progress_ids = progress_ids @ [next.member_id] in
-            let residual, game = check_stage verbose name progress_ids [accumulated; next] in
-            if not game.compatible || rest = [] then explain name game
-            else next_stage (stage + 1) residual progress_ids
-              (MsgSet.union consumed next.messages) rest
-      in
-      next_stage 1 first [first.member_id] first.messages rest
-  | _ ->
-      let name = pool_id ^ (if sequential then "_sequential_1" else "_simultaneous") in
-      let progress_ids = List.map (fun input -> input.member_id) members in
-      let _, game = check_stage verbose name progress_ids members in
-      explain name game
+  let compatible, message = explain_result pool_id game in
+  (compatible, message, residual)

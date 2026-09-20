@@ -69,6 +69,36 @@ let generalized_type_debug _out config =
   ) pool_defs;
   Printf.eprintf "\n"
 
+(* Each stage checks the accumulated subsystem together with one new member. *)
+let sequential_compatibility members pool_id verbose =
+  let open SessionCompatiblity2 in
+  let open SessionAutomaton2 in
+  let rec next_stage stage accumulated consumed next rest =
+    let hidden = MsgSet.diff consumed accumulated.messages in
+    let reused = MsgSet.inter hidden next.messages in
+    if not (MsgSet.is_empty reused) then
+      raise (Except.TypeError [Except.Text (Printf.sprintf
+        "Sequential composition cannot add %s: {%s} are already internal to the accumulated product. Use mode 3 to compose these members together."
+        next.member_id (string_of_msgset reused))]);
+    let name = Printf.sprintf "%s_sequential_%d" pool_id stage in
+    let compatible, message, residual =
+      check_compatibility_multiparty [accumulated; next] name verbose in
+    if not compatible then (compatible, message)
+    else match rest with
+      | [] -> (compatible, message)
+      | next_member :: remaining ->
+          next_stage (stage + 1) residual
+            (MsgSet.union consumed next.messages) next_member remaining
+  in
+  match members with
+  | [] -> raise (Except.TypeError [Except.Text ("Pool " ^ pool_id ^ " has no interface members")])
+  | [member] ->
+      let name = pool_id ^ "_sequential_1" in
+      let compatible, message, _ = check_compatibility_multiparty [member] name verbose in
+      (compatible, message)
+  | first :: second :: rest ->
+      next_stage 1 first first.messages second rest
+
 let generalized_type_v2_debug ?(sequential = false) _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
@@ -124,8 +154,14 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
         if config.verbose then
           Printf.eprintf "Checking Pool %s (%d members, %s)\n"
             pool.d.pool_id (List.length session_ids) (String.lowercase_ascii mode);
-        SessionCompatiblity2.check_compatibility_multiparty ~sequential ~message_sets
-          session_ids pool.d.pool_id config.verbose
+        let members = SessionCompatiblity2.build_members message_sets session_ids config.verbose in
+        if sequential then
+          sequential_compatibility members pool.d.pool_id config.verbose
+        else
+          let compatible, message, _ =
+            SessionCompatiblity2.check_compatibility_multiparty members
+              (pool.d.pool_id ^ "_simultaneous") config.verbose in
+          (compatible, message)
       with
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
