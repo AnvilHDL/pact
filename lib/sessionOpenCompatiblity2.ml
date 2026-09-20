@@ -22,7 +22,7 @@ type open_pair_intersection = {
   shared_messages : MsgSet.t;
 }
 
-(* One incremental composition step: compose, solve the game, and on success hide the just-checked interface into the next step's residual. *)
+(* One whole-pool composition, its game result, and its optional residual. *)
 type open_step_result = {
   composition_name : string;
   residual_name : string;
@@ -124,25 +124,19 @@ let preprocessed_interface_type (pool_def : interface_pool_def ast_node)
   in
   SessionHelper.preprocess_session_type endpoint_mapping interface_def.d.body.d
 
-let add_member_progress_loop member_id auto =
-  TypeAutomaton.accepting_states auto
-  |> List.iter (fun final_state ->
-         TypeAutomaton.add_transition auto final_state auto.start_state
-           (progress_action member_id)
-           { any_guard with forbid_clock = false } MsgSet.empty);
-  recompute_state_summaries auto
-
 let create_member_context channel_classes session_defs
     (pool_def : interface_pool_def ast_node)
     (member : interface_mem_def ast_node) =
   match member.d.interface_def, member.d.interface_class_id with
   | Some session_ty, _ ->
-      let preprocessed_ty = preprocessed_direct_type member session_ty in
+      let preprocessed_ty =
+        preprocessed_direct_type member session_ty
+        |> repeat_with_progress member.d.inf_mem_id
+      in
       let preprocessed_node = { d = preprocessed_ty; span = member.span } in
       let automaton =
         build_automaton (Some member.d.inf_mem_id) preprocessed_ty member.span
       in
-      add_member_progress_loop member.d.inf_mem_id automaton;
       {
         member_id = member.d.inf_mem_id;
         preprocessed_type = preprocessed_node;
@@ -155,12 +149,12 @@ let create_member_context channel_classes session_defs
       | Some interface_def ->
           let preprocessed_ty =
             preprocessed_interface_type pool_def session_defs member interface_def
+            |> repeat_with_progress member.d.inf_mem_id
           in
           let preprocessed_node = { d = preprocessed_ty; span = member.span } in
           let automaton =
             build_automaton (Some member.d.inf_mem_id) preprocessed_ty member.span
           in
-          add_member_progress_loop member.d.inf_mem_id automaton;
           {
             member_id = member.d.inf_mem_id;
             preprocessed_type = preprocessed_node;
@@ -282,22 +276,13 @@ let all_messages_of_inputs inputs =
   |> msgset_union_list
 
 (* Open product reuses the SAME unified_product as closed/internal, driven with the open interface as its boundary (messages owned by ≥2 members are internal, the rest boundary). *)
-let build_open_product ?(verbose = false) name progress_ids inputs =
-  let automata = Array.map (fun input -> input.op_automaton) inputs in
+let build_open_product ?(verbose = false) name _progress_ids inputs =
+  let automata = inputs |> Array.to_list
+    |> List.map (fun input -> input.op_member_id, input.op_automaton) in
   let internal_messages = internal_messages_of_inputs inputs in
   let all_messages = all_messages_of_inputs inputs in
   let boundary_messages = MsgSet.diff all_messages internal_messages in
-  let dead_ends = ref [] in
-  let product =
-    unified_product ~progress_ids ~verbose ~dead_ends automata ~boundary_messages
-      ~use_env:true
-  in
-  (* Dead ends are not a hard error here (the game verdict decides compatibility); print for visibility instead of raising. *)
-  (match List.rev !dead_ends with
-  | [] -> ()
-  | ends ->
-      Printf.eprintf "[Open] product %s dead ends:\n%s\n%!" name
-        (String.concat "\n" ends));
+  let product = unified_product verbose automata boundary_messages internal_messages in
   TypeAutomaton.change_name name product;
   recompute_state_summaries product;
   (product, internal_messages, boundary_messages)
@@ -494,8 +479,7 @@ let print_open_arena_dot path arena =
     close_out_noerr out;
     raise exn
 
-(* composite ids are joined with '-', and the
-   newly added member is appended with '_': i1_i2, then i1-i2_i3, etc. *)
+(* Product names use '_'; residual names use '-'. *)
 let compose_name left right = left ^ "_" ^ right
 
 let residual_name left right = left ^ "-" ^ right
@@ -635,13 +619,15 @@ let build_residual_automaton residual_nm product internal_messages
         let offers = MsgSet.diff t.offers internal_messages in
         TypeAutomaton.add_transition_full ~boundary_now:boundary.be_now
           ~boundary_future:boundary.be_future ~offers
+          ~offers_pending:(MsgSet.diff t.offers_pending internal_messages)
+          ~future_offers:(MsgSet.diff t.maybe_offers internal_messages)
           ?transition_debug_info:t.transition_debug_info residual from_state
           to_state action guard))
     residual_edges;
   recompute_state_summaries residual;
   residual
 
-(* One incremental composition step: compose, build the arena, solve the game, and on success hide the internal interface into the next step's residual. *)
+(* Compose every supplied member, solve the game, and export a residual on success. *)
 let build_composition_step ?(verbose = false) composition_name residual_nm
     progress_ids inputs =
   let product, internal_messages, boundary_messages =
@@ -685,8 +671,7 @@ let build_composition_step ?(verbose = false) composition_name residual_nm
     },
     residual_input )
 
-(* Incremental composition: build i1_i2, solve, residual i1-i2, then compose
-   that residual with i3, and so on. Stop at the first failed step. *)
+(* All pool members participate in the same product and game. *)
 let build_open_artifacts ?(verbose = false) context =
   match context.members with
   | [] ->
@@ -694,68 +679,15 @@ let build_open_artifacts ?(verbose = false) context =
         (TypeError
            [ Text ("Pool " ^ context.pool_id ^ " has no interface members") ])
   | first :: rest ->
-      let steps = ref [] in
-      let composite_name = ref first.member_id in
-      let composite_input = ref (product_input_of_member first) in
-      let progress_ids = ref [ first.member_id ] in
-      let failed = ref false in
-      List.iter
-        (fun member ->
-          if not !failed then (
-            let next_input = product_input_of_member member in
-            let composition_name =
-              compose_name !composite_name member.member_id
-            in
-            let res_name = residual_name !composite_name member.member_id in
-            let new_progress = !progress_ids @ [ member.member_id ] in
-            let step, residual_input =
-              build_composition_step ~verbose composition_name res_name
-                new_progress
-                [| !composite_input; next_input |]
-            in
-            steps := !steps @ [ step ];
-            match residual_input with
-            | Some residual_input ->
-                composite_name := res_name;
-                composite_input := residual_input;
-                progress_ids := new_progress
-            | None -> failed := true))
-        rest;
-      (* A single-member pool has nothing to compose; still build its product. *)
-      if rest = [] then (
-        let product, internal_messages, boundary_messages =
-          build_open_product ~verbose first.member_id !progress_ids
-            [| !composite_input |]
-        in
-        let product_path = product_dot_path first.member_id in
-        write_automaton_dot ~verbose product_path product;
-        let arena = build_open_arena first.member_id product in
-        let arena_path = arena_dot_path first.member_id in
-        print_open_arena_dot arena_path arena;
-        let game_result = play_open_game arena ~progress_ids:!progress_ids in
-        Printf.printf "Open compatibility result for %s: %s\n" first.member_id
-          game_result.summary;
-        steps :=
-          [
-            {
-              composition_name = first.member_id;
-              residual_name = first.member_id;
-              step_progress_ids = !progress_ids;
-              step_internal_messages = internal_messages;
-              step_boundary_messages = boundary_messages;
-              step_product_dot_path = product_path;
-              step_arena_dot_path = arena_path;
-              step_residual_dot_path = None;
-              step_game_result = game_result;
-            };
-          ]);
-      context.step_results <- !steps;
-      context.product_dot_paths <-
-        List.map (fun step -> step.step_product_dot_path) !steps;
-      context.arena_dot_path <-
-        (match List.rev !steps with
-        | step :: _ -> Some step.step_arena_dot_path
-        | [] -> None)
+      let remaining_ids = List.map (fun member -> member.member_id) rest in
+      let progress_ids = first.member_id :: remaining_ids in
+      let composition_name = List.fold_left compose_name first.member_id remaining_ids in
+      let res_name = List.fold_left residual_name first.member_id remaining_ids in
+      let inputs = context.members |> List.map product_input_of_member |> Array.of_list in
+      let step, _ = build_composition_step ~verbose composition_name res_name progress_ids inputs in
+      context.step_results <- [step];
+      context.product_dot_paths <- [step.step_product_dot_path];
+      context.arena_dot_path <- Some step.step_arena_dot_path
 
 let first_line text =
   match String.split_on_char '\n' text with line :: _ -> line | [] -> text
@@ -814,5 +746,5 @@ let check_open_compatibility_multiparty channel_classes session_defs pool_def
       ( context,
         compatible,
         if compatible then
-          "Compatible: open winning strategy found for all composition steps."
+          "Compatible: open winning strategy found for all pool members."
         else "Open compatibility built no composition steps." )

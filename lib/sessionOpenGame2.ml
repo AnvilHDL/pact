@@ -147,7 +147,7 @@ let build_predecessor_index outgoing valid_region =
 
 (* Reachability attractor (least fixpoint, worklist-driven): nodes that can force reaching an ~is_good edge at least once — NOT sufficient for a Büchi/recurrence condition on its own, see compute_recurrence_region. *)
 let compute_reach_attractor ?(is_fair = fun (node : arena_node) -> node.arena_is_fair)
-    node_by_id outgoing ~is_good valid_region =
+    ?player_choices node_by_id outgoing ~is_good valid_region =
   let pred_index = build_predecessor_index outgoing valid_region in
   let attractor = ref StringSet.empty in
   let queued = Hashtbl.create 64 in
@@ -182,6 +182,11 @@ let compute_reach_attractor ?(is_fair = fun (node : arena_node) -> node.arena_is
           && List.for_all edge_good edges
       in
       if progresses then (
+        (* Record a move before adding this node, so an idle self-loop cannot win. *)
+        (match node.arena_node_kind, player_choices with
+        | ArenaPlayer, Some choices ->
+            Hashtbl.replace choices node_id (List.find edge_good edges)
+        | _ -> ());
         attractor := StringSet.add node_id !attractor;
         match Hashtbl.find_opt pred_index node_id with
         | Some preds -> List.iter enqueue preds
@@ -490,6 +495,65 @@ let find_progress_avoiding_lasso outgoing start winning req_ids =
                  cycle_start,
                  cycle ))
 
+(* Each removed layer either avoids the event or enters an earlier layer.
+   Keep every player move; select only the adversary's spoiling moves. *)
+let recurrence_counterstrategy node_by_id outgoing ~is_fair ~is_good all_nodes =
+  let region = ref all_nodes in
+  let restricted = Hashtbl.create (StringSet.cardinal all_nodes) in
+  let changed = ref true in
+  while !changed do
+    let next =
+      compute_reach_attractor ~is_fair node_by_id outgoing ~is_good !region
+    in
+    let removed = StringSet.diff !region next in
+    StringSet.iter (fun node_id ->
+      let node = Hashtbl.find node_by_id node_id in
+      let edges = arena_outgoing outgoing node_id in
+      let keep_all = match node.arena_node_kind with
+        | ArenaPlayer -> true
+        | ArenaAdversary -> is_fair node
+        | ArenaFail -> false
+      in
+      let spoiling =
+        if keep_all then edges
+        else
+          match List.find_opt (fun edge ->
+            not (StringSet.mem edge.arena_edge_to !region)
+            || (StringSet.mem edge.arena_edge_to removed && not (is_good edge))) edges with
+          | Some edge -> [edge]
+          | None -> []
+      in
+      Hashtbl.add restricted node_id spoiling) removed;
+    changed := not (StringSet.is_empty removed);
+    region := next
+  done;
+  (!region, restricted)
+
+(* Show progress starvation while the environment still forces recurring clocks. *)
+let with_clock_strategy node_by_id outgoing all_nodes =
+  let region = compute_clock_attractor node_by_id outgoing all_nodes in
+  let choices = Hashtbl.create (StringSet.cardinal region) in
+  ignore (compute_reach_attractor ~is_fair:(fun _ -> false)
+    ~player_choices:choices node_by_id outgoing ~is_good:edge_is_clock region
+    : StringSet.t);
+  let restricted = Hashtbl.create (StringSet.cardinal region) in
+  StringSet.iter (fun node_id ->
+    let edges = match Hashtbl.find_opt choices node_id with
+      | Some edge -> [edge]
+      | None -> arena_outgoing outgoing node_id
+    in
+    Hashtbl.add restricted node_id edges) region;
+  restricted
+
+let cycle_respects_fairness node_by_id outgoing cycle =
+  List.for_all (fun edge ->
+    let node = Hashtbl.find node_by_id edge.arena_edge_from in
+    match node.arena_node_kind with
+    | ArenaAdversary when node.arena_is_fair ->
+        List.for_all (fun branch -> List.mem branch cycle)
+          (arena_outgoing outgoing node.arena_node_id)
+    | _ -> true) cycle
+
 let print_node_context buffer node_by_id winning node_id =
   let node = Hashtbl.find node_by_id node_id in
   let win = StringSet.mem node_id winning in
@@ -505,50 +569,58 @@ let print_edge_step buffer node_by_id winning current edge =
   Printf.bprintf buffer "\n --[%s]--> " (string_of_edge_label edge.arena_edge_label);
   edge.arena_edge_to
 
-(* Prefer a clock-starvation witness first, then a progress-avoiding cycle, then the generic arbitrary-successor walk (mirrors sessionGame2.find_counterexample_indexed). *)
+(* A cycle explains rejection only when the adversary can sustain the failure. *)
 let find_counterexample node_by_id outgoing winning start req_ids =
-  match find_clock_avoiding_lasso outgoing start winning with
-  | Some (prefix, cycle_start, cycle) ->
+  let all_nodes = Hashtbl.fold (fun id _ acc -> StringSet.add id acc)
+    node_by_id StringSet.empty in
+  let clock_winning, clock_spoiler =
+    recurrence_counterstrategy node_by_id outgoing ~is_fair:(fun _ -> false)
+      ~is_good:edge_is_clock all_nodes
+  in
+  let witness =
+    if not (StringSet.mem start clock_winning) then
+      find_clock_avoiding_lasso clock_spoiler start clock_winning
+      |> Option.map (fun (prefix, cycle_start, cycle) ->
+        ("Clock-starvation counterexample: the adversary can eventually prevent every #.\n",
+         "#", prefix, cycle_start, cycle))
+    else
+      List.find_map (fun req_id ->
+        let progress_winning, progress_spoiler =
+          recurrence_counterstrategy node_by_id outgoing
+            ~is_fair:(fun node -> node.arena_is_fair)
+            ~is_good:(fun edge -> StringSet.mem req_id (edge_progress_ids edge))
+            all_nodes
+        in
+        if StringSet.mem start progress_winning then None
+        else
+          let losing = StringSet.diff all_nodes progress_winning in
+          let clocked = with_clock_strategy node_by_id progress_spoiler losing in
+          match find_progress_avoiding_lasso clocked start progress_winning [req_id] with
+          | Some (req_id, prefix, cycle_start, cycle)
+            when cycle_respects_fairness node_by_id outgoing cycle ->
+              Some (Printf.sprintf
+                "Progress-starvation counterexample: the adversary can eventually prevent $%s. This play keeps clocks recurring.\n"
+                req_id, "$" ^ req_id, prefix, cycle_start, cycle)
+          | _ -> None) req_ids
+  in
+  match witness with
+  | Some (description, avoided, prefix, cycle_start, cycle) ->
       let buffer = Buffer.create 512 in
-      Printf.bprintf buffer
-        "Clock-starvation counterexample: repeat the cycle below forever without ever taking #.\n";
+      Buffer.add_string buffer description;
       let current = ref start in
       if prefix <> [] then Printf.bprintf buffer "\nPrefix to the avoiding cycle:\n";
-      List.iter
-        (fun edge -> current := print_edge_step buffer node_by_id winning !current edge)
-        prefix;
-      Printf.bprintf buffer "\nCycle avoiding # starts at %s:\n" cycle_start;
+      List.iter (fun edge ->
+        current := print_edge_step buffer node_by_id winning !current edge) prefix;
+      Printf.bprintf buffer "\nCycle avoiding %s starts at %s:\n" avoided cycle_start;
       current := cycle_start;
-      List.iter
-        (fun edge -> current := print_edge_step buffer node_by_id winning !current edge)
-        cycle;
-      Printf.bprintf buffer "Back to %s without taking #.\n" cycle_start;
+      List.iter (fun edge ->
+        current := print_edge_step buffer node_by_id winning !current edge) cycle;
+      Printf.bprintf buffer "Back to %s without taking %s.\n" cycle_start avoided;
       Buffer.contents buffer
-  | None -> (
-      match find_progress_avoiding_lasso outgoing start winning req_ids with
-      | Some (req_id, prefix, cycle_start, cycle) ->
-          let buffer = Buffer.create 512 in
-          Printf.bprintf buffer
-            "Liveness counterexample: repeat the cycle below forever to avoid progress $%s.\n"
-            req_id;
-          let current = ref start in
-          if prefix <> [] then
-            Printf.bprintf buffer "\nPrefix to the avoiding cycle:\n";
-          List.iter
-            (fun edge ->
-              current := print_edge_step buffer node_by_id winning !current edge)
-            prefix;
-          Printf.bprintf buffer "\nCycle avoiding $%s starts at %s:\n" req_id
-            cycle_start;
-          current := cycle_start;
-          List.iter
-            (fun edge ->
-              current := print_edge_step buffer node_by_id winning !current edge)
-            cycle;
-          Printf.bprintf buffer "Back to %s without taking $%s.\n" cycle_start
-            req_id;
-          Buffer.contents buffer
-      | None -> losing_trace node_by_id outgoing winning start)
+  | None ->
+      "No joint winning strategy for clock and progress recurrence.\n\
+       No certified cycle was reconstructed; the following walk is illustrative.\n"
+      ^ losing_trace node_by_id outgoing winning start
 
 let play_open_game arena ~progress_ids =
   let node_by_id = node_table arena in

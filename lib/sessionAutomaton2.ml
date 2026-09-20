@@ -144,7 +144,7 @@ let guard_satisfied env g universe =
     let require_now_ok = MsgSet.subset projected_require_now env.imm in
     let forbid_now_ok = (MsgSet.is_empty (MsgSet.inter projected_forbid_now env.imm)) in
     let require_clock_ok = not g.require_clock || env.clock in
-    let forbid_clock_ok = true in  (*this guard requires env to forbid clock and its always satisfiable*)
+    let forbid_clock_ok = not g.forbid_clock || not env.clock in
     let future_disjoint_ok = MsgSet.is_empty (MsgSet.inter projected_future_disjoint env.future) in
     let future_members_ok = MsgSet.subset projected_future_members env.future in
     require_now_ok
@@ -201,14 +201,15 @@ type transition = {
   from_state : int;
   to_state : int;
   action : action;
-  guard : guard; (*Env*)
-  boundary_now : MsgSet.t;
+  guard : guard; (* Remaining symbolic environment constraints. *)
+  boundary_now : MsgSet.t; (* Required boundary messages, not a concrete choice. *)
   boundary_future : MsgSet.t;
-  boundary_guard : guard; (* pending boundary part of the guard; `guard` keeps the FULL merged guard for closed game/dead-end analysis *)
+  boundary_guard : guard; (* Boundary projection of the remaining guard. *)
   internal_action : action; (* `action` projected onto internal_messages; debug only, epsilon if no internal component *)
   offers : MsgSet.t;
   offers_pending : MsgSet.t; (* effective offer is this intersected with F *)
   mutable maybe_offers : MsgSet.t;
+  future_offers : MsgSet.t option; (* A product keeps its synchronized future field. *)
   mutable in_winning : bool;
   transition_debug_info : string option;
 }
@@ -331,7 +332,7 @@ module TypeAutomaton = struct
   let add_transition_full ?(boundary_now = MsgSet.empty)
       ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard)
       ?internal_action ?(offers = MsgSet.empty) ?(offers_pending = MsgSet.empty)
-      ?transition_debug_info auto
+      ?future_offers ?transition_debug_info auto
       from_state to_state action guard =
     let trans =
       {
@@ -343,7 +344,8 @@ module TypeAutomaton = struct
         boundary_future;
         boundary_guard;
         internal_action = Option.value internal_action ~default:action;
-        maybe_offers = MsgSet.empty;
+        maybe_offers = Option.value future_offers ~default:MsgSet.empty;
+        future_offers;
         offers;
         offers_pending;
         in_winning = false;
@@ -454,9 +456,7 @@ let recompute_state_summaries auto =
     auto.states;
   List.iter
     (fun t ->
-      let offered =
-        if MsgSet.is_empty t.offers then action_messages t.action else t.offers
-      in
+      let offered = t.offers in
       if not (MsgSet.is_empty offered) then (
         let st = Hashtbl.find auto.states t.from_state in
         st.head <- MsgSet.union st.head offered;
@@ -488,8 +488,13 @@ let recompute_state_summaries auto =
   done;
   List.iter
     (fun t ->
-      let to_st = Hashtbl.find auto.states t.to_state in
-      t.maybe_offers <- MsgSet.diff to_st.maybe_ready t.offers)
+      t.maybe_offers <-
+        if transition_is_clock t then MsgSet.empty
+        else match t.future_offers with
+        | Some future -> future
+        | None ->
+            let to_st = Hashtbl.find auto.states t.to_state in
+            MsgSet.diff to_st.maybe_ready t.offers)
     auto.transitions
 
 (* Splice a separately built automaton into an existing builder graph. *)
@@ -525,6 +530,8 @@ let import_automaton_into ~dst ~src ~at_start =
         ~boundary_guard:t.boundary_guard
         ~offers:t.offers
         ~offers_pending:t.offers_pending
+        ?future_offers:t.future_offers
+        ~internal_action:t.internal_action
         ?transition_debug_info:t.transition_debug_info dst
         (Hashtbl.find state_map t.from_state)
         (Hashtbl.find state_map t.to_state)
@@ -552,7 +559,7 @@ let merge_guards guards =
       {
         require_now = MsgSet.union acc.require_now guard.require_now;
         forbid_now = MsgSet.union acc.forbid_now guard.forbid_now;
-        require_clock = acc.require_clock && guard.require_clock;
+        require_clock = acc.require_clock || guard.require_clock;
         forbid_clock = acc.forbid_clock || guard.forbid_clock;
         future_disjoint = MsgSet.union acc.future_disjoint guard.future_disjoint;
         future_members = MsgSet.union acc.future_members guard.future_members;
@@ -564,31 +571,204 @@ let add_progress_transition auto from_state to_state ids =
   TypeAutomaton.add_transition auto from_state to_state action
     any_guard  MsgSet.empty
 
-(* Unified synchronous product (internal parallel/closed/open): boundary_messages ride the open boundary (empty for closed/internal); internal_messages must be paired by ≥2 components; use_env computes environments from partner Head/MaybeReady, else plain cartesian product. *)
-let unified_product ?progress_ids ?(verbose = false) ?dead_ends automata
-    ~boundary_messages ~use_env =
-    let _ = progress_ids in
-    let _ = dead_ends in
-    let _ = verbose in
-    let _ = use_env in
-    let _ = automata in
-    let _ = boundary_messages in
-    let open Except in
-    raise (Except.UnimplementedError ([Text "unified_product is not yet implemented"]))
+(* Only internal constraints are discharged here; boundary guards stay symbolic. *)
+let project_guard messages g = {
+  g with
+  require_now = MsgSet.inter messages g.require_now;
+  forbid_now = MsgSet.inter messages g.forbid_now;
+  future_disjoint = MsgSet.inter messages g.future_disjoint;
+  future_members = MsgSet.inter messages g.future_members;
+}
 
+let guard_is_consistent g =
+  MsgSet.disjoint g.require_now g.forbid_now
+  && MsgSet.disjoint g.future_members g.future_disjoint
+  && MsgSet.disjoint g.require_now g.future_members
+  && not (g.require_clock && g.forbid_clock)
+  && (not g.require_clock
+      || (MsgSet.is_empty g.require_now && MsgSet.is_empty g.future_members))
 
-
-let closed_product ?progress_ids ?(verbose = false) ?dead_ends automata
-    sync_messages =
-  (* Closed product: all messages except those explicitly in sync_messages are boundary. *)
-  let all_messages =
-    Array.fold_left
-      (fun acc auto -> MsgSet.union acc auto.total_message_set)
-      MsgSet.empty automata
+let transitions_satisfy_sync transitions current_offers future_offers internal_messages =
+  let active = ref 0 and clocks = ref 0 in
+  let messages = ref MsgSet.empty and paired = ref MsgSet.empty in
+  Array.iter (function
+    | None -> ()
+    | Some t ->
+        incr active;
+        if transition_is_clock t then incr clocks;
+        let local = MsgSet.inter internal_messages (action_messages t.action) in
+        paired := MsgSet.union !paired (MsgSet.inter !messages local);
+        messages := MsgSet.union !messages local)
+    transitions;
+  let clock = !clocks > 0 in
+  let rec check i =
+    if i = Array.length transitions then true
+    else match transitions.(i) with
+    | None -> check (i + 1)
+    | Some t ->
+        let now = ref MsgSet.empty and future = ref MsgSet.empty in
+        Array.iteri (fun j _ ->
+          if i <> j then (
+            now := MsgSet.union !now current_offers.(j);
+            future := MsgSet.union !future future_offers.(j))) transitions;
+        let imm = MsgSet.inter internal_messages !now in
+        let future = MsgSet.diff (MsgSet.inter internal_messages !future) imm in
+        let env = { imm; future; clock } in
+        let expected = MsgSet.inter internal_messages
+          (TypeAutomaton.effective_offers env t) in
+        MsgSet.equal expected (MsgSet.inter internal_messages current_offers.(i))
+        && guard_satisfied env t.guard internal_messages
+        && check (i + 1)
   in
-  let boundary_messages = MsgSet.diff all_messages sync_messages in
-  unified_product ?progress_ids ~verbose ?dead_ends automata ~boundary_messages
-    ~use_env:true
+  (!clocks = 0 || !clocks = !active)
+  && MsgSet.subset !messages !paired
+  && check 0
+
+(* Pending internal offers depend on peer futures. Search their possible slices;
+   every successful slice has the same remaining symbolic boundary fields. *)
+let get_satisfied_symbolic_transitions transitions boundary_messages internal_messages =
+  let current_offers = Array.map
+    (function None -> MsgSet.empty | Some t -> t.offers) transitions in
+  let future_offers = Array.map
+    (function None -> MsgSet.empty | Some t -> t.maybe_offers) transitions in
+  let rec resolve i =
+    if i = Array.length transitions then
+      transitions_satisfy_sync transitions current_offers future_offers internal_messages
+    else match transitions.(i) with
+    | None -> resolve (i + 1)
+    | Some t ->
+        let pending = MsgSet.inter internal_messages t.offers_pending in
+        if MsgSet.is_empty pending then resolve (i + 1)
+        else List.exists (fun slice ->
+          current_offers.(i) <- MsgSet.union t.offers slice;
+          future_offers.(i) <-
+            if transition_is_clock t then MsgSet.empty
+            else MsgSet.diff t.maybe_offers slice;
+          resolve (i + 1)) (powerset pending)
+  in
+  if not (resolve 0) then None
+  else
+    let guards = Array.fold_left (fun acc -> function
+      | None -> acc
+      | Some t -> project_guard boundary_messages t.guard :: acc) [] transitions in
+    let clock = Array.exists
+      (function Some t -> transition_is_clock t | None -> false) transitions in
+    let guard = merge_guards
+      ({ any_guard with require_clock = clock; forbid_clock = not clock } :: guards) in
+    if not (guard_is_consistent guard) then None
+    else
+      let observations = Array.fold_left (fun acc -> function
+        | Some { action = Observations obs; _ } -> ObservationSet.union acc obs
+        | _ -> acc) ObservationSet.empty transitions in
+      let action = if clock then Clock else Observations observations in
+      let internal_action = if clock then Clock else Observations
+        (ObservationSet.filter
+          (function Message msg -> MsgSet.mem msg internal_messages | _ -> false)
+          observations) in
+      let union_offers = Array.fold_left MsgSet.union MsgSet.empty in
+      let offers = if clock then MsgSet.empty
+        else MsgSet.inter boundary_messages (union_offers current_offers) in
+      let offers_pending = if clock then MsgSet.empty else
+        Array.fold_left (fun acc -> function
+          | None -> acc
+          | Some t -> MsgSet.union acc (MsgSet.inter boundary_messages t.offers_pending))
+          MsgSet.empty transitions |> fun pending -> MsgSet.diff pending offers in
+      let future = if clock then MsgSet.empty else
+        MsgSet.diff (MsgSet.inter boundary_messages (union_offers future_offers)) offers in
+      Some {
+        from_state = -1; to_state = -1; (* Filled by the BFS caller. *)
+        action; guard; boundary_guard = guard;
+        boundary_now = guard.require_now; boundary_future = guard.future_members;
+        internal_action; offers; offers_pending;
+        maybe_offers = future; future_offers = Some future;
+        in_winning = false; transition_debug_info = None;
+      }
+
+(* automata contains (id, automaton) pairs. None marks a finished component. *)
+let unified_product verbose automata boundary_messages internal_messages =
+  let automata_array = Array.of_list (List.map snd automata) in
+  let automata_ids = Array.of_list (List.map fst automata) in
+  let num_automata = Array.length automata_array in
+  Array.iter recompute_state_summaries automata_array;
+  let automata_outgoing_transitions = Array.map
+    (fun auto -> build_outgoing_index auto.transitions) automata_array in
+  let product_automaton = TypeAutomaton.create
+    (MsgSet.union boundary_messages internal_messages) in
+  let worklist = Queue.create () in
+  let product_state_map = Hashtbl.create 100 in
+  let active_state i state_id =
+    if (Hashtbl.find automata_array.(i).states state_id).accepting then None
+    else Some state_id
+  in
+  let init_state_vector_opt = Array.mapi
+    (fun i auto -> active_state i auto.start_state) automata_array in
+  let initialize_state vector state_id =
+    let state = Hashtbl.find product_automaton.states state_id in
+    state.accepting <- Array.for_all Option.is_none vector;
+    let components = ref [] in
+    Array.iteri (fun i -> function
+      | None -> ()
+      | Some q ->
+          let local = Hashtbl.find automata_array.(i).states q in
+          state.adversary <- state.adversary || local.adversary;
+          state.is_fair <- state.is_fair || local.is_fair;
+          components := { pc_name = automata_ids.(i); pc_state = q;
+                          pc_residual = local.residual_type } :: !components) vector;
+    set_product_state_debug product_automaton state_id (List.rev !components);
+    if state.accepting then state.residual_type <- Some (string_of_protocol StySkip)
+  in
+  let intern vector =
+    match Hashtbl.find_opt product_state_map vector with
+    | Some state_id -> state_id
+    | None ->
+        let state_id = TypeAutomaton.new_state product_automaton false in
+        (* Vectors used as keys are never mutated; they contain only optional IDs. *)
+        Hashtbl.add product_state_map vector state_id;
+        initialize_state vector state_id;
+        Queue.add (vector, state_id) worklist;
+        state_id
+  in
+  Hashtbl.add product_state_map init_state_vector_opt product_automaton.start_state;
+  initialize_state init_state_vector_opt product_automaton.start_state;
+  Queue.add (init_state_vector_opt, product_automaton.start_state) worklist;
+  let picked = Array.make num_automata None in
+  while not (Queue.is_empty worklist) do
+    let vector, from_state = Queue.take worklist in
+    let emitted = Hashtbl.create 16 in
+    let rec pick i =
+      if i = num_automata then (
+        match get_satisfied_symbolic_transitions picked boundary_messages internal_messages with
+        | None -> ()
+        | Some symbolic ->
+            let next = Array.mapi (fun j -> function
+              | None -> None
+              | Some t -> active_state j t.to_state) picked in
+            let to_state = intern next in
+            let key = (to_state, symbolic.action, symbolic.guard, symbolic.offers,
+                       symbolic.offers_pending, symbolic.maybe_offers) in
+            if not (Hashtbl.mem emitted key) then (
+              Hashtbl.add emitted key ();
+              product_automaton.transitions <-
+                { symbolic with from_state; to_state } :: product_automaton.transitions))
+      else match vector.(i) with
+      | None -> picked.(i) <- None; pick (i + 1)
+      | Some state_id ->
+          List.iter (fun t -> picked.(i) <- Some t; pick (i + 1))
+            (get_outgoing_from_index automata_outgoing_transitions.(i) state_id)
+    in
+    pick 0;
+    if verbose && Hashtbl.length emitted = 0 then
+      Printf.eprintf "Product state %d has no synchronized successor.\n%!" from_state
+  done;
+  recompute_state_summaries product_automaton;
+  if verbose then Printf.eprintf "Unified product: %d reachable states, %d transitions\n%!"
+    (Hashtbl.length product_automaton.states) (List.length product_automaton.transitions);
+  product_automaton
+
+let closed_product verbose automata sync_messages =
+  let all_messages = List.fold_left
+    (fun acc (_, auto) -> MsgSet.union acc auto.total_message_set) MsgSet.empty automata in
+  unified_product verbose automata (MsgSet.diff all_messages sync_messages) sync_messages
 
 (* Local parallel product exposes component messages instead of synchronizing them. *)
 (* Add unguarded epsilon self-loops to all accepting states (for internal parallel preprocessing). *)

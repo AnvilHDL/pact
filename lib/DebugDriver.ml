@@ -45,13 +45,14 @@ let generalized_type_debug _out config =
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
   if config.verbose then Printf.eprintf "\nPool Compatiblity Checks:\n\n";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-if config.verbose then
-    Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
     let open SessionCompatiblityv3 in
     
     (* Preprocess the pool to get session_ids with unified endpoints *)
     let session_ids = SessionHelper.preprocess_pool_for_compatibility 
         pool session_type_defs in
+    if config.verbose then
+      Printf.eprintf "Checking Pool %s (%d members together)\n"
+        pool.d.pool_id (List.length session_ids);
 
       (* Printf.eprintf "Session IDs in Pool %s: \n" pool.d.pool_id;
       List.iter (fun (st_node, intf_id) ->
@@ -91,7 +92,11 @@ let generalized_type_v2_debug _out config =
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
     try
-      let gen_type = SessionBuildAutomaton2.build_automaton None sdef.d.body.d sdef.d.body.span in
+      let repeated_type =
+        SessionBuildAutomaton2.repeat_with_progress sdef.d.name sdef.d.body.d
+      in
+      let gen_type = SessionBuildAutomaton2.build_automaton
+        (Some sdef.d.name) repeated_type sdef.d.body.span in
       let out_channel = Printf.sprintf "generalizedv2_type_%s.dot" sdef.d.name in
       let out = open_out out_channel in
       SessionAutomaton2.print_automaton_dot gen_type out;
@@ -107,10 +112,11 @@ let generalized_type_v2_debug _out config =
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
   if config.verbose then Printf.eprintf "\nGeneralized Type v2 Pool Compatiblity Checks:\n\n";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-    if config.verbose then
-      Printf.eprintf "Checking Pool %s  \n" pool.d.pool_id;
     let session_ids = SessionHelper.preprocess_pool_for_compatibility
         pool session_type_defs in
+    if config.verbose then
+      Printf.eprintf "Checking Pool %s (%d members together)\n"
+        pool.d.pool_id (List.length session_ids);
     let compat, err = try SessionCompatiblity2.check_compatibility_multiparty session_ids pool.d.pool_id config.verbose
       with
       | Except.TypeError msg ->
@@ -145,6 +151,9 @@ let open_compatibility_v2_debug _out config =
   Printf.eprintf "\nOpen Compatibility:\n\n";
   List.iter
     (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
+      if config.verbose then
+        Printf.eprintf "Checking Open Pool %s (%d members together)\n"
+          pool.d.pool_id (List.length pool.d.interface_members);
       let compat, err =
         try
           let context, compat, err =

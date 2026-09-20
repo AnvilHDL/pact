@@ -66,9 +66,9 @@ def run_compat(file,mode):
     print("Running compatibility check on file: " + file_base)
     compat_temp_log = os.path.join(EXAMPLE_DIR, "compat_temp.txt")
     relative_file = os.path.relpath(file, BASE_DIR)
-    # dune exec anvil -- -debug-choice 3 session_examples/test_positive_compat.anvil
+    # dune exec pact -- -debug-choice 3 session_examples/test_positive_compat.anvil
 
-    command = ["dune", "exec", "anvil", "--", "-debug-choice", str(mode), relative_file]
+    command = ["dune", "exec", "pact", "--", "-debug-choice", str(mode), relative_file]
     with open(compat_temp_log, 'w') as f:
         subprocess.run(command, stdout=f, stderr=subprocess.STDOUT, cwd=BASE_DIR) 
 
@@ -105,12 +105,12 @@ def summarize_results(results):
         return Result.Error
 
 if __name__ == "__main__":
-    mode = 3
+    mode = 4
     type_files = EXAMPLES
     if os.sys.argv[1:]:
         mode = int(os.sys.argv[1])
     else:
-        print("No mode specified, defaulting to mode 3 (compatibility check).")
+        print("No mode specified, defaulting to mode 4 (compatibility check).")
     os.system("rm -rf " + ERROR_DIR)
     compat_count = 0
     incompat_count = 0

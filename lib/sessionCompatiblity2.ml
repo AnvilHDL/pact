@@ -17,16 +17,10 @@ let create_product
   let automata_with_ids =
     List.map
       (fun (session_node, intf_id) ->
+        let repeated_type = repeat_with_progress intf_id session_node.d in
         let auto =
-          build_automaton (Some intf_id) session_node.d session_node.span
+          build_automaton (Some intf_id) repeated_type session_node.span
         in
-        TypeAutomaton.accepting_states auto
-        |> List.iter (fun final_state ->
-               (* Each member emits its interface ID when one protocol iteration ends. *)
-               TypeAutomaton.add_transition auto final_state auto.start_state
-                 (progress_action intf_id)
-                 { any_guard with forbid_clock = false } MsgSet.empty);
-        recompute_state_summaries auto;
         if verbose then (
           let out = open_out (intf_id ^ "_generalized_v2_automaton.dot") in
           print_automaton_dot auto out;
@@ -45,19 +39,8 @@ let create_product
           " Generalized Type v2 automaton %s: states=%d transitions=%d\n" intf_id
           (Hashtbl.length auto.states) (List.length auto.transitions))
       automata_with_ids);
-  let automata = automata_with_ids |> List.map fst |> Array.of_list in
-  let ids = List.map snd automata_with_ids in
-  let dead_ends = ref [] in
-  let product =
-    closed_product ~progress_ids:ids ~verbose ~dead_ends automata sync_messages
-  in
-  (* Dead ends are the normal closed incompatibility mechanism (the game reports
-     Incompatible), so print the diagnostic rather than raising. *)
-  (match List.rev !dead_ends with
-  | [] -> ()
-  | ends ->
-      Printf.eprintf "Pool %s product dead ends:\n%s\n%!" pool_id
-        (String.concat "\n" ends));
+  let automata = List.map (fun (auto, id) -> id, auto) automata_with_ids in
+  let product = closed_product verbose automata sync_messages in
   if verbose then (
     Printf.eprintf
       "Generalized Type v2 product construction completed for pool %s: states=%d transitions=%d\n"

@@ -14,13 +14,13 @@
 
 // // // interface i8 (ep : right ch) = ep.m1;ep.m2;#1
 
-// // // // pool p0 {
-// // // //     ep_le -- ep_ri : ch;
-// // // //     ip01 : ep.m1 ; ep.m2 ; #1,
-// // // //     ip02 : ep.m1 ; #1,
-// // // //     ip03 : ep.m3 ; #1,
-// // // //     ip04 : ep.m2;ep.m3;#1
-// // // // }
+// pool p0 {
+//     ep_le -- ep_ri : ch;
+//     ip01 : ep.m1 ; ep.m2 ; #1,
+//     ip02 : ep.m1 ; #1,
+//     ip03 : ep.m3 ; #1,
+//     ip04 : ep.m2;ep.m3;#1
+// }
 
 // // // // pool p1 { // true
 // // // //     ep_le -- ep_ri : ch;
@@ -178,14 +178,14 @@
 // }
 
 
-pool p16{
-    ep_le -- ep_ri : ch;
-    ip161 : ep.m1;^(ep.m2,ep.m3);#1,
-    ip162 : ep.m1;#1,
-    ip163 : ^(ep.m2,*);#2,
-    ip164 : ^(ep.m3,*);#3
+// pool p16{
+//     ep_le -- ep_ri : ch;
+//     ip161 : ep.m1;^(ep.m2,ep.m3);#1,
+//     ip162 : ep.m1;#1,
+//     ip163 : ^(ep.m2,*);#2,
+//     ip164 : ^(ep.m3,*);#3
 
-}
+// }
 
 // pool p12{
 //     ep_le -- ep_ri : ch;
@@ -193,5 +193,13 @@ pool p16{
 //     in122 : (ep.m1||ep.m2);#1
 // }
 
-interface i1 (ep : left ch) = (#ep.m1 || #ep.m2);#1
-interface i2 (ep : right ch) = ^(ep.m1,ep.m2) ;#1
+// interface i1 (ep : left ch) = (#ep.m1 || #ep.m2);#1
+// interface i2 (ep : right ch) = ^(ep.m1,ep.m2) ;#1
+
+pool p15 { // false
+    ep_le -- ep_ri : ch;
+    in151 : ep.m1;&(ep.m2,ep.m3);#1,
+    in152 : ep.m1;#1,
+    in153 : ^(ep.m2,*);#1,
+    in154 : ^(ep.m3,*);#1
+}

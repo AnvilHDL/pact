@@ -48,10 +48,17 @@ let continuation_or_true (offering : offering_session_type) =
   | Some cont -> cont
   | None -> StySkip
 
+let delay_then ticks residual =
+  if ticks <= 0 then residual else StySeq (StyAtom (AtomDelay ticks), residual)
+
 let wildcard_continuation_opt offerings =
-  offerings
-  |> List.find_opt (fun off -> trigger_is_wildcard off.trigger)
-  |> Option.map continuation_or_true
+  (* Plain wildcards have delay zero; blocking defaults retain their tick. *)
+  List.find_map
+    (fun off ->
+      match off.trigger with
+      | AtomDelay ticks -> Some (delay_then ticks (continuation_or_true off))
+      | _ -> None)
+    offerings
 
 (* Fresh recursion variables for desugared blocking actions. *)
 (* A blocking offer with no else arm is mu X . offer(B) else #;X. The inner
@@ -87,12 +94,39 @@ let fresh_future_rec_var () =
   incr future_rec_counter;
   Printf.sprintf "__future_%d" !future_rec_counter
 
+(* Wrap a top-level type once: mu X . ((body; $member_id); X). *)
+let repeat_with_progress member_id body =
+  let rec variables acc = function
+    | StyVar id -> StringSet.add id acc
+    | StyRec (id, body) | StyForall (_, id, _, body, _) ->
+        variables (StringSet.add id acc) body
+    | StyLet (id, definition, body) ->
+        variables (variables (StringSet.add id acc) definition) body
+    | StySeq (a, b) | StyChoice (a, b) | StyParallel (a, b) ->
+        variables (variables acc a) b
+    | StyFuture body | StyAtom (AtomTerminal body) -> variables acc body
+    | StyOffer offerings | StyXOffer offerings ->
+        List.fold_left (fun acc off ->
+          let acc = match off.trigger with
+            | AtomTerminal body -> variables acc body
+            | _ -> acc
+          in
+          match off.continuation with
+          | Some body -> variables acc body
+          | None -> acc) acc offerings
+    | StySkip | StyEnd _ | StyAtom _ -> acc
+  in
+  let used = variables StringSet.empty body in
+  let rec fresh n =
+    let id = Printf.sprintf "__repeat_%d" n in
+    if StringSet.mem id used then fresh (n + 1) else id
+  in
+  let rec_var = fresh 0 in
+  StyRec (rec_var, StySeq (StySeq (body, StyEnd member_id), StyVar rec_var))
+
 let parallel_of_list = function
   | [] -> StySkip
   | first :: rest -> List.fold_left (fun acc ty -> StyParallel (acc, ty)) first rest
-
-let delay_then ticks residual =
-  if ticks <= 0 then residual else StySeq (StyAtom (AtomDelay ticks), residual)
 
 let xoffer_else_guard ?(require_clock = false) branch_acts head_set =
   (* Else resolves only after branch heads are absent now and later this cycle. *)
@@ -239,33 +273,53 @@ let rec build_automaton (name : identifier option) (st : session_type)
       let prog_act = progress_action id in
       TypeAutomaton.add_transition auto current final prog_act {any_guard with forbid_clock = true} MsgSet.empty;
         [ final ] 
-    | StyAtom (AtomicAct act) when action_is_blocking act ->
-        (* A blocking action is mu X . xoffer(a, #;X). *)
-        let msg = msg_of_action act in
-        let rec_var = fresh_blocking_rec_var () in
-        let retry = StyVar rec_var in
-        let expansion =
-          StyRec (rec_var,
-            StyXOffer [
-              { trigger = AtomicAct (AtomNBMsg msg); continuation = None };
-              { trigger = AtomDelay 1; continuation = Some retry };
-            ])
-        in
-        build expansion current rec_env let_env
     | StyAtom (AtomicAct act) ->
         mark_nonfinal ();
         let msg = msg_of_action act in
         let msg_set = MsgSet.singleton msg in
+        let blocking = action_is_blocking act in
         let action = message_action msg in
         let next = TypeAutomaton.new_state auto true in
         set_residual_type auto next StySkip;
         TypeAutomaton.add_transition auto current next action
           { any_guard with require_now = msg_set; forbid_clock = false } msg_set;
+        (* Atomic messages advertise their head even while waiting. *)
         TypeAutomaton.add_transition auto current current epsilon
-          {any_guard with forbid_now = msg_set} msg_set;
+          { any_guard with
+            forbid_now = msg_set;
+            forbid_clock = true;
+            future_members = if blocking then msg_set else MsgSet.empty }
+          msg_set;
+        if blocking then (
+          (* Once absence is resolved, tick before retrying the same action. *)
+          let retry = TypeAutomaton.new_state auto false in
+          TypeAutomaton.add_transition auto current retry epsilon
+            { any_guard with
+              forbid_now = msg_set;
+              future_disjoint = msg_set;
+              forbid_clock = true }
+            msg_set;
+          let rec_var = fresh_blocking_rec_var () in
+          let rec_env = { rec_name = rec_var; rec_state = current } :: rec_env in
+          ignore (build (delay_then 1 (StyVar rec_var)) retry rec_env let_env
+                  : int list));
         [ next ]
-    | StyAtom (AtomConjunction _) ->
-      raise (Except.UnimplementedError ([Text "conjunctive triggers are not yet implemented"]))
+    | StyAtom (AtomConjunction acts) ->
+        if validate_action_group default_span acts "conjunctive action" then
+          raise (Except.UnimplementedError
+            [Text "blocking conjunctive actions are not yet implemented"]);
+        mark_nonfinal ();
+        let group = msgset_of_list (List.map msg_of_action acts) in
+        let next = TypeAutomaton.new_state auto true in
+        set_residual_type auto next StySkip;
+        TypeAutomaton.add_transition auto current next (message_actions group)
+          { any_guard with require_now = group; forbid_clock = true } group;
+        (* A committed group waits until every message is immediate. *)
+        MsgSet.iter (fun msg ->
+          TypeAutomaton.add_transition auto current current epsilon
+            { any_guard with forbid_now = MsgSet.singleton msg; forbid_clock = true }
+            group) group;
+        [ next ]
     | StyAtom (AtomDelay n) ->
         mark_nonfinal ();
         if n <= 0 then (
@@ -322,20 +376,24 @@ let rec build_automaton (name : identifier option) (st : session_type)
         build_offer offerings current rec_env let_env
     | StyParallel (left, right) ->
         mark_nonfinal ();
-        let left_auto = build_automaton None left default_span in
-        let right_auto = build_automaton None right default_span in
-        SessionAutomaton2.add_final_state_epsilon_loops left_auto;
-        SessionAutomaton2.add_final_state_epsilon_loops right_auto;
-        (* Internal parallel: ALL messages are boundary (no sync pairing required);
-           use the environment so guarded waits still resolve against the partner. *)
+        let rec collect acc = function
+          | StyParallel (a, b) -> collect (collect acc b) a
+          | body -> body :: acc
+        in
+        let components = collect (collect [] right) left in
+        let automata = List.mapi (fun i body ->
+          let child = build_automaton None body default_span in
+          SessionAutomaton2.add_final_state_epsilon_loops child;
+          (Printf.sprintf "component%d" i, child)) components in
+        (* Local parallel shares a symbolic boundary and has no internal messages. *)
         let all_messages =
-          SessionAutomaton2.MsgSet.union
-            (left_auto.total_message_set)
-            (right_auto.total_message_set)
+          List.fold_left (fun messages (_, child) ->
+            SessionAutomaton2.MsgSet.union messages child.total_message_set)
+            SessionAutomaton2.MsgSet.empty automata
         in
         let product =
-          SessionAutomaton2.unified_product [| left_auto; right_auto |]
-            ~boundary_messages:all_messages ~use_env:true
+          SessionAutomaton2.unified_product false automata all_messages
+            SessionAutomaton2.MsgSet.empty
         in
         (* Remove only the unguarded epsilon self-loops on accepting states of the product.
            These are the ones we added for preprocessing; product-generated epsilons have guards. *)
@@ -400,6 +458,12 @@ let rec build_automaton (name : identifier option) (st : session_type)
         (fun acc (_, group) -> MsgSet.union acc group)
         MsgSet.empty msg_branches
     in
+    (* A singleton surface offer advertises its head on wait and default edges. *)
+    let singleton_head = match msg_branches with
+      | [(_, group)] when MsgSet.cardinal group = 1 -> group
+      | _ -> MsgSet.empty
+    in
+    let pending_heads = MsgSet.diff head_set singleton_head in
     let branch_groups = List.map (fun (_, g) -> MsgSet.elements g) msg_branches in
     let branch_groups = List.concat branch_groups in
     let finals = ref [] in
@@ -416,18 +480,23 @@ let rec build_automaton (name : identifier option) (st : session_type)
           group;
         finals := build (continuation_or_true off) target rec_env let_env @ !finals)
       msg_branches;
-    (* Wait, offering the branch heads the environment still promises. *)
-    if not (MsgSet.is_empty head_set) then
-      TypeAutomaton.add_transition auto current current epsilon
-        { any_guard with forbid_clock = true }
-        MsgSet.empty
-        ~offers_pending:head_set;
+    (* One alternative per head expresses F intersect heads <> empty. *)
+    MsgSet.iter
+      (fun head ->
+        TypeAutomaton.add_transition auto current current epsilon
+          { any_guard with
+            forbid_now = singleton_head;
+            forbid_clock = true;
+            future_members = MsgSet.singleton head }
+          singleton_head
+          ~offers_pending:pending_heads)
+      head_set;
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
         let else_target = TypeAutomaton.new_state auto false in
         TypeAutomaton.add_transition auto current else_target epsilon
           (xoffer_else_guard (MsgSet.of_list branch_groups) head_set)
-          MsgSet.empty;
+          singleton_head;
         finals := build else_ty else_target rec_env let_env @ !finals
     | None ->
         ());
@@ -454,12 +523,16 @@ let rec build_automaton (name : identifier option) (st : session_type)
     in
     let branch_groups = List.map (fun (_, g) -> MsgSet.elements g) msg_branches in
     let branch_groups = List.concat branch_groups in
-    (* Wait while a branch head is still promised later, offering the heads. *)
-    if not (MsgSet.is_empty head_set) then
-      TypeAutomaton.add_transition auto current current epsilon
-        { any_guard with forbid_now = MsgSet.of_list branch_groups;
-                         forbid_clock = true }
-        head_set;
+    (* Wait only when no head is immediate and at least one is still future. *)
+    MsgSet.iter
+      (fun head ->
+        TypeAutomaton.add_transition auto current current epsilon
+          { any_guard with
+            forbid_now = head_set;
+            forbid_clock = true;
+            future_members = MsgSet.singleton head }
+          head_set)
+      head_set;
     let finals = ref [] in
     (match wildcard_continuation_opt offerings with
      | Some else_ty ->
@@ -470,36 +543,27 @@ let rec build_automaton (name : identifier option) (st : session_type)
          finals := build else_ty else_target rec_env let_env @ !finals
      | None -> ());
 
-    (* Each branch is the product where that branch fires and the others keep
-       their default; unified_product builds the product itself. *)
+    (* Commit one head; the other branches retain their continuations and defaults. *)
     List.iteri
-      (fun j (off_j, group_j) ->
+      (fun j (_, group_j) ->
         let committed =
           List.mapi
             (fun k (off_k, _) ->
               if k = j then
-                StyXOffer [ off_k; { trigger = AtomDelay 0; continuation = None } ]
+                StySeq (StyAtom (nonblocking_trigger off_k.trigger),
+                        continuation_or_true off_k)
               else
-                StyXOffer [ { off_k with continuation = None };
-                            { trigger = AtomDelay 0; continuation = None } ])
+                StyXOffer [ off_k; { trigger = AtomDelay 0; continuation = None } ])
             msg_branches
         in
         let target = TypeAutomaton.new_state auto false in
+        (* Commitment exposes the target's future menu without firing a message. *)
         TypeAutomaton.add_transition auto current target epsilon
-          { any_guard with require_now = group_j; forbid_clock = false }
-          group_j;
-        let after = build (parallel_of_list committed) target rec_env let_env in
-        let cont = continuation_or_true off_j in
+          { any_guard with require_now = group_j; forbid_clock = true }
+          MsgSet.empty;
         finals :=
-          List.concat_map (fun f ->
-            TypeAutomaton.set_accepting auto f false;
-            build cont f rec_env let_env) after
-          @ !finals)
+          build (parallel_of_list committed) target rec_env let_env @ !finals)
       msg_branches;
-    if not (MsgSet.is_empty head_set) then
-      TypeAutomaton.add_transition auto current current epsilon
-        { any_guard with future_members =  head_set ; forbid_now =  head_set }
-        head_set;
     !finals)
   in
   ignore (build st auto.start_state [] [] : int list);
