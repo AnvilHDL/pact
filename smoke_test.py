@@ -105,12 +105,12 @@ def summarize_results(results):
         return Result.Error
 
 if __name__ == "__main__":
-    mode = 4
+    mode = 3
     type_files = EXAMPLES
     if os.sys.argv[1:]:
         mode = int(os.sys.argv[1])
     else:
-        print("No mode specified, defaulting to mode 4 (compatibility check).")
+        print("No mode specified, defaulting to mode 3 (simultaneous compatibility check).")
     os.system("rm -rf " + ERROR_DIR)
     compat_count = 0
     incompat_count = 0

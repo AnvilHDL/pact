@@ -45,7 +45,7 @@ let generalized_type_debug _out config =
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
   if config.verbose then Printf.eprintf "\nPool Compatiblity Checks:\n\n";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-    let open SessionCompatiblityv3 in
+    let open SessionFastCompat in
     
     (* Preprocess the pool to get session_ids with unified endpoints *)
     let session_ids = SessionHelper.preprocess_pool_for_compatibility 
@@ -69,7 +69,7 @@ let generalized_type_debug _out config =
   ) pool_defs;
   Printf.eprintf "\n"
 
-let generalized_type_v2_debug _out config =
+let generalized_type_v2_debug ?(sequential = false) _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
@@ -109,73 +109,31 @@ let generalized_type_v2_debug _out config =
       Printf.eprintf "Error generating generalized type (v2) for %s: %s\n" sdef.d.name msg
   ) session_type_defs;
 
+  let channel_classes =
+    List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits
+  in
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
-  if config.verbose then Printf.eprintf "\nGeneralized Type v2 Pool Compatiblity Checks:\n\n";
+  let mode = if sequential then "Sequential" else "Simultaneous" in
+  if config.verbose then Printf.eprintf "\n%s Pool Compatibility Checks:\n\n" mode;
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-    let session_ids = SessionHelper.preprocess_pool_for_compatibility
-        pool session_type_defs in
-    if config.verbose then
-      Printf.eprintf "Checking Pool %s (%d members together)\n"
-        pool.d.pool_id (List.length session_ids);
-    let compat, err = try SessionCompatiblity2.check_compatibility_multiparty session_ids pool.d.pool_id config.verbose
+    let compat, err =
+      try
+        let session_ids, message_sets =
+          SessionCompatiblity2.prepare_pool channel_classes session_type_defs pool
+        in
+        if config.verbose then
+          Printf.eprintf "Checking Pool %s (%d members, %s)\n"
+            pool.d.pool_id (List.length session_ids) (String.lowercase_ascii mode);
+        SessionCompatiblity2.check_compatibility_multiparty ~sequential ~message_sets
+          session_ids pool.d.pool_id config.verbose
       with
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
       | Failure msg -> (false, msg)
     in
-    Printf.eprintf "Generalized Type v2 Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
+    Printf.eprintf "[%s] Pool %s Compatibility: %b | err_msg = %s \n"
+      mode pool.d.pool_id compat err;
   ) pool_defs;
-  Printf.eprintf "\n"
-
-let open_compatibility_v2_debug _out config =
-  let toplevel_filename = List.hd config.Config.input_filenames in
-  let cunits = ref [] in
-  (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
-    with
-      | Except.TypeError msg ->
-        (Except.Text "Type error:")::msg
-          |> raise_compile_error None
-  );
-  let session_type_defs =
-    List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs)
-      !cunits
-  in
-  let channel_classes =
-    List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes)
-      !cunits
-  in
-  let pool_defs =
-    List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits
-  in
-  Printf.eprintf "\nOpen Compatibility:\n\n";
-  List.iter
-    (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-      if config.verbose then
-        Printf.eprintf "Checking Open Pool %s (%d members together)\n"
-          pool.d.pool_id (List.length pool.d.interface_members);
-      let compat, err =
-        try
-          let context, compat, err =
-            SessionOpenCompatiblity2.check_open_compatibility_multiparty
-              channel_classes session_type_defs pool config.verbose
-          in
-          SessionOpenCompatiblity2.print_context ~verbose:config.verbose stderr
-            context;
-          (compat, err)
-        with
-        | Except.TypeError msg ->
-            ( false,
-              List.filter_map
-                (fun x -> match x with Except.Text msg -> Some msg | _ -> None)
-                msg
-              |> String.concat "; " )
-        | Failure msg -> (false, msg)
-      in
-      Printf.eprintf
-        "[Open] Pool %s Compatibility: %b | err_msg = %s \n"
-        pool.d.pool_id compat err)
-    pool_defs;
   Printf.eprintf "\n"
 
 let profile_compatibility_checks _out config =
@@ -235,11 +193,11 @@ let profile_compatibility_checks _out config =
     
     let result, err, actual_states, visited_states, prod_transitions, construction_time_ms, game_time_ms = 
       try
-        let prod_auto = SessionCompatiblityv3.create_product session_ids false pool.d.pool_id in
+        let prod_auto = SessionFastCompat.create_product session_ids false pool.d.pool_id in
         let construction_end = Unix.gettimeofday () in
         let construction_time_ms = (construction_end -. construction_start) *. 1000.0 in
         
-        Hashtbl.iter (fun state_id _ -> SessionCompatiblityv3.label_adversary_state prod_auto state_id) prod_auto.states;
+        Hashtbl.iter (fun state_id _ -> SessionFastCompat.label_adversary_state prod_auto state_id) prod_auto.states;
         
         let game_start = Unix.gettimeofday () in
         let ids_list = List.map snd session_ids in
@@ -306,5 +264,5 @@ match config.debug_choice with
 | 1 -> profile_compatibility_checks out config
 | 2 -> generalized_type_debug out config
 | 3 -> generalized_type_v2_debug out config
-| 4 -> open_compatibility_v2_debug out config
+| 4 -> generalized_type_v2_debug ~sequential:true out config
 | _ -> raise (Failure "Unknown debug choice")

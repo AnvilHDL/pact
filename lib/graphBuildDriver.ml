@@ -270,7 +270,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
 
           if not config.disable_compat_checks then
           (
-              let check, err = SessionCompatiblityv3.check_compatibility_multiparty session_with_ids ps.d.p_id config.verbose in
+              let check, err = SessionFastCompat.check_compatibility_multiparty session_with_ids ps.d.p_id config.verbose in
               let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_ids in
               if check then Printf.eprintf "[Info] Compatibility check passed for pool instance %s in process %s\n" ps.d.p_id module_name
               else
