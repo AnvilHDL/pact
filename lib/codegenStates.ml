@@ -520,11 +520,18 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           let join_node_current (join_node : EventGraph.event) =
             EventStateFormatter.format_current g.thread_id join_node.id
           in
+          let pending = Printf.sprintf "(|%s)" selected_q in
+          (* A fresh offer can finish in its selection cycle. When an older
+             offer is pending, roots in this cycle belong to its successor. *)
+          let selected idx (root : EventGraph.event) =
+            Printf.sprintf "(%s || (!%s && %s))"
+              (selected_bit idx) pending (join_node_current root)
+          in
           let any_selected =
             if width = 0 then
               "1'b0"
             else
-              List.init width (fun idx -> selected_bit idx)
+              List.mapi (fun idx (root, _) -> selected idx root) join_arms
               |> String.concat " || "
               |> Printf.sprintf "(%s)"
           in
@@ -532,9 +539,9 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             if width = 0 then
               "1'b0"
             else
-              List.mapi (fun idx ((_root, join_node) : EventGraph.event * EventGraph.event) ->
+              List.mapi (fun idx ((root, join_node) : EventGraph.event * EventGraph.event) ->
                 Printf.sprintf "(!%s || %s || %s)"
-                  (selected_bit idx)
+                  (selected idx root)
                   (done_bit idx)
                   (join_node_current join_node)
               ) join_arms
@@ -555,16 +562,20 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           List.iteri (fun idx ((root, join_node) : EventGraph.event * EventGraph.event) ->
             let root_current = EventStateFormatter.format_current g.thread_id root.id in
             let join_current = join_node_current join_node in
-            Printf.sprintf "if (%s) %s[%d] = 1'b1;"
+            Printf.sprintf "if (%s && (!%s || %s)) %s[%d] = 1'b1;"
               root_current
+              cn
+              pending
               selected_n
               idx
             |> print_line;
-            Printf.sprintf "if (((%s ? 1'b0 : %s[%d]) || %s) && %s) %s[%d] = 1'b1;"
+            Printf.sprintf "if (((%s ? 1'b0 : %s[%d]) || (%s && (!%s || %s))) && %s) %s[%d] = 1'b1;"
               cn
               selected_q
               idx
               root_current
+              cn
+              pending
               join_current
               done_n
               idx
@@ -685,7 +696,52 @@ let codegen_actions printer (g : EventGraph.event_graph) (multi_writer : Utils.S
   List.iter print_event_actions g.events
 
 
-let codegen_transition printer (config : Config.compile_config) (graphs : EventGraph.event_graph_collection)
+let codegen_shared_reg_transitions printer (pg : EventGraph.proc_graph) =
+  let open EventGraph in
+  let _, shared_regs = List.fold_left (fun (seen, shared) (g, _) ->
+    let written = Utils.StringSet.of_list (GraphAnalysis.graph_owned_regs g) in
+    (Utils.StringSet.union seen written,
+     Utils.StringSet.union shared (Utils.StringSet.inter seen written))
+  ) (Utils.StringSet.empty, Utils.StringSet.empty) pg.threads in
+  if not (Utils.StringSet.is_empty shared_regs) then (
+    let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) line =
+      CodegenPrinter.print_line printer ~lvl_delta_pre ~lvl_delta_post line in
+    let reset names = Utils.StringSet.iter (fun name ->
+      print_line (Printf.sprintf "%s <= '0;" (CodegenFormat.format_regname_current name))
+    ) names in
+    CodegenPrinter.print_section printer "Registers written by multiple threads";
+    print_line ~lvl_delta_post:1
+      "always_ff @(posedge clk_i or negedge rst_ni) begin : _shared_reg_transition";
+    print_line ~lvl_delta_post:1 "if (~rst_ni) begin";
+    reset shared_regs;
+    print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 "end else begin";
+    List.iter (fun ((g : event_graph), reset_by) ->
+      (* Keep all updates in one clocked block, including thread-local resets. *)
+      let events = List.map (fun (e : event) ->
+        { e with actions = List.filter (fun (a : action Lang.ast_node) ->
+            match a.d with
+            | RegAssign (lval, _) -> Utils.StringSet.mem lval.lval_range.subreg_name shared_regs
+            | _ -> false) e.actions }
+      ) g.events in
+      codegen_actions printer { g with events } Utils.StringSet.empty;
+      match reset_by with
+      | None -> ()
+      | Some (msg : Lang.message_specifier) ->
+          let owned = Utils.StringSet.inter shared_regs
+            (Utils.StringSet.of_list (GraphAnalysis.graph_owned_regs g)) in
+          if not (Utils.StringSet.is_empty owned) then (
+            let signal = CodegenFormat.format_msg_data_signal_name
+              (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg 0 in
+            print_line ~lvl_delta_post:1 (Printf.sprintf "if (%s) begin" signal);
+            reset owned;
+            print_line ~lvl_delta_pre:(-1) "end")
+    ) pg.threads;
+    print_line ~lvl_delta_pre:(-1) "end";
+    print_line ~lvl_delta_pre:(-1) "end"
+  );
+  shared_regs
+
+let codegen_transition shared_regs printer (config : Config.compile_config) (graphs : EventGraph.event_graph_collection)
                                (g : EventGraph.event_graph) (reset_by : Lang.message_specifier option) =
   let open EventGraph in
   let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) =
@@ -694,12 +750,14 @@ let codegen_transition printer (config : Config.compile_config) (graphs : EventG
   (* reset states *)
 
   let owned_regs = GraphAnalysis.graph_owned_regs g |> Utils.StringSet.of_list in
-  let owned_regs = Utils.StringMap.filter (fun name _ -> Utils.StringSet.mem name owned_regs) g.regs in
+  let owned_regs = Utils.StringMap.filter (fun name _ ->
+    Utils.StringSet.mem name owned_regs && not (Utils.StringSet.mem name shared_regs)) g.regs in
 
   (* Merge only applies when reset_by is None: reset_by re-resets registers later in the same always_ff, and reg_n doesn't account for that override yet. *)
   let reg_assigns = collect_reg_assigns g in
   let multi_writer =
-    if config.merge_reg_writes && Option.is_none reset_by then multi_writer_reg_names reg_assigns
+    if config.merge_reg_writes && Option.is_none reset_by then
+      Utils.StringSet.diff (multi_writer_reg_names reg_assigns) shared_regs
     else Utils.StringSet.empty
   in
   codegen_reg_next_state printer graphs g reg_assigns multi_writer;
@@ -717,7 +775,7 @@ let codegen_transition printer (config : Config.compile_config) (graphs : EventG
   List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= '0;" sn |> print_line) reg_states;
   print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 "end else begin";
   (* actions *)
-  codegen_actions printer g multi_writer;
+  codegen_actions printer g (Utils.StringSet.union multi_writer shared_regs);
   (
     match reset_by with
     | None -> ()
@@ -1048,7 +1106,7 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end"
   )
 
-let codegen_states printer
+let codegen_states shared_regs printer
   (config : Config.compile_config)
   (graphs : EventGraph.event_graph_collection)
   (pg : EventGraph.proc_graph)
@@ -1060,7 +1118,7 @@ let codegen_states printer
     codegen_decl printer g;
     codegen_next printer graphs pg g;
     codegen_sustained_actions printer graphs pg g;
-    codegen_transition printer config graphs g reset_by
+    codegen_transition shared_regs printer config graphs g reset_by
   )
 
 let codegen_proc_states printer proc =

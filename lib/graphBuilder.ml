@@ -938,7 +938,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     (* A single-branch xoffer asserts its own signal unconditionally, so it
        works under either declared protocol. *)
     if List.length (List.filter (fun (arm, _) -> not (is_wildcard_arm arm)) offer_arms) = 1 then
-      HandshakeResolve.mark_protocol_agnostic e.span;
+      HandshakeResolve.mark_protocol_agnostic e.span
+    else
+      HandshakeResolve.mark_exclusive_offer e.span;
     let offer_msg_groups =
       List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
     in
@@ -1097,14 +1099,27 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let merged_borrows = List.fold_left Utils.list_unordered_join [] (List.map (fun td -> td.ld.reg_borrows) branch_tds) in
     let lt = {live = ctx_br.current; dead = merged_dead} in
     
-    (* Determine result wire and dtype *)
-    let result_w = match branch_tds with
-      | [] -> None
-      | hd::_ -> hd.ld.w
-    in
+    (* Return the selected arm's value, using the same selector as its control. *)
     let result_dtype = match branch_tds with
       | [] -> unit_dtype
       | hd::_ -> hd.ld.dtype
+    in
+    let result_w =
+      if List.for_all (fun td -> Option.is_none td.ld.w) branch_tds then None
+      else (
+        let values = List.map (fun td ->
+          check_dtype "Mismatching result types in xoffer branches"
+            (Some result_dtype) td.ld.dtype e.span ci.file_name
+            ci.weak_typecasts ci.typedefs ci.macro_defs;
+          unwrap_or_err "Every value-returning xoffer branch must return a value" e.span td.ld.w
+        ) branch_tds in
+        let cases = List.map2 (fun index value -> (Option.get index.ld.w, value))
+          required_branch_conditions values in
+        let wires, result = WireCollection.add_cases graph.thread_id ci.typedefs
+          cond_w cases (List.hd values) graph.wires in
+        graph.wires <- wires;
+        Some result
+      )
     in
     
    {ld = {w = result_w; lt; reg_borrows = merged_borrows; dtype = result_dtype}}

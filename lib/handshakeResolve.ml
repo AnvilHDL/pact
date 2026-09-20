@@ -12,6 +12,11 @@ let protocol_agnostic_spans : (Lang.code_span, unit) Hashtbl.t = Hashtbl.create 
 let mark_protocol_agnostic (span : Lang.code_span) =
   Hashtbl.replace protocol_agnostic_spans span ()
 
+let exclusive_offer_spans : (Lang.code_span, unit) Hashtbl.t = Hashtbl.create 16
+
+let mark_exclusive_offer (span : Lang.code_span) =
+  Hashtbl.replace exclusive_offer_spans span ()
+
 (* (canonical endpoint name, message name) within one process. *)
 module Key = struct
   type t = identifier * identifier
@@ -33,6 +38,9 @@ type use = {
     either, so they require nothing. *)
 let demanded_mode (u : use) : handshake_modes option =
   if Hashtbl.mem protocol_agnostic_spans u.use_span then None
+  (* An exclusive offer asserts only the chosen branch's handshake. *)
+  else if Hashtbl.mem exclusive_offer_spans u.use_span then
+    Some (if u.use_is_recv then ValidAck else ValidReady)
   else
   match u.use_kind, u.use_is_recv with
   | Instant, true -> Some ValidReady

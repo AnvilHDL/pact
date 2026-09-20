@@ -28,6 +28,7 @@ let codegen_ports ?(resolve = CodegenPort.default_resolver) printer (graphs : ev
   port_list
 
 let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
+  let parent_resolve = HandshakeResolve.resolver_for graphs g in
 
   let format_connection (dst : string) (src : string) =
     Printf.sprintf ".%s (%s)" dst src
@@ -77,16 +78,21 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
               (Format.format_msg_valid_signal_name parent_endpoint_name msg.name)]
           else [])
           @
-          (* Connect the reverse port the child resolved for itself. *)
+          (* Each module names its reverse port using its own resolved mode. *)
           (let child_mode = child_resolve arg_endpoint.name msg.name in
+           let parent_reverse =
+             match parent_resolve parent_endpoint_name msg.name with
+             | ValidAck -> Format.format_msg_ack_signal_name parent_endpoint_name msg.name
+             | ValidReady -> Format.format_msg_ready_signal_name parent_endpoint_name msg.name
+           in
            if CodegenPort.message_has_ack_port ~mode:child_mode msg then
             [format_connection
               (Format.format_msg_ack_signal_name arg_endpoint.name msg.name)
-              (Format.format_msg_ack_signal_name parent_endpoint_name msg.name)]
+              parent_reverse]
           else if CodegenPort.message_has_ready_port ~mode:child_mode msg then
             [format_connection
               (Format.format_msg_ready_signal_name arg_endpoint.name msg.name)
-              (Format.format_msg_ready_signal_name parent_endpoint_name msg.name)]
+              parent_reverse]
           else [])
         in
         let data_connections =
@@ -129,7 +135,7 @@ let codegen_endpoints ?(resolve = CodegenPort.default_resolver) printer (graphs 
     CodegenPrinter.print_section printer (Printf.sprintf "Thread %d local endpoint mirrors" g.thread_id);
   List.iter print_port_signal_decl local_endpoint_ports
 
-let codegen_wire_assignment printer (graphs : event_graph_collection) (g : event_graph) (w : WireCollection.wire) =
+let codegen_wire_assignment resolve printer (graphs : event_graph_collection) (g : event_graph) (w : WireCollection.wire) =
   let lookup_msg_def msg = MessageCollection.lookup_message g.messages msg graphs.channel_classes in
   let wire_name = Format.format_wirename w.thread_id w.id in
   let inline_source_comment =
@@ -221,16 +227,14 @@ let codegen_wire_assignment printer (graphs : event_graph_collection) (g : event
         if CodegenPort.message_has_valid_port m then
           CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
         else "1'b1"
-      | MessageAckPort msg ->
+      | MessageAckPort msg | MessageReadyPort msg ->
         let m = Option.get @@ lookup_msg_def msg in
-        if CodegenPort.message_has_ack_port m then
-          CodegenFormat.format_msg_ack_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
-        else "1'b1"
-      | MessageReadyPort msg ->
-        let m = Option.get @@ lookup_msg_def msg in
-        if CodegenPort.message_has_ready_port m then
-          CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg
-        else "1'b1"
+        let endpoint = CodegenFormat.canonicalize_endpoint_name msg.endpoint g in
+        (* These reads are created before handshake resolution. *)
+        (match CodegenPort.site_reverse_signal ~mode:(resolve endpoint msg.msg) m with
+         | Some UsesAck -> CodegenFormat.format_msg_ack_signal_name endpoint msg.msg
+         | Some UsesReady -> CodegenFormat.format_msg_ready_signal_name endpoint msg.msg
+         | None -> "1'b1")
         
         
       | Cases _ | Update _ -> failwith "Something went wrong!"
@@ -247,7 +251,7 @@ let codegen_wire_assignment printer (graphs : event_graph_collection) (g : event
         Printf.sprintf "assign %s = %s;" wire_name expr
   )
 
-let codegen_post_declare printer (graphs : event_graph_collection) (g : event_graph) =
+let codegen_post_declare resolve printer (graphs : event_graph_collection) (g : event_graph) =
   let codegen_wire_decl = fun (w: WireCollection.wire) ->
     if not w.is_const && w.size > 0 then
       Printf.sprintf "%s %s; // %s"
@@ -263,7 +267,7 @@ let codegen_post_declare printer (graphs : event_graph_collection) (g : event_gr
   List.iter codegen_wire_decl declared_wires;
   if wires_in_id_order <> [] then
     CodegenPrinter.print_section printer (Printf.sprintf "Thread %d wire assignments" g.thread_id);
-  List.iter (codegen_wire_assignment printer graphs g) wires_in_id_order
+  List.iter (codegen_wire_assignment resolve printer graphs g) wires_in_id_order
 
 let codegen_regs printer (graphs : event_graph_collection) (g : event_graph) =
   let visible_regs = Utils.StringMap.filter (fun _ (r : reg_def) -> r.d_type <> Lang.unit_dtype) g.regs in
@@ -379,11 +383,12 @@ let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.e
 
       codegen_regs printer graphs initEvents;
       if (not is_mod_comb) then CodegenStates.codegen_proc_states printer g;
+      let shared_regs = CodegenStates.codegen_shared_reg_transitions printer g in
       
       List.iter (fun ((thread : EventGraph.event_graph), reset_by) ->
           CodegenPrinter.print_section printer (Printf.sprintf "Thread %d implementation" thread.thread_id);
-          codegen_post_declare printer graphs thread;
-          CodegenStates.codegen_states printer config graphs g thread reset_by;
+          codegen_post_declare resolve printer graphs thread;
+          CodegenStates.codegen_states shared_regs printer config graphs g thread reset_by;
       ) g.threads
   );
 

@@ -380,17 +380,17 @@ let rec normalize_residual_for_match recvar_map sty =
   let sty' = resolve_recvar recvar_map sty in
   match sty' with
   | StySeq (left, right) ->
-      StySeq
-        ( normalize_residual_for_match recvar_map left,
-          normalize_residual_for_match recvar_map right )
+      seq_if_needed
+        (normalize_residual_for_match recvar_map left)
+        (normalize_residual_for_match recvar_map right)
   | StyParallel (left, right) ->
       StyParallel
         ( normalize_residual_for_match recvar_map left,
           normalize_residual_for_match recvar_map right )
   | StyChoice (left, right) ->
-      StyChoice
-        ( normalize_residual_for_match recvar_map left,
-          normalize_residual_for_match recvar_map right )
+      let left = normalize_residual_for_match recvar_map left in
+      let right = normalize_residual_for_match recvar_map right in
+      if left = right then left else StyChoice (left, right)
   | _ -> sty'
 
 
@@ -602,7 +602,7 @@ let extract_delay_continuation init n' hc =
     
 let delay_continuation_after_terminal_closure n sp head_conts init =
   let rec search seen hcs =
-    List.find_map (fun hc ->
+    List.concat_map (fun hc ->
       match hc.head with
       | Atom (AtomDelay m) ->
           if n <= m then begin
@@ -612,7 +612,7 @@ let delay_continuation_after_terminal_closure n sp head_conts init =
               | _ -> seq_of_sty_opt (Some remaining_delay) hc.cont
             in
             hc.visited <- true;
-            Some (new_cont, hc.recvar_map)
+            [new_cont, hc.recvar_map]
           end
           else(
             let delay,cont = extract_delay_continuation init m hc in
@@ -621,31 +621,31 @@ let delay_continuation_after_terminal_closure n sp head_conts init =
                 let remaining_delay = StyAtom (AtomDelay (d - n)) in
                 let new_cont = seq_of_sty_opt (Some remaining_delay) cont in
                 hc.visited <- true;
-                Some (new_cont, hc.recvar_map)
+                [new_cont, hc.recvar_map]
             | None -> 
                 hc.visited <- true;
-                Some (cont, hc.recvar_map)
-            | _ -> None
+                [cont, hc.recvar_map]
+            | _ -> []
           )
       | Terminal terminal_kind ->
           (match hc.cont with
-          | None -> None
+          | None -> []
           | Some cont ->
               if List.mem cont seen then
-                None
+                []
               else
                 let cont_heads = get_head_continuation_pair cont sp hc.recvar_map in
-                (match search (cont :: seen) cont_heads with
-                | Some (found_cont, found_map) ->
+                let found = search (cont :: seen) cont_heads in
+                List.map (fun (found_cont, found_map) ->
                     hc.visited <- true;
                     let delayed_cont =
                       match terminal_kind with
                       | ParallelDone -> seq_of_sty_opt (Some StySkip) found_cont
                       | RecurseJump -> found_cont
                     in
-                    Some (delayed_cont, found_map)
-                | None -> None))
-      | _ -> None
+                    (delayed_cont, found_map)
+                ) found)
+      | _ -> []
     ) hcs
   in
   search [] head_conts
@@ -963,14 +963,18 @@ let check_generalized_session
               | `Seq (_, `Cycles n) ->
                   (match delay_continuation_after_terminal_closure
                       n g.thread_codespan head_conts protocol_node.d with
-                  | Some (new_cont, found_map) ->
-                      assign_child_residual ~allow_choice:true
-                        child_ev found_map new_cont
-                  | None ->
+                  | [] ->
                       error_handler g
                         (Printf.sprintf "Expected Delay (%d) at event %d | However found %s"
                           n child_ev.id (string_of_residual current_residual))
-                        g.thread_codespan module_name)
+                        g.thread_codespan module_name
+                  | continuations ->
+                      (* Equal delays can lead to different choices or parallel
+                         arms; subsequent actions determine which path applies. *)
+                      List.iter (fun (new_cont, found_map) ->
+                        assign_child_residual ~allow_choice:true
+                          child_ev found_map new_cont
+                      ) continuations)
 
               | `Root Some (_, branches) ->
                   let has_immediate_actions =
