@@ -344,6 +344,12 @@ let rec build_automaton (name : identifier option) (st : session_type)
     | StySeq (left, right) ->
         mark_nonfinal ();
         let left_finals = build left current rec_env let_env in
+        let final_states = IntSet.of_list left_finals in
+        (* Grafting the continuation replaces the left fragment's terminal idling. *)
+        auto.transitions <- List.filter (fun t ->
+          not (IntSet.mem t.from_state final_states
+               && t.from_state = t.to_state && t.action = epsilon))
+          auto.transitions;
         List.concat_map
           (fun final ->
             TypeAutomaton.set_accepting auto final false;

@@ -66,7 +66,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
   let iter = ref 0 in
   let found_epsilon = ref false in
 
-  let inc_iter =
+  let inc_iter () =
     incr iter;
     if !iter mod 10000 = 0 then (
       Printf.eprintf "Product construction iteration %d, worklist size: %d, visited states: %d\n" !iter (Queue.length worklist) (IntListSet.cardinal !visited);
@@ -323,7 +323,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           List.iter (fun (ns, combined_actions) ->
             if ns <> current_states && combined_actions <> [] then begin
               found := true;
-              inc_iter;
+              inc_iter ();
               let next_prod_state = get_product_state ns in
               let combined_label = List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
               TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label false false false false;
@@ -344,7 +344,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
               )
             in
             List.iteri(fun id tset ->
-              inc_iter;
+              inc_iter ();
               let offers_in_future_of_this_state = offers_in_future_from_others_arr.(id) in
               List.iter (fun t -> 
                 let is_compatible =
@@ -390,7 +390,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           
 
           if not !found && all_has_delay then (
-              inc_iter;
+              inc_iter ();
               found := true;
                 let all_delay_combinations = cartesian_product2 delay_transitions in
                 List.iter( fun transition_set -> (

@@ -148,17 +148,16 @@ let compute_id_attractor_indexed
           List.for_all (fun t -> IntSet.mem t.to_state valid_region) outgoing 
         in
 
-        let is_added = 
-          (* if not all_outgoing_valid then false *)
-           
-          if state.is_fair then
+        let is_added =
+          (* Fairness permits delayed progress, not an exit into a losing region. *)
+          if not all_outgoing_valid then false
+          else if state.is_fair then
             (* Fair Node: Requires at least one path to make progress req_id *)
             List.exists (fun t -> 
               let has_id = transition_has_id_cached t req_id in
               let leads_to_attr = IntSet.mem t.to_state !attractor in
               has_id || leads_to_attr
             ) outgoing
-          else if not all_outgoing_valid then false
           else
             (* Normal Node: Requires all paths to make progress on that req_id *)
             List.for_all (fun t ->
@@ -182,7 +181,7 @@ let compute_id_attractor (auto : TypeAutomaton.t) (valid_region : IntSet.t) (req
   let transition_has_id_cached t id = transition_has_id t id in
   compute_id_attractor_indexed auto outgoing_index valid_region req_id transition_has_id_cached
 
-(* Computes the global fixed point across ALL target IDs. *)
+(* Progress-only diagnostic solver; play_game also requires recurring clocks. *)
 let solve_game_custom_indexed
     (auto : TypeAutomaton.t)
     (outgoing_index : transition_outgoing_index)
@@ -289,25 +288,42 @@ let collect_dead_ends_paths (auto : TypeAutomaton.t) (st_ids : int list) : (int 
   let outgoing_index = build_outgoing_index auto.transitions in
   collect_dead_ends_paths_indexed auto outgoing_index st_ids
 
+(* The fast product is closed; its labels feed the same clock/progress game. *)
 let play_game (auto : TypeAutomaton.t) (ids : string list) : (bool * string) =
-
-  let outgoing_index = build_outgoing_index auto.transitions in
-
-  let dead_ends = sanity_check_indexed auto outgoing_index in
-  if dead_ends <> [] then
-    let dead_end_paths = collect_dead_ends_paths_indexed auto outgoing_index dead_ends in
-    let dead_ends_str =
-      String.concat "\n\n" (List.map (fun (_id, trace) -> trace) dead_end_paths)
+  let module A = SessionAutomaton2 in
+  let product = A.TypeAutomaton.create A.MsgSet.empty in
+  Hashtbl.clear product.states;
+  product.name <- auto.name;
+  product.start_state <- auto.start_state;
+  product.next_state_id <- auto.next_state_id;
+  Hashtbl.iter (fun id state ->
+    product.next_state_id <- id;
+    ignore (A.TypeAutomaton.new_state product false);
+    let target = Hashtbl.find product.states id in
+    target.adversary <- true;
+    target.is_fair <- state.is_fair) auto.states;
+  product.next_state_id <- auto.next_state_id;
+  List.iter (fun transition ->
+    let clock = LabelSet.mem Delay transition.label in
+    let action = if clock then A.Clock else
+      A.Observations (LabelSet.fold (fun label observations ->
+        match label with
+        | Action message -> A.ObservationSet.add (A.Message message) observations
+        | Recurse id -> A.ObservationSet.add (A.Progress id) observations
+        | _ -> observations) transition.label A.ObservationSet.empty)
     in
-    (false, Printf.sprintf "Error: The automaton has dead-end states:\n %s" dead_ends_str)
-  else
-  let winning_set = solve_game_custom_indexed auto outgoing_index ids in
-  let start_wins = IntSet.mem auto.start_state winning_set in
-
-  Hashtbl.iter (fun id st -> st.is_winning <- IntSet.mem id winning_set) auto.states;
-
-  if start_wins then
-    (true, "Compatible: Strategy found to satisfy all IDs.")
-  else
-    let trace = find_counterexample_indexed auto outgoing_index auto.start_state winning_set ids in
-    (false, Printf.sprintf "Compatibility failed. Losing Trace:\n%s" trace)
+    A.TypeAutomaton.add_transition product transition.from_state transition.to_state
+      action { A.any_guard with require_clock = clock; forbid_clock = not clock }
+      A.MsgSet.empty) auto.transitions;
+  let arena = SessionGame2.build_arena auto.name product in
+  let result = SessionGame2.play_arena arena ~progress_ids:ids in
+  Hashtbl.iter (fun id state ->
+    state.is_winning <-
+      A.StringSet.mem (SessionGame2.arena_player_id id) result.winning_nodes
+      || A.StringSet.mem (SessionGame2.arena_adversary_id id 0) result.winning_nodes)
+    auto.states;
+  let message = match result.counterexample_trace with
+    | None -> result.summary
+    | Some trace -> result.summary ^ "\n" ^ trace
+  in
+  result.compatible, message

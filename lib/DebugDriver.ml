@@ -146,7 +146,7 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
   let mode = if sequential then "Sequential" else "Simultaneous" in
   if config.verbose then Printf.eprintf "\n%s Pool Compatibility Checks:\n\n" mode;
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
-    let compat, err =
+    let result, err =
       try
         let session_ids, message_sets =
           SessionCompatiblity2.prepare_pool channel_classes session_type_defs pool
@@ -155,20 +155,23 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
           Printf.eprintf "Checking Pool %s (%d members, %s)\n"
             pool.d.pool_id (List.length session_ids) (String.lowercase_ascii mode);
         let members = SessionCompatiblity2.build_members message_sets session_ids config.verbose in
-        if sequential then
-          sequential_compatibility members pool.d.pool_id config.verbose
-        else
-          let compatible, message, _ =
-            SessionCompatiblity2.check_compatibility_multiparty members
-              (pool.d.pool_id ^ "_simultaneous") config.verbose in
-          (compatible, message)
+        let compatible, message =
+          if sequential then
+            sequential_compatibility members pool.d.pool_id config.verbose
+          else
+            let compatible, message, _ =
+              SessionCompatiblity2.check_compatibility_multiparty members
+                (pool.d.pool_id ^ "_simultaneous") config.verbose in
+            (compatible, message)
+        in
+        (string_of_bool compatible, message)
       with
       | Except.TypeError msg ->
-        (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
-      | Failure msg -> (false, msg)
+        ("error", List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
+      | Failure msg -> ("error", msg)
     in
-    Printf.eprintf "[%s] Pool %s Compatibility: %b | err_msg = %s \n"
-      mode pool.d.pool_id compat err;
+    Printf.eprintf "[%s] Pool %s Compatibility: %s | err_msg = %s \n"
+      mode pool.d.pool_id result err;
   ) pool_defs;
   Printf.eprintf "\n"
 

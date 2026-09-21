@@ -256,8 +256,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         TypeAutomaton.reroute_transitions auto t_end end_state var_map;
 
        ( 
-        if wildcard_there then
+        if wildcard_there || (all_blocking && not is_wildcard_present) then
         (
+          (* A blocking offer cannot finish by skipping every message branch. *)
           let trans = List.filter (fun t ->
               not (t.is_conditional && (t.from_state = current) && (t.to_state = end_state))
           )auto.transitions in
