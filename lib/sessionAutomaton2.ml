@@ -761,7 +761,7 @@ let unified_product verbose automata boundary_messages internal_messages =
       Printf.eprintf "Product state %d has no synchronized successor.\n%!" from_state
   done;
   recompute_state_summaries product_automaton;
-  if verbose then Printf.eprintf "Unified product: %d reachable states, %d transitions\n%!"
+  if verbose then CliOutput.info "Unified product: %d reachable states, %d transitions"
     (Hashtbl.length product_automaton.states) (List.length product_automaton.transitions);
   product_automaton
 
@@ -900,6 +900,10 @@ let html_of_boundary_projection ?(show_empty = false) t =
   else
     "<BR/>E_B: U = " ^ html_of_msgset t.boundary_now ^ "; F = "
     ^ html_of_msgset t.boundary_future
+
+let print_automaton_counts auto out =
+  CliOutput.counts out "Type automaton" auto.name
+    (Hashtbl.length auto.states) (List.length auto.transitions)
 
 (* Render the v2 metadata directly in DOT for debugging the formal construction. *)
 let print_automaton_dot ?(show_guards = true) ?(show_transition_debug = true)

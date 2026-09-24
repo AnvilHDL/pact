@@ -5,6 +5,7 @@ type compile_config = {
   debug_mode : bool; (** enable debug mode for testing*)
   debug_choice : int; (** debug choice for testing *)
   verbose : bool; (** output verbose details related to compilation to stderr *)
+  silent : bool; (** write compatibility traces to files, retaining concise stderr results *)
   verbose_max : bool; (** output verbose details related to compilation to stderr *)
   stdin : bool; (** read from standard input *)
   disable_lt_checks : bool; (** disable all lifetime and borrow related checks *)

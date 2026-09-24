@@ -13,8 +13,8 @@ let generalized_type_debug _out config =
   );
   let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
     let open Lang in
-    if config.verbose then Printf.eprintf "\nGeneralized Types:\n\n";
-  if config.verbose then
+    if config.verbose && not config.silent then CliOutput.section "Generalized types";
+  if config.verbose && not config.silent then
     List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
       let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
       Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol preprocess);
@@ -24,11 +24,13 @@ let generalized_type_debug _out config =
   let open SessionBuildAutomaton in
   let open SessionAutomaton in
 
-  if config.verbose then Printf.eprintf "\nGenerating Generalized Types as DOT files...\n\n";
+  if config.verbose then CliOutput.section "Type automata";
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
     try
         let gen_type = build_automaton None sdef.d.body.d sdef.d.body.span in 
+        if config.verbose then CliOutput.counts stderr "Type automaton" sdef.d.name
+          (Hashtbl.length gen_type.states) (List.length gen_type.transitions);
         let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
         let out = open_out out_channel in
         print_automaton_dot gen_type out;
@@ -36,14 +38,14 @@ let generalized_type_debug _out config =
     with
     | Except.TypeError msg ->
         let err_msg = List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; " in
-        Printf.eprintf "Error generating generalized type for %s: %s\n" sdef.d.name err_msg
+        CliOutput.error "Could not construct type %s: %s" sdef.d.name err_msg
     | Failure msg ->
-        Printf.eprintf "Error generating generalized type for %s: %s\n" sdef.d.name msg
+        CliOutput.error "Could not construct type %s: %s" sdef.d.name msg
   )session_type_defs;
 
   (* check compatibility *)
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
-  if config.verbose then Printf.eprintf "\nPool Compatiblity Checks:\n\n";
+  if config.verbose then CliOutput.section "Fast compatibility";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
     let open SessionFastCompat in
     
@@ -51,7 +53,7 @@ let generalized_type_debug _out config =
     let session_ids = SessionHelper.preprocess_pool_for_compatibility 
         pool session_type_defs in
     if config.verbose then
-      Printf.eprintf "Checking Pool %s (%d members together)\n"
+      CliOutput.info "Checking pool %s (%d members together)"
         pool.d.pool_id (List.length session_ids);
 
       (* Printf.eprintf "Session IDs in Pool %s: \n" pool.d.pool_id;
@@ -59,18 +61,18 @@ let generalized_type_debug _out config =
         Printf.eprintf "- Interface %s : %s \n" intf_id (string_of_protocol st_node.d)
       ) session_ids; *)
     
-    let compat, err = try check_compatibility_multiparty session_ids pool.d.pool_id config.verbose
+    let compat, err = try check_compatibility_multiparty ~silent:config.silent session_ids pool.d.pool_id config.verbose
       with
       | Except.TypeError msg ->
         (false, List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
       | Failure msg -> (false, msg)
     in
-    Printf.eprintf "Pool %s Compatibility: %b | err_msg = %s \n" pool.d.pool_id compat err;
+    CliOutput.compatibility pool.d.pool_id (string_of_bool compat) err;
   ) pool_defs;
   Printf.eprintf "\n"
 
 (* Each stage checks the accumulated subsystem together with one new member. *)
-let sequential_compatibility members pool_id verbose =
+let sequential_compatibility ~silent members pool_id verbose =
   let open SessionCompatiblity2 in
   let open SessionAutomaton2 in
   let rec next_stage stage accumulated consumed next rest =
@@ -82,7 +84,7 @@ let sequential_compatibility members pool_id verbose =
         next.member_id (string_of_msgset reused))]);
     let name = Printf.sprintf "%s_sequential_%d" pool_id stage in
     let compatible, message, residual =
-      check_compatibility_multiparty [accumulated; next] name verbose in
+      check_compatibility_multiparty ~silent [accumulated; next] name verbose in
     if not compatible then (compatible, message)
     else match rest with
       | [] -> (compatible, message)
@@ -94,7 +96,7 @@ let sequential_compatibility members pool_id verbose =
   | [] -> raise (Except.TypeError [Except.Text ("Pool " ^ pool_id ^ " has no interface members")])
   | [member] ->
       let name = pool_id ^ "_sequential_1" in
-      let compatible, message, _ = check_compatibility_multiparty [member] name verbose in
+      let compatible, message, _ = check_compatibility_multiparty ~silent [member] name verbose in
       (compatible, message)
   | first :: second :: rest ->
       next_stage 1 first first.messages second rest
@@ -111,14 +113,14 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
   );
   let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
   let open Lang in
-  if config.verbose then Printf.eprintf "\nGeneralized Type v2:\n\n";
-  if config.verbose then
+  if config.verbose && not config.silent then CliOutput.section "Generalized types";
+  if config.verbose && not config.silent then
     List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
       let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
       Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol preprocess);
     ) session_type_defs;
 
-  if config.verbose then Printf.eprintf "\nGenerating Generalized Types (v2) as DOT files...\n\n";
+  if config.verbose then CliOutput.section "Type automata";
   List.iter(
     fun (sdef :Lang.session_def Lang.ast_node) ->
     try
@@ -127,6 +129,7 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
       in
       let gen_type = SessionBuildAutomaton2.build_automaton
         (Some sdef.d.name) repeated_type sdef.d.body.span in
+      if config.verbose then SessionAutomaton2.print_automaton_counts gen_type stderr;
       let out_channel = Printf.sprintf "generalizedv2_type_%s.dot" sdef.d.name in
       let out = open_out out_channel in
       SessionAutomaton2.print_automaton_dot gen_type out;
@@ -134,9 +137,9 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
     with
     | Except.TypeError msg ->
       let err_msg = List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; " in
-      Printf.eprintf "Error generating generalized type (v2) for %s: %s\n" sdef.d.name err_msg
+      CliOutput.error "Could not construct type %s: %s" sdef.d.name err_msg
     | Failure msg ->
-      Printf.eprintf "Error generating generalized type (v2) for %s: %s\n" sdef.d.name msg
+      CliOutput.error "Could not construct type %s: %s" sdef.d.name msg
   ) session_type_defs;
 
   let channel_classes =
@@ -144,7 +147,7 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
   in
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
   let mode = if sequential then "Sequential" else "Simultaneous" in
-  if config.verbose then Printf.eprintf "\n%s Pool Compatibility Checks:\n\n" mode;
+  if config.verbose then CliOutput.section (mode ^ " compatibility");
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
     let result, err =
       try
@@ -152,15 +155,15 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
           SessionCompatiblity2.prepare_pool channel_classes session_type_defs pool
         in
         if config.verbose then
-          Printf.eprintf "Checking Pool %s (%d members, %s)\n"
+          CliOutput.info "Checking pool %s (%d members, %s)"
             pool.d.pool_id (List.length session_ids) (String.lowercase_ascii mode);
         let members = SessionCompatiblity2.build_members message_sets session_ids config.verbose in
         let compatible, message =
           if sequential then
-            sequential_compatibility members pool.d.pool_id config.verbose
+            sequential_compatibility ~silent:config.silent members pool.d.pool_id config.verbose
           else
             let compatible, message, _ =
-              SessionCompatiblity2.check_compatibility_multiparty members
+              SessionCompatiblity2.check_compatibility_multiparty ~silent:config.silent members
                 (pool.d.pool_id ^ "_simultaneous") config.verbose in
             (compatible, message)
         in
@@ -170,8 +173,7 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
         ("error", List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; ")
       | Failure msg -> ("error", msg)
     in
-    Printf.eprintf "[%s] Pool %s Compatibility: %s | err_msg = %s \n"
-      mode pool.d.pool_id result err;
+    CliOutput.compatibility ~mode pool.d.pool_id result err;
   ) pool_defs;
   Printf.eprintf "\n"
 

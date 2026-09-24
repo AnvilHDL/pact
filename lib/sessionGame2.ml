@@ -119,6 +119,19 @@ type game_result = {
   counterexample_trace : string option;
 }
 
+let explain_trace ~silent name summary = function
+  | None -> summary
+  | Some trace when not silent -> summary ^ "\n" ^ trace
+  | Some trace ->
+      let name = String.map (function
+        | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-') as c -> c
+        | _ -> '_') name in
+      let path = "losing_trace_" ^ name ^ ".txt" in
+      let out = open_out path in
+      Fun.protect ~finally:(fun () -> close_out out) (fun () ->
+        Printf.fprintf out "%s\n%s\n" summary trace);
+      summary ^ " Losing trace: " ^ path
+
 let indent_block prefix text =
   text
   |> String.split_on_char '\n'

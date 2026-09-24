@@ -5,7 +5,7 @@ open SessionBuildAutomaton
 open SessionUtils
 
 
-let create_product (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool) (_name : identifier)  =
+let create_product ?(silent = false) (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool) (_name : identifier)  =
   let automata_ids_list = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton (Some intf_id) st_node.d st_node.span in
     let final_state = Hashtbl.fold (fun id s acc -> if s.accepting then id :: acc else acc) auto.states [] in
@@ -35,11 +35,11 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     ) automata_ids_list
   );
 
-  Printf.eprintf "All individual automata built. Starting product construction...\n";
-  flush stderr;
+  CliOutput.info "All individual automata built. Starting product construction...";
   
   let state_map : (int list, int) Hashtbl.t = Hashtbl.create 10 in
   let prod_auto = TypeAutomaton.create () in
+  prod_auto.name <- _name;
 
   let get_product_state (states: int list) : int =
     try Hashtbl.find state_map states
@@ -50,14 +50,12 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
     )
   in
 
-  if verbose then
-    Printf.eprintf "Information about individual automata:\n";
-    Printf.eprintf "Total automata to combine: %d\n" automata_count;
-    flush stderr;
-    Array.iteri (fun idx (auto, intf_id) ->
-      Printf.eprintf " Automaton %d (ID: %s): States = %d, Transitions = %d\n" idx intf_id (Hashtbl.length auto.states) (List.length auto.transitions);
-      flush stderr
-    ) automata_ids;
+  if verbose then (
+    CliOutput.info "Combining %d automata" automata_count;
+    Array.iter (fun (auto, intf_id) ->
+      CliOutput.counts stderr "Type automaton" intf_id
+        (Hashtbl.length auto.states) (List.length auto.transitions)
+    ) automata_ids);
     
 
   let worklist = Queue.create () in
@@ -69,8 +67,8 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
   let inc_iter () =
     incr iter;
     if !iter mod 10000 = 0 then (
-      Printf.eprintf "Product construction iteration %d, worklist size: %d, visited states: %d\n" !iter (Queue.length worklist) (IntListSet.cardinal !visited);
-      flush stderr
+      CliOutput.info "Product iteration %d: %d queued, %d visited states"
+        !iter (Queue.length worklist) (IntListSet.cardinal !visited)
     )
   in
   while not (Queue.is_empty worklist) do
@@ -453,16 +451,24 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
           if not !found && not !found_epsilon then (
             let trace = collect_dead_ends_paths prod_auto [prod_state_id] in
             let trace = Printf.sprintf "Dead-end trace leading to product state %d:\n%s\n" prod_state_id (List.hd trace|> snd) in
-            let msg = Printf.sprintf "No compatible transitions found from product state %d corresponding to states %s\n%s" prod_state_id (String.concat "," (List.map string_of_int current_states)) trace in
-            Printf.eprintf "State Map : Product state -> Component states\n";
+            let summary = Printf.sprintf "No compatible transitions found from product state %d corresponding to states %s" prod_state_id (String.concat "," (List.map string_of_int current_states)) in
+            let details = Buffer.create 256 in
+            Buffer.add_string details "State Map : Product state -> Component states\n";
             Hashtbl.iter (fun states prod_state_id ->
-              Printf.eprintf "Product state %d -> Component states [%s]\n" prod_state_id (String.concat "," (List.map string_of_int states))
+              Printf.bprintf details "Product state %d -> Component states [%s]\n" prod_state_id (String.concat "," (List.map string_of_int states))
             ) state_map;
-            Printf.eprintf "Offers of each automaton in current state: %s\n" (String.concat " | " (List.mapi (fun idx st_id ->
+            Printf.bprintf details "Offers of each automaton in current state: %s\n" (String.concat " | " (List.mapi (fun idx st_id ->
               let auto, _ = automata_ids.(idx) in
               let state = Hashtbl.find auto.states st_id in
               Printf.sprintf "\nAutomaton %d offers: [%s] | has delay: %b" idx (String.concat "," (List.map Lang.string_of_msg_spec state.offers)) ((List.nth delay_transitions idx) <> [])
             ) current_states));
+            let msg = if silent then
+                SessionGame2.explain_trace ~silent _name summary
+                  (Some (trace ^ Buffer.contents details))
+              else (
+                Printf.eprintf "%s" (Buffer.contents details);
+                summary ^ "\n" ^ trace)
+            in
             let out_channel = open_out ("incompat_prod_auto_"^_name^".dot") in
             print_automaton_dot prod_auto out_channel;
             close_out out_channel;
@@ -518,7 +524,7 @@ let create_product (session_ids: (((session_type ast_node)*identifier) list))  (
   ) state_map;
 
   (* Debug output *)
-  if verbose then Hashtbl.iter (fun states prod_state_id ->
+  if verbose && not silent then Hashtbl.iter (fun states prod_state_id ->
       Printf.eprintf "Product state %d corresponds to states %s\n" prod_state_id (String.concat "," (List.map string_of_int states))
   ) state_map;
 
@@ -535,15 +541,16 @@ let label_adversary_state (auto : TypeAutomaton.t) (state_id : int) =
     state.adversary <- true
 
 
-let check_compatibility_multiparty 
+let check_compatibility_multiparty ?(silent = false)
     (session_ids : ((session_type ast_node) * identifier) list)
     (pool_id : identifier)
     (verbose : bool) 
     : (bool * string) =
 
 
-    let prod_auto = create_product session_ids verbose pool_id in
-    Printf.eprintf "Product Construction Completed. Total States: %d\n" (Hashtbl.length prod_auto.states);
+    let prod_auto = create_product ~silent session_ids verbose pool_id in
+    CliOutput.counts stderr "Product" pool_id
+      (Hashtbl.length prod_auto.states) (List.length prod_auto.transitions);
 
     Hashtbl.iter (fun state_id _ ->
         label_adversary_state prod_auto state_id
@@ -551,8 +558,7 @@ let check_compatibility_multiparty
 
     let ids_list = List.map snd session_ids in
     
-    let result, err = play_game prod_auto ids_list in
-    Printf.eprintf "Game Analysis Completed : %b\n" result;
+    let result, err = play_game ~silent prod_auto ids_list in
 
     if verbose || (not result) then begin
     let res_prefix = if result then "compat_" else "incompat_" in

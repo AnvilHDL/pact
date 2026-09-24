@@ -2,6 +2,7 @@ type compile_config = {
   debug_mode : bool;
   debug_choice : int;
   verbose: bool;
+  silent : bool;
   verbose_max : bool;
   stdin: bool;
   disable_lt_checks : bool;
@@ -19,6 +20,7 @@ type compile_config = {
 
 let parse_args () : compile_config =
   let verbose = ref false in
+  let silent = ref false in
   let verbose_max = ref false in
   let disable_compat_checks = ref false in
   let disable_lt_checks = ref false in
@@ -41,6 +43,7 @@ let parse_args () : compile_config =
     [
       ("-stdin", Arg.Set stdin, "Read from standard input. If a filename is provided despite this flag, it is treated as the path of standard input data.");
       ("-verbose", Arg.Set verbose, "Enable verbose output");
+      ("-silent", Arg.Set silent, "Write compatibility traces to files; keep concise results on stderr");
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-strict-dtc", Arg.Set strong_typecasts, "Restrict Abstract Typecasts");
       ("-disable-session-checks", Arg.Set disable_session_checks, "Disable session type related checks");
@@ -55,10 +58,11 @@ let parse_args () : compile_config =
       ("-verbose-max", Arg.Set verbose_max, "Enable verbose output with maximum detail");
     ]
     add_input_filename
-    "anvil [-stdin] [-verbose] [-disable-lt-checks] [-O <opt-level>] [-two-round] [-json] [-strict-dtc] <file1> [<file2>] ...";
+    "pact [-stdin] [-verbose] [-silent] [-disable-lt-checks] [-O <opt-level>] [-two-round] [-json] [-strict-dtc] <file1> [<file2>] ...";
   {
     debug_mode = (!debug_choice <> -1);
     verbose = !verbose;
+    silent = !silent;
     debug_choice = !debug_choice;
     verbose_max = !verbose_max;
     stdin = !stdin;

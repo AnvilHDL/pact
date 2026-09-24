@@ -105,9 +105,10 @@ let build_members message_sets session_ids verbose =
       | Some messages -> messages
       | None -> messages_of_session_type session_node.d
     in
-    if verbose then
+    if verbose then (
+      print_automaton_counts automaton stderr;
       write_automaton_dot verbose
-        (sanitize_filename member_id ^ "_generalized_v2_automaton.dot") automaton;
+        (sanitize_filename member_id ^ "_generalized_v2_automaton.dot") automaton);
     { member_id; automaton; messages; progress_ids = [member_id] }) session_ids
 
 let compose verbose name inputs =
@@ -146,33 +147,30 @@ let residual_input name product boundary_messages progress_ids =
   } in
   { member_id = name; automaton; messages = boundary_messages; progress_ids }
 
-let explain_result name (game : SessionGame2.game_result) =
+let explain_result ~silent name (game : SessionGame2.game_result) =
   let message = if game.compatible then game.summary
     else "Compatibility failed at " ^ name ^ ". " ^ game.summary in
-  let message = match game.counterexample_trace with
-    | None -> message
-    | Some trace -> message ^ "\n" ^ trace
-  in
+  let message = SessionGame2.explain_trace ~silent name message game.counterexample_trace in
   (game.compatible, message)
 
 (* A residual is itself an input, retaining every original progress obligation. *)
-let check_compatibility_multiparty inputs pool_id verbose =
+let check_compatibility_multiparty ?(silent = false) inputs pool_id verbose =
   if inputs = [] then
     raise (TypeError [Text ("Pool " ^ pool_id ^ " has no interface members")]);
   let progress_ids = List.concat_map (fun input -> input.progress_ids) inputs in
-  let product, internal_messages, boundary_messages = compose verbose pool_id inputs in
+  let product, internal_messages, boundary_messages = compose (verbose && not silent) pool_id inputs in
+  if verbose && silent then print_automaton_counts product stderr;
   let arena = SessionGame2.build_arena pool_id product in
   let game = SessionGame2.play_arena arena ~progress_ids in
   let path = sanitize_filename pool_id in
   write_automaton_dot verbose ("product_" ^ path ^ ".dot") product;
   SessionGame2.print_arena_dot ("arena_" ^ path ^ ".dot") arena;
-  if verbose then (
-    Printf.eprintf "Compatibility stage %s (I={%s}; B={%s}): %s\n"
+  if verbose then
+    CliOutput.info "Stage %s (I={%s}; B={%s}): %s"
       pool_id (string_of_msgset internal_messages)
       (string_of_msgset boundary_messages) game.summary;
-    Option.iter (fun trace -> Printf.eprintf "%s\n" trace) game.counterexample_trace);
   let residual = residual_input pool_id product boundary_messages progress_ids in
   if game.compatible then
     write_automaton_dot verbose ("residual_" ^ path ^ ".dot") residual.automaton;
-  let compatible, message = explain_result pool_id game in
+  let compatible, message = explain_result ~silent pool_id game in
   (compatible, message, residual)

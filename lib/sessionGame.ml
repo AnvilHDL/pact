@@ -289,7 +289,7 @@ let collect_dead_ends_paths (auto : TypeAutomaton.t) (st_ids : int list) : (int 
   collect_dead_ends_paths_indexed auto outgoing_index st_ids
 
 (* The fast product is closed; its labels feed the same clock/progress game. *)
-let play_game (auto : TypeAutomaton.t) (ids : string list) : (bool * string) =
+let play_game ?(silent = false) (auto : TypeAutomaton.t) (ids : string list) : (bool * string) =
   let module A = SessionAutomaton2 in
   let product = A.TypeAutomaton.create A.MsgSet.empty in
   Hashtbl.clear product.states;
@@ -322,8 +322,5 @@ let play_game (auto : TypeAutomaton.t) (ids : string list) : (bool * string) =
       A.StringSet.mem (SessionGame2.arena_player_id id) result.winning_nodes
       || A.StringSet.mem (SessionGame2.arena_adversary_id id 0) result.winning_nodes)
     auto.states;
-  let message = match result.counterexample_trace with
-    | None -> result.summary
-    | Some trace -> result.summary ^ "\n" ^ trace
-  in
+  let message = SessionGame2.explain_trace ~silent auto.name result.summary result.counterexample_trace in
   result.compatible, message
