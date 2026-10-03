@@ -1,205 +1,23 @@
-// interface i1 (ep : left ch) = #ep.m1 ; #ep.m2 ; #1
-// interface i2 (ep : right ch) = ^( #ep.m1 , #ep.m2 ) ; #1
-// // // interface i2 (ep : right ch) = (#ep.m1 + #ep.m2);#1
 
-// // // interface i3 (ep : left ch) = (#ep.m1 || #ep.m2);#1
-
-// // // interface i4 (ep : right ch) = ^( #ep.m1 , #ep.m2 ) ;#1
-
-// // // interface i5 (ep : left ch) = &( #ep.m1 , #ep.m2 ) ;#1
-
-// // // interface i6 (ep : right ch) = ep.m1 ; #1
-
-// // // interface i7 (ep : left ch) = ^(ep.m1, ep.m2);#1
-
-// // // interface i8 (ep : right ch) = ep.m1;ep.m2;#1
-
-// pool p0 {
-//     ep_le -- ep_ri : ch;
-//     ip01 : ep.m1 ; ep.m2 ; #1,
-//     ip02 : ep.m1 ; #1,
-//     ip03 : ep.m3 ; #1,
-//     ip04 : ep.m2;ep.m3;#1
-// }
-
-// // // // pool p1 { // true
-// // // //     ep_le -- ep_ri : ch;
-// // // //     in1 : ^(#ep.m1, #ep.m2);#1 ,
-// // // //     in2 : ^(#ep.m1, *);#1 ,
-// // // //     in3 : #ep.m3;^(#ep.m2,*);#1 ,
-// // // //     in4 : #ep.m3;#1
-// // // // }
+chan ch{
+    left m1 : (logic@#1),
+    left m2 : (logic@#1)
+}
 
 
-// // // pool p2 { 
-// // //     ep_le -- ep_ri : ch;
-// // //     ip21 : #ep.m1 || #ep.m2;#1,
-// // //     ip22 : #ep.m1 || #ep.m2;#1
-// // // }
-
-// // // // interface i1 (ep : left ch) = (#ep.m1 || #ep.m2) ; #1
-
-// // // // pool p3 { 
-// // // //     ep_le -- ep_ri : ch;
-// // // //     ip31 : ep.m1;#1,
-// // // //     ip32 : #1
-// // // // }
-
-// // // // pool p1 { // true
-// // // //     ep_le -- ep_ri : ch;
-// // // //     ip11 : #ep.m1 ; #1,
-// // // //     ip12 : #ep.m3 ; #1
-// // // // }
-
-// // // // interface i1 (ep : left ch) = (#ep.m1 || #ep.m3);#1
-
-// // // interface i1 (ep : left ch) = #ep.m1
-
-
-// // // pool p6 { // true
-// // //     ep_le -- ep_ri : ch;
-// // //     ip61 : F ep.m1;#1 ,
-// // //     ip62 : ep.m1;#1
-// // // }
-
-// // // 
-
-// // pool p16{
-// //     ep_le -- ep_ri : ch;
-// //     ip161 : ep.m1;^(ep.m2,ep.m3);#1,
-// //     ip162 : ^(ep.m1,*);#2,
-// //     ip163 : ^(ep.m2,*);#1,
-// //     ip164 : ^(ep.m3,*);#1
-
-// // }
-
-// // pool p2{
-// //     ep_le -- ep_ri : ch;
-// //     ip21 : ep.m1;#1,
-// //     ip22 : ep.m1;#2
-// // }
-
-// // pool p1 { // trued
-// //     ep_le -- ep_ri : ch;
-// //     ip11 : (ep.req ; ep.ack);#1 ,
-// //     ip12 : (ep.req ; ep.ack);#1
-// // }
-
-// // pool p2 { // true
-// //     ep_le -- ep_ri : ch;
-// //     ip21 : #1,
-// //     ip22 : #2
-// // }
-
-
-// // pool n4 { // false
-// //     ep_le -- ep_ri : ch;
-// //     in41 : F #ep.m1;#1,
-// //     in42 : #ep.m1;#1 
-// // }
-
-// // pool p12 {
-// //     ep_le -- ep_ri : ch;
-// //     in121 : ((ep.m1;ep.m2) + (ep.m2;ep.m1));#1,
-// //     in122 : ep.m1;#1,
-// //     in123 : ep.m2;#1
-// // }
-
-// // pool p13 {
-// //     ep_le -- ep_ri : ch;
-// //     in131 : (ep.m1 + ep.m2);#1,
-// //     in132 : ep.m1;#1,
-// //     in133 : ep.m2;#1
-// // }
-// // pool p10 { // true
-// //     ep_le -- ep_ri : ch;
-// //     ip101 : (#ep.m1 || #ep.m2);#1,
-// //     ip102 : #ep.m1;#1,
-// //     ip103 : #ep.m2;#1
-// // }
-
-
-// pool p16{
-//     ep_le -- ep_ri : ch;
-//     ip161 : ^(ep.m2,ep.m3);#1,
-//     ip163 : ^(ep.m2,*);#1,
-//     ip164 : ^(ep.m3,*);#1
-// // passes when #4 is used above
-// }
-
-// interface i1 (ep : left ch) = ^(ep.m2,ep.m3);#1
-
-
-// interface i1(ep : left ch) = rec X . (wa11.req;(#wa11.done + wa12.req;(#wa12.done || #wa11.done));#1;X)
-
-// interface i2(ep : right ch) = rec X . (^(wa11.req:#wa11.done, wa12.req:#wa12.done, *);#1;X)
-
-// pool p1 {
-//     ep_le -- ep_ri : ch;
-//     ip11 : wa11.req;(#wa11.done + wa12.req;(#wa12.done || #wa11.done));#1,
-//     ip12 : wa12.req;(#wa12.done + wa11.req;(#wa11.done || #wa12.done));#1
-// }
-
-// pool p3 { // true
-//     ep_le -- ep_ri : ch;
-//     ip31 : (#ep.req  + #ep.ack) ;#1,
-//     ip32 : (^( #ep.req , #ep.ack) );#1
-// }
-
-// pool p4 { // true
-//     ep_le -- ep_ri : ch;
-//     ip41 : #1,
-//     ip42 : #1
-// }
-
-// pool p4 { // true
-//     ep_le -- ep_ri : ch;
-//     ip41 : ((#ep.req  + #ep.ack) ;#1) ,
-//     ip42 : (&(#ep.req , #ep.ack);#1) 
-// }
-
-// pool p2 { // true
-//     ep_le -- ep_ri : ch;
-//     ip21 : (#ep.req ; #ep.ack) ,
-//     ip22 : (#ep.req || #ep.ack)
-// }
-// interface i1 (ep : left ch) = ^( #ep.req , *) ;#1
-
-// pool p13 {
-//     ep_le -- ep_ri : ch;
-//     ip131 : ep.req;#4,
-//     ip132 : ep.req;#1
-// }
-
-// pool p4 { // true
-//     ep_le -- ep_ri : ch;
-//     ip41 : ((#ep.req  + #ep.ack) ;#1) ,
-//     ip42 : (&(#ep.req , #ep.ack);#1) 
-// }
-
-
-// pool p16{
-//     ep_le -- ep_ri : ch;
-//     ip161 : ep.m1;^(ep.m2,ep.m3);#1,
-//     ip162 : ep.m1;#1,
-//     ip163 : ^(ep.m2,*);#2,
-//     ip164 : ^(ep.m3,*);#3
-
-// }
-
-// pool p12{
-//     ep_le -- ep_ri : ch;
-//     in121 : (ep.m1||ep.m2);#1,
-//     in122 : (ep.m1||ep.m2);#1
-// }
-
-// interface i1 (ep : left ch) = (#ep.m1 || #ep.m2);#1
-// interface i2 (ep : right ch) = ^(ep.m1,ep.m2) ;#1
-
-pool p15 { // false
-    ep_le -- ep_ri : ch;
-    in151 : ep.m1;&(ep.m2,ep.m3);#1,
-    in152 : ep.m1;#1,
-    in153 : ^(ep.m2,*);#1,
-    in154 : ^(ep.m3,*);#1
+proc foo(ep : left ch){
+    loop{
+        xoffer{
+            x = irecv ep.m1 =>{
+                dprint "Received on m1: %d" (x)
+            },
+            y = irecv ep.m2 =>{
+                dprint "Received on m2: %d" (y)
+            }
+        } 
+        else{
+            dprint "No messages available" ()
+        } >>
+        cycle 1 
+    }
 }

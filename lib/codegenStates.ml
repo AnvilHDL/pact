@@ -107,6 +107,8 @@ let collect_reg_states g =
           let sn = EventStateFormatter.format_counter g.thread_id e.id in
           [(Printf.sprintf "logic[%d:0]" (width - 1), sn)]
         )
+      (* Instantaneous ops never wait, so they need no syncstate. *)
+      | `Send (_, Lang.Instant) | `Recv (_, Lang.Instant) -> []
       | `Send _ | `Recv _| `Sync _ ->
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
@@ -299,6 +301,8 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                 let ready_n = CodegenFormat.format_msg_ready_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg in
                   Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn ready_n trigger |> print_line;
                   Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn ready_n |> print_line
+              | None when kind = Lang.Instant ->
+                  Printf.sprintf "assign %s = %s %s;" cn cn' trigger |> print_line
               | None ->
                   Printf.sprintf "assign %s = %s || %s_q %s ;" cn cn' sn trigger |> print_line;
                   Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line)
@@ -361,7 +365,9 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                   Printf.sprintf "assign %s = ((%s || %s_q) && %s) %s;" cn cn' sn vld_n trigger;
                   Printf.sprintf "assign %s_n = (%s || %s_q) && !%s;" sn cn' sn vld_n
                 ] |> print_lines
-              ) else (
+              ) else if kind = Lang.Instant then
+                Printf.sprintf "assign %s = %s %s;" cn cn' trigger |> print_line
+              else (
                 [
                   Printf.sprintf "assign %s = (%s || %s_q) %s;" cn cn' sn trigger;
                   Printf.sprintf "assign %s_n = 1'b0;" sn
