@@ -868,7 +868,14 @@ expr:
   { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, None) }
 | KEYWORD_XOFFER; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
-  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some selector) }
+  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some (selector, Lang.OrderRotate)) }
+| KEYWORD_XOFFER; order = IDENT; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  else_v = offer_else_branch?
+  { let order = match order with
+      | "rotate" -> Lang.OrderRotate
+      | "tree" -> Lang.OrderTree
+      | _ -> raise (Except.TypeError [Except.Text ("Unknown xoffer order " ^ order ^ "; use rotate or tree")]) in
+    Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some (selector, order)) }
 | KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
   { Lang.Offer (ParserHelper.add_offer_else offer_arms else_v) }

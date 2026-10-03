@@ -529,7 +529,8 @@ and expr =
   | Ready of message_specifier (** [ready(a, b)] *)
   | Probe of message_specifier (** [probe(a, b)] *)
   | Match of expr_node * ((expr_node * expr_node option) list)
-  | XOffer of ((offer_arm_type * expr_node) list) * (identifier option)  (** exclusive offer with optional selector wire *)
+  | XOffer of ((offer_arm_type * expr_node) list) * ((identifier * xoffer_order) option)
+    (** exclusive offer with an optional selector wire and the order it imposes *)
   | Offer of ((offer_arm_type * expr_node) list)
   | OfferMatch of ((offer_arm_type * expr_node) list) * offer_match_arm list
     (** offer continued by the arm for exactly the offer arms taken *)
@@ -543,6 +544,11 @@ and expr =
   | Recursor of identifier  (** invoke a recursive block *)
   | Recurse
 and expr_node = expr ast_node
+
+(** How an xoffer's selector orders its arms. *)
+and xoffer_order =
+  | OrderRotate (** try arm [selector + i] at step [i], wrapping around *)
+  | OrderTree (** try arm [selector XOR i] at step [i], as a binary-tree round-robin arbiter *)
 
 (** Messages of the offer arms taken, or [None] for any other combination. *)
 and offer_match_arm = message_specifier list option * expr_node
@@ -807,7 +813,10 @@ let rec string_of_expr (e : expr) : string =
       let arm_str (arm_ty, body) =
         string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
       in
-      let sel_str = match sel_opt with Some s -> " sel=" ^ s | None -> "" in
+      let sel_str = match sel_opt with
+        | Some (s, OrderRotate) -> " sel=" ^ s
+        | Some (s, OrderTree) -> " tree sel=" ^ s
+        | None -> "" in
       "XOffer" ^ sel_str ^ " { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
   | Offer arms ->
       let arm_str (arm_ty, body) =

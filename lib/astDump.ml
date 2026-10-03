@@ -95,7 +95,10 @@ let expr_parts (e : expr) : string * (string option * expr_node) list =
      :: List.concat_map (fun (pat, body) ->
           (Some "case", pat) :: List.map (fun b -> (Some "=>", b)) (Option.to_list body)) cases)
   | XOffer (list, sel) ->
-    arms ("xoffer" ^ (match sel with Some s -> " " ^ s | None -> "")) list
+    arms ("xoffer" ^ (match sel with
+      | Some (s, OrderRotate) -> " " ^ s
+      | Some (s, OrderTree) -> " tree " ^ s
+      | None -> "")) list
   | Offer list -> arms "offer" list
   | OfferMatch (list, cases) ->
     let label, kids = arms "offer" list in

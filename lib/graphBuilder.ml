@@ -1134,7 +1134,8 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       (graph.wires, w)
     in
 
-    let new_wires, sel_w = if Option.is_some state_selector then (find_wire_ctx ctx.cg_lt_ctx (Option.get state_selector)) else WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (bit_len, 0)) graph.wires in
+    let order = match state_selector with Some (_, order) -> order | None -> OrderRotate in
+    let new_wires, sel_w = if Option.is_some state_selector then (find_wire_ctx ctx.cg_lt_ctx (fst (Option.get state_selector))) else WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs (WithLength (bit_len, 0)) graph.wires in
     graph.wires <- new_wires;
 
     let wire_list = List.map readiness_wire_of_group non_wildcard_msg_defs in
@@ -1172,7 +1173,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         acc @ [wtd]
       ) [] (List.init max_len (fun idx -> idx)) in
       let selector_indexes = List.fold_left (fun acc idx ->
-        let wires, wr = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs Add sel_w (`Single (Option.get idx.ld.w)) graph.wires in
+        (* Step [idx] tries the arm the selector's order puts there. *)
+        let step = match order with OrderRotate -> Add | OrderTree -> Xor in
+        let wires, wr = WireCollection.add_binary graph.thread_id ci.typedefs ci.macro_defs step sel_w (`Single (Option.get idx.ld.w)) graph.wires in
           graph.wires <- wires;
           acc @ [wr]
       ) [] index_values in
