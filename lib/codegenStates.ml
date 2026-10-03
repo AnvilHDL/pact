@@ -122,8 +122,81 @@ let select_join_arm_taken ?(recorded = false) thread_id join_id idx (root : Even
     Printf.sprintf "(%s[%d] || (!(|%s) && %s))" selected_q idx selected_q
       (EventStateFormatter.format_current thread_id root.id)
 
+(* -O 3 sharing of one-cycle delay flip-flops. A one-cycle delay is one
+   flip-flop on its input, so delay(a) || delay(b) = delay(a || b): delays whose
+   only reader ORs them into the same event (a branch join, a fixed-latency
+   offer join, or a recursion re-entering it) share one flip-flop. A loop whose end is
+   such a delay, read by nothing else, starts from that flip-flop reset to 1
+   instead of a separate start flag. *)
+type delay_sharing = {
+  shared_rep : (int, int) Hashtbl.t; (* member delay -> delay that keeps the flip-flop *)
+  shared_inputs : (int, EventGraph.event list) Hashtbl.t; (* that delay -> inputs of all members *)
+  start_delay : int option; (* loop-end delay whose flip-flop resets to 1 *)
+}
+
+let delay_sharing (config : Config.compile_config) (g : EventGraph.event_graph) =
+  let open EventGraph in
+  let shared_rep = Hashtbl.create 8 and shared_inputs = Hashtbl.create 8 in
+  if config.opt_level < 3 || g.comb then { shared_rep; shared_inputs; start_delay = None }
+  else begin
+    (* every reader of every event: the OR of a branch join, or anything else *)
+    let reads = Hashtbl.create 16 in
+    let add id r = Hashtbl.replace reads id (r :: Option.value ~default:[] (Hashtbl.find_opt reads id)) in
+    let rec src_reads (x : event) = function
+      (* a same-cycle step passes its input on unchanged *)
+      | `Seq (e, `Cycles 0) -> add e.id (`Or x.id)
+      | `Seq (e, _) -> add e.id `Other
+      | `Later (a, b) -> add a.id `Other; add b.id `Other
+      | `Branch (e_r, br) ->
+        add e_r.id `Other;
+        List.iter (fun (v : event) -> add v.id (`Or x.id)) br.branches_val
+      | `Root (Some (e', _)) -> add e'.id `Other
+      | `Root None -> ()
+      (* a recursion trigger is ORed into the event it re-enters *)
+      | `Recurse (src, trig) -> add trig (`Or x.id); src_reads x src
+      | `Select (p, _) -> add p.id `Other
+      | `SelectJoin ji ->
+        add ji.join_parent.id `Other;
+        List.iter (fun (e : event) -> add e.id `Other) ji.join_roots;
+        (* a join whose arms finish together fires on the OR of their ends *)
+        let node_read = if Option.is_some (select_join_fixed_latency config ji) then `Or x.id else `Other in
+        List.iter (fun (e : event) -> add e.id node_read) ji.join_nodes
+    in
+    List.iter (fun (x : event) ->
+      src_reads x x.source;
+      List.iter (fun (sa : sustained_action Lang.ast_node) -> add sa.d.until.id `Other) x.sustained_actions
+    ) g.events;
+    let readers (e : event) = List.sort_uniq compare (Option.value ~default:[] (Hashtbl.find_opt reads e.id)) in
+    let plain_delay (e : event) = match e.source with
+      | `Seq (p, `Cycles 1) when e.actions = [] && e.sustained_actions = [] -> Some p
+      | _ -> None
+    in
+    let groups = Hashtbl.create 8 in
+    List.iter (fun (e : event) ->
+      match plain_delay e, readers e with
+      | Some p, [ `Or j ] -> Hashtbl.replace groups j ((e, p) :: Option.value ~default:[] (Hashtbl.find_opt groups j))
+      | _ -> ()
+    ) g.events;
+    Hashtbl.iter (fun _ members ->
+      if List.length members >= 2 then begin
+        let members = List.sort (fun ((a : event), _) ((b : event), _) -> compare a.id b.id) members in
+        let (keep : event) = fst (List.hd members) in
+        List.iter (fun ((m : event), _) -> if m.id <> keep.id then Hashtbl.replace shared_rep m.id keep.id) members;
+        Hashtbl.replace shared_inputs keep.id (List.map snd members)
+      end
+    ) groups;
+    GraphAnalysis.events_prepare_outs g.events;
+    let start_delay =
+      match List.find_opt (fun e -> e.is_loop_terminal && List.is_empty e.outs) g.events with
+      | Some t when Option.is_some (plain_delay t) && readers t = [] -> Some t.id
+      | _ -> None
+    in
+    { shared_rep; shared_inputs; start_delay }
+  end
+
 let collect_reg_states config g =
   let open EventGraph in
+  let sharing = delay_sharing config g in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
   List.concat_map (fun e ->
     let rec collect_event_reg_states src =
@@ -133,6 +206,7 @@ let collect_reg_states config g =
     | `Seq (_, d) -> (
       match d with
       | `Cycles 0 -> []
+      | `Cycles 1 when Hashtbl.mem sharing.shared_rep e.id -> []
       | `Cycles n ->
         if g.is_general_recursive || n = 1 then (
           (* split into one-hot single cycles in general recursive case *)
@@ -199,7 +273,8 @@ let codegen_decl config printer (g : EventGraph.event_graph) =
   CodegenPrinter.print_line printer "logic event_current;";
   CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end";
 
-  Printf.sprintf "logic _init_%d;" g.thread_id |> CodegenPrinter.print_line printer;
+  if Option.is_none (delay_sharing config g).start_delay then
+    Printf.sprintf "logic _init_%d;" g.thread_id |> CodegenPrinter.print_line printer;
 
   (* print per-event states *)
   collect_reg_states config g
@@ -282,6 +357,7 @@ let codegen_next config printer (graphs : EventGraph.event_graph_collection)
         |> Printf.sprintf "!(%s)"
   in
   GraphAnalysis.events_prepare_outs g.events;
+  let sharing = delay_sharing config g in
   let recurse_event = List.find (fun e -> let open EventGraph in e.is_loop_terminal && (List.is_empty e.outs)) g.events in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
   let print_compute_next (e : EventGraph.event) =
@@ -294,6 +370,16 @@ let codegen_next config printer (graphs : EventGraph.event_graph_collection)
           (
             let cn' = EventStateFormatter.format_current g.thread_id e'.id in
             match d with
+            | `Cycles 1 when Hashtbl.mem sharing.shared_rep e.id ->
+              (* shares the flip-flop of another delay into the same join *)
+              let keep = Hashtbl.find sharing.shared_rep e.id in
+              Printf.sprintf "assign %s = %s_1_q %s;" cn (EventStateFormatter.format_counter g.thread_id keep) trigger |> print_line
+            | `Cycles 1 when Hashtbl.mem sharing.shared_inputs e.id ->
+              let sn = EventStateFormatter.format_counter g.thread_id e.id in
+              let inputs = Hashtbl.find sharing.shared_inputs e.id
+                |> List.map (fun (p : EventGraph.event) -> EventStateFormatter.format_current g.thread_id p.id) in
+              Printf.sprintf "assign %s = %s_1_q %s;" cn sn trigger |> print_line;
+              Printf.sprintf "assign %s_1_n = %s;" sn (String.concat " || " inputs) |> print_line
             | `Cycles n when n >= 1 ->
               if g.is_general_recursive || n = 1 then (
                 (* To Do : Need to reevaluate *)
@@ -433,6 +519,10 @@ let codegen_next config printer (graphs : EventGraph.event_graph_collection)
             Printf.sprintf "assign %s = ((%s & %s_q[0]) | (%s & %s_q[1]) | (%s & %s)) %s;" cn cn1 sn cn2 sn cn1 cn2 trigger;
             Printf.sprintf "assign %s_n = %s_q ^ {%s, %s} ^ {%s, %s};" sn sn cn1 cn2 cn cn
           ] |> print_lines
+        | `Root None when Option.is_some sharing.start_delay ->
+          (* the loop-end delay is reset to 1, so it also starts the loop *)
+          Printf.sprintf "assign %s = %s %s;" cn
+            (EventStateFormatter.format_current g.thread_id recurse_event.id) trigger |> print_line
         | `Root None ->
           [
             Printf.sprintf "assign %s = (_init_%d || %s) %s;"
@@ -811,6 +901,12 @@ let codegen_transition shared_regs printer (config : Config.compile_config) (gra
   let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) =
     CodegenPrinter.print_line printer ~lvl_delta_pre:lvl_delta_pre ~lvl_delta_post:lvl_delta_post in
   let reg_states = collect_reg_states config g in
+  let start_state =
+    Option.map (fun t -> EventStateFormatter.format_counter g.thread_id t ^ "_1") (delay_sharing config g).start_delay in
+  let print_init v =
+    if Option.is_none start_state then print_line @@ Printf.sprintf "_init_%d <= 1'b%d;" g.thread_id v in
+  let reset_state sn =
+    Printf.sprintf "%s_q <= %s;" sn (if Some sn = start_state then "1'b1" else "'0") in
   (* reset states *)
 
   let owned_regs = GraphAnalysis.graph_owned_regs g |> Utils.StringSet.of_list in
@@ -830,13 +926,13 @@ let codegen_transition shared_regs printer (config : Config.compile_config) (gra
   Printf.sprintf "always_ff @(posedge clk_i or negedge rst_ni) begin : _thread_%d_st_transition" g.thread_id |> print_line ~lvl_delta_post:1;
   print_line ~lvl_delta_post:1 "if (~rst_ni) begin";
   (* register reset *)
-  print_line @@ Printf.sprintf "_init_%d <= 1'b1;" g.thread_id;
+  print_init 1;
   Utils.StringMap.iter (
     fun _ (r : Lang.reg_def) ->
       let open CodegenFormat in
       Printf.sprintf "%s <= '0;" (format_regname_current r.name) |> print_line
   ) owned_regs;
-  List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= '0;" sn |> print_line) reg_states;
+  List.iter (fun (_, sn) -> reset_state sn |> print_line) reg_states;
   print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 "end else begin";
   (* actions *)
   codegen_actions printer g (Utils.StringSet.union multi_writer shared_regs);
@@ -848,16 +944,16 @@ let codegen_transition shared_regs printer (config : Config.compile_config) (gra
                             (CodegenFormat.canonicalize_endpoint_name reset_by.endpoint g)
                             reset_by.msg 0 in
       print_line ~lvl_delta_post:1 @@ Printf.sprintf "if (%s) begin" reset_msg_signal;
-      print_line @@ Printf.sprintf "_init_%d <= 1'b1;" g.thread_id;
+      print_init 1;
       Utils.StringMap.iter (
         fun _ (r : Lang.reg_def) ->
           let open CodegenFormat in
           Printf.sprintf "%s <= '0;" (format_regname_current r.name) |> print_line
       ) owned_regs;
-      List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= '0;" sn |> print_line) reg_states;
+      List.iter (fun (_, sn) -> reset_state sn |> print_line) reg_states;
           print_line ~lvl_delta_pre:(-1) ~lvl_delta_post:1 "end else begin"
   );
-  print_line @@ Printf.sprintf "_init_%d <= 1'b0;" g.thread_id;
+  print_init 0;
   (* next states *)
   List.iter (fun (_, sn) -> Printf.sprintf "%s_q <= %s_n;" sn sn |> print_line) reg_states;
   Utils.StringSet.iter (fun name ->
