@@ -8,6 +8,8 @@ type big_atomic_action =
   | Atom of atomic_action_with_gap
   | Offers of offering_session_type list
   | XOffers of offering_session_type list
+  | OfferMatchPending of offer_match_case list
+    (** the case still depends on which offer arms were taken *)
   | Terminal of terminal_kind
 
 and terminal_kind =
@@ -36,6 +38,7 @@ let print_string_of_head_cont_pair hc =
     | Atom act -> string_of_atomic_action_with_gap act
     | Offers off -> string_of_protocol (StyOffer off)
     | XOffers xoff -> string_of_protocol (StyXOffer xoff)
+    | OfferMatchPending cases -> string_of_protocol (StyOfferMatch ([], cases))
     | Terminal ParallelDone -> string_of_protocol StySkip
     | Terminal RecurseJump -> "recurse"
   in
@@ -321,6 +324,7 @@ let residual_of_head_cont hc =
     | Atom act -> Some (StyAtom act)
     | Offers offerings -> Some (StyOffer offerings)
     | XOffers offerings -> Some (StyXOffer offerings)
+    | OfferMatchPending cases -> Some (StyOfferMatch ([], cases))
     | Terminal ParallelDone -> Some StySkip
     | Terminal RecurseJump -> None
   in
@@ -529,6 +533,21 @@ let rec get_head_continuation_pair
   | StyXOffer offerings ->
       [{default_head_continuation_pair with head = XOffers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
+      [{default_head_continuation_pair with head = Offers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyOfferMatch ([], cases) ->
+      (* After the join: one case if all agree, otherwise a match must follow. *)
+      (match cases with
+       | first :: rest when List.for_all (fun c -> c.match_body = first.match_body) rest ->
+           get_head_continuation_pair ~inside_parallel first.match_body sp rec_var_context
+       | _ ->
+           [{default_head_continuation_pair with head = OfferMatchPending cases; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}])
+  | StyOfferMatch (offerings, cases) ->
+      (* Each arm carries the pending match to the offer's join. *)
+      let pending = StyOfferMatch ([], cases) in
+      let offerings = List.map (fun (off : offering_session_type) ->
+        match off.trigger with
+        | AtomDelay _ -> off
+        | _ -> { off with continuation = seq_of_sty_opt off.continuation (Some pending) }) offerings in
       [{default_head_continuation_pair with head = Offers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StySkip -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyRec(id,s') -> get_head_continuation_pair ~inside_parallel s' sp ((id, sty_node)::rec_var_context)
@@ -973,9 +992,69 @@ let check_generalized_session
                 g.thread_codespan module_name
           in
 
+          (* For a branch on the offer arms taken, the arm combinations its
+             side covers; [None] for any other branch. *)
+          let offer_match_side (branches : branch_side_info) =
+            let info = branches.owner_branch in
+            match info.branch_cond_v.w with
+            | Some { source = WireCollection.Wire.OfferSelected tag; _ } ->
+                let arm_groups =
+                  List.find_map (fun (e : event) ->
+                    match e.source with
+                    | `SelectJoin ({ join_tag = Some t; _ } as ji) when t = tag ->
+                        Some (List.map (fun (r : event) ->
+                          match r.source with `Select (_, group) -> group | _ -> []) ji.join_roots)
+                    | _ -> None) g.events
+                  |> Option.value ~default:[]
+                in
+                let pats = match info.branch_cond with
+                  | MatchCases p | MatchCasesNoDefault p -> p
+                  | TrueFalse -> []
+                in
+                let mask_of (ld : lowering_data) = match ld.w with
+                  | Some { source = WireCollection.Wire.Literal (WithLength (_, v)); _ } -> Some v
+                  | _ -> None
+                in
+                let taken_of mask =
+                  List.concat (List.filteri (fun i _ -> mask land (1 lsl i) <> 0) arm_groups)
+                in
+                let idx = branches.branch_side_sel in
+                if idx < List.length pats then
+                  Some (Option.to_list (Option.map taken_of (mask_of (List.nth pats idx))))
+                else
+                  let named = List.filter_map mask_of pats |> List.map taken_of in
+                  Some (List.filter (fun c -> not (List.exists (same_msg_set c) named))
+                          (offer_arm_combinations arm_groups))
+            | _ -> None
+          in
           List.iter (fun child_ev ->
             let rec assign_session_type src =
               match src with
+              | `Root Some (_, branches) when Option.is_some (offer_match_side branches) ->
+                  let combos = Option.get (offer_match_side branches) in
+                  let pending = List.find_map (fun hc ->
+                    match hc.head with OfferMatchPending cases -> Some (hc, cases) | _ -> None) head_conts in
+                  (match pending with
+                   | Some (hc, cases) ->
+                       let case_list = List.map (fun c -> (c.match_on, c.match_body)) cases in
+                       let bodies = List.filter_map (offer_match_lookup case_list) combos in
+                       (match bodies with
+                        | body :: rest
+                          when List.length bodies = List.length combos
+                               && List.for_all (fun other ->
+                                    residual_matches hc.recvar_map (Some body) (Some other) protocol_node.d) rest ->
+                            hc.visited <- true;
+                            assign_child_residual child_ev hc.recvar_map (seq_of_sty_opt (Some body) hc.cont)
+                        | _ ->
+                            error_handler g
+                              (Printf.sprintf "Offer match case at event %d covers arms the type continues differently after | Type: %s"
+                                child_ev.id (string_of_residual current_residual))
+                              g.thread_codespan module_name)
+                   | None ->
+                       (* The type continues the same way whichever arms were taken. *)
+                       mark_structural_propagation ();
+                       assign_child_residual ~from_structural:true child_ev structural_recvars structural_residual)
+
               | `Seq (_, `Choice (msg_list, kind)) ->
                   let matched = ref false in
                   List.iter (fun hc ->
@@ -1223,6 +1302,7 @@ let check_generalized_session
                   ev.id
                   (match hc.head with
                   | XOffers off | Offers off -> string_of_protocol (StyOffer off)
+                  | OfferMatchPending cases -> string_of_protocol (StyOfferMatch ([], cases))
                   | Atom act -> string_of_atomic_action_with_gap act
                   | Terminal ParallelDone -> string_of_protocol StySkip
                   | Terminal RecurseJump -> "recurse")
@@ -1320,11 +1400,18 @@ let check_generalized_session
 
     (* check terminal to be empty *)
     let terminal_event = List.find_opt(fun e -> e.is_loop_terminal) g.events in
+    (* A residual that may still choose to end lets the iteration end. *)
+    let rec can_end = function
+      | StySkip -> true
+      | StyChoice (a, b) -> can_end a || can_end b
+      | StySeq (a, b) | StyParallel (a, b) -> can_end a && can_end b
+      | _ -> false
+    in
     (match terminal_event with
     | Some ev ->
         (
         match ev.session_type with
-        | Some residual when residual <> protocol_node->
+        | Some residual when residual <> protocol_node && not (can_end residual.d) ->
             error_handler g
               (Printf.sprintf "Terminal event %d has non-empty residual %s at end of generalized session type check"
                 ev.id (string_of_protocol residual.d))

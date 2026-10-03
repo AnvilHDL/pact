@@ -34,6 +34,10 @@ let instant_offer_atom = function
 
 let offer_retry_counter = ref 0
 
+(* Names offers whose match reads the arms taken; stable across optimisation. *)
+let offer_match_counter = ref 0
+let offer_match_tag () = incr offer_match_counter; !offer_match_counter
+
 (* A blocking offer is mu X . offer(instantaneous B) else { cycle 1 >> X }.
    Returns the arms with that else arm added and the name X, or [None] if the
    offer is not blocking. Blocking offers cannot have their own else arm. *)
@@ -314,6 +318,63 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
             raise (Except.TypeError [Except.Text "Recursive types not supported in conjunctive offer action completion"; Except.codespan_local e.span]);
           Typing.event_create graph (`Later (acc, ev))
         ) hd tl
+  in
+  (* Branch on exactly the offer arms taken, which the join records. *)
+  let lower_offer_match ctx (offer_td : node_data) (join : event)
+      (arm_groups : message_specifier list list) cases =
+    (match check_offer_match_cases arm_groups cases with
+     | Some err -> raise (Except.TypeError [Except.Text err; Except.codespan_local e.span])
+     | None -> ());
+    let n = List.length arm_groups in
+    let tag = match join.source with
+      | `SelectJoin { join_tag = Some tag; _ } -> tag
+      | _ -> raise (Except.TypeError [Except.Text "An offer match needs at least one arm that completes";
+                                      Except.codespan_local e.span]) in
+    let wires, w_sel = WireCollection.add_offer_selected graph.thread_id tag n graph.wires in
+    graph.wires <- wires;
+    let ctx_join = BuildContext.wait graph ctx offer_td.ld.lt.live in
+    let mask taken =
+      List.fold_left (fun (acc, bit) group ->
+        ((if List.for_all (fun m -> List.mem m taken) group then acc lor bit else acc), bit lsl 1))
+        (0, 1) arm_groups |> fst
+    in
+    (* Exact cases are patterns; a default case comes last. *)
+    let exact, default = List.partition (fun (on, _) -> Option.is_some on) cases in
+    let ordered = exact @ default in
+    let patterns = List.map (fun (on, _) ->
+      let wires, w = WireCollection.add_literal graph.thread_id ci.typedefs ci.macro_defs
+        (WithLength (n, mask (Option.get on))) graph.wires in
+      graph.wires <- wires;
+      Typing.const_data graph (Some w) (`Array (`Logic, ParamEnv.Concrete n)) ctx_join.current) exact in
+    let branch_info = {
+      branch_cond_v = (Typing.immediate_data graph (Some w_sel)
+        (`Array (`Logic, ParamEnv.Concrete n)) ctx_join.current).ld;
+      branch_cond = (let pats = List.map (fun td -> td.ld) patterns in
+        if default = [] then MatchCasesNoDefault pats else MatchCases pats);
+      branch_count = List.length ordered;
+      branches_to = [];
+      branches_val = [];
+    } in
+    let branches = List.mapi (fun idx (_, body) ->
+      let (br_side, ctx_b) = BuildContext.branch_side graph ctx_join branch_info idx in
+      let td = construct_graphIR graph ci ctx_b body in
+      (ctx_b, br_side, td)) ordered in
+    branch_info.branches_to <- List.map (fun ((c : build_context), _, _) -> c.current) branches;
+    branch_info.branches_val <- List.map (fun (_, _, td) -> td.ld.lt.live) branches;
+    BuildContext.branch_merge ctx_join (List.map (fun (c, _, _) -> c) branches);
+    let ctx_br = BuildContext.branch graph ctx_join branch_info ci.file_name in
+    List.iter (fun (_, br_side, _) -> br_side.branch_event <- Some ctx_br.current) branches;
+    let completing = List.filter (fun (_, _, td) -> not (ends_in_recursion td)) branches in
+    let dead = List.fold_left (fun l (_, _, td) -> Utils.list_unordered_join l td.ld.lt.dead)
+      offer_td.ld.lt.dead branches in
+    let borrows = List.fold_left (fun l (_, _, td) -> Utils.list_unordered_join l td.ld.reg_borrows)
+      offer_td.ld.reg_borrows branches in
+    let lt = {live = ctx_br.current; dead} in
+    if List.for_all (fun (_, _, td) -> Option.is_none td.ld.w) completing then
+      {ld = {w = None; lt; reg_borrows = borrows; dtype = unit_dtype}}
+    else
+      raise (Except.TypeError [Except.Text "Offer match cases cannot return values";
+                               Except.codespan_local e.span])
   in
   let lower_offer_arm_from_root ctx_root arm_expr arm =
     match arm with
@@ -907,7 +968,15 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         ty = Send (send_pack.send_msg_spec, td.ld, send_pack.send_handshake)
       } |> tag_with_span e.span)::ctx.current.sustained_actions;
     ntd
-| Offer offer_arms ->
+| Offer _ | OfferMatch _ ->
+    let offer_arms, match_cases = match e.d with
+      | OfferMatch (arms, cases) -> (arms, Some cases)
+      | Offer arms -> (arms, None)
+      | _ -> assert false
+    in
+    if Option.is_some match_cases && List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms then
+      raise (Except.TypeError [Except.Text "An offer with a match cannot have an else arm";
+                               Except.codespan_local e.span]);
     check_offer_arm_kinds "offer" offer_arms
       (List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms) e.span;
     (* Blocking arms are lowered as instantaneous; keep the ports they had. *)
@@ -969,6 +1038,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
               join_parent = ctx_after_choice.current;
               join_roots = List.map (fun (select_ctx : build_context) -> select_ctx.current) select_ctxs;
               join_nodes = List.map (fun td -> td.ld.lt.live) arm_tds;
+              join_tag = Option.map (fun _ -> offer_match_tag ()) match_cases;
             } in
             Typing.event_create graph (`SelectJoin join_info)
       in
@@ -984,12 +1054,20 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         | [] -> unit_dtype
         | hd :: _ -> hd.ld.dtype
       in
-      {ld = {
+      let offer_td = {ld = {
         w = result_w;
         lt = {live = merged_event; dead = merged_dead};
         reg_borrows = merged_borrows;
         dtype = result_dtype;
-      }}
+      }} in
+      match match_cases with
+      | None -> offer_td
+      | Some cases ->
+        let arm_groups = List.map (fun (select_ctx : build_context) ->
+          match select_ctx.current.source with
+          | `Select (_, group) -> group
+          | _ -> assert false) select_ctxs in
+        lower_offer_match ctx offer_td merged_event arm_groups cases
     )
     
   | XOffer (offer_arms, state_selector) ->

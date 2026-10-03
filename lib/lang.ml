@@ -113,6 +113,8 @@ and session_type =
   | StyFuture of session_type (** future operator (F) **)
   | StySkip (** skip session type **)
   | StyOffer of offering_session_type list (** offer operator (dual of choice) **)
+  | StyOfferMatch of offering_session_type list * offer_match_case list
+    (** offer continued by the case for exactly the arms taken *)
   | StyLet of identifier * session_type * session_type (** let binding for session types **)
   | StyRec of identifier * session_type (** recursive session type **)
   | StyVar of identifier (** [metaprogramming] session type variable **)
@@ -136,6 +138,13 @@ and quant_member =
 and offering_session_type = {
   trigger: atomic_action_with_gap;
   continuation: session_type option;
+}
+
+(** A case of an offer match: the messages of the arms taken, or [None] for
+    every combination not listed. *)
+and offer_match_case = {
+  match_on : message_specifier list option;
+  match_body : session_type;
 }
 
 
@@ -522,6 +531,8 @@ and expr =
   | Match of expr_node * ((expr_node * expr_node option) list)
   | XOffer of ((offer_arm_type * expr_node) list) * (identifier option)  (** exclusive offer with optional selector wire *)
   | Offer of ((offer_arm_type * expr_node) list)
+  | OfferMatch of ((offer_arm_type * expr_node) list) * offer_match_arm list
+    (** offer continued by the arm for exactly the offer arms taken *)
   | Read of lvalue (** reading a value from a register (leading to a borrow) *)
   | Debug of debug_op
   | Send of send_pack
@@ -532,6 +543,9 @@ and expr =
   | Recursor of identifier  (** invoke a recursive block *)
   | Recurse
 and expr_node = expr ast_node
+
+(** Messages of the offer arms taken, or [None] for any other combination. *)
+and offer_match_arm = message_specifier list option * expr_node
 
 and offer_arm_atom_type =
   | OfferSend of send_pack
@@ -800,6 +814,18 @@ let rec string_of_expr (e : expr) : string =
         string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
       in
       "Offer { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
+  | OfferMatch (arms, cases) ->
+      let arm_str (arm_ty, body) =
+        string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
+      in
+      let case_str (on, body) = string_of_match_on on ^ " -> " ^ string_of_expr body.d in
+      "Offer { " ^ String.concat " | " (List.map arm_str arms) ^ " } Match { "
+      ^ String.concat " | " (List.map case_str cases) ^ " }"
+
+and string_of_match_on = function
+  | Some [m] -> string_of_msg_spec m
+  | Some ms -> "{" ^ String.concat ", " (List.map string_of_msg_spec ms) ^ "}"
+  | None -> "*"
 
 and string_of_offer_arm_type arm : string =
   match arm with
@@ -996,6 +1022,11 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
         (arm_type, subst e_body)
       ) arms
     )
+  | OfferMatch (arms, cases) ->
+    OfferMatch (
+      List.map (fun (arm_type, e_body) -> (arm_type, subst e_body)) arms,
+      List.map (fun (on, e_body) -> (on, subst e_body)) cases
+    )
   | Read lv ->
     Read (substitute_lvalue id value idx lv)
   | Recursion (rec_id, body) ->
@@ -1114,6 +1145,10 @@ let rec aux p =
       "( " ^ String.concat "\n&\n " (List.map aux2 ps) ^ " )"
   | StyXOffer ps ->
       "( " ^ String.concat " \n^\n " (List.map aux2 ps) ^ " )"
+  | StyOfferMatch (ps, cases) ->
+      "( " ^ String.concat "\n&\n " (List.map aux2 ps) ^ " ).{ "
+      ^ String.concat ",\n " (List.map (fun c -> string_of_match_on c.match_on ^ " : " ^ aux c.match_body) cases)
+      ^ " }"
   | StyAtom act -> string_of_aa_with_gap act
   | StyFuture p_inner ->
       "F( " ^ aux p_inner ^ " )"
@@ -1181,6 +1216,10 @@ let rec aux p =
       "(" ^ String.concat "∧" (List.map aux2 ps) ^ ")"
   | StyXOffer ps ->
         "(" ^ String.concat " ⊕ "   (List.map aux2 ps) ^ ")"
+  | StyOfferMatch (ps, cases) ->
+      "(" ^ String.concat "∧" (List.map aux2 ps) ^ ").{"
+      ^ String.concat ", " (List.map (fun c -> string_of_match_on c.match_on ^ " : " ^ aux c.match_body) cases)
+      ^ "}"
   | StyAtom act -> string_of_aa_with_gap act
   | StyFuture p_inner ->
       "F(" ^ aux p_inner ^ ")"
@@ -1305,3 +1344,41 @@ let rec calculate_array_index_concrete_size (dimm : array_index_concrete) : int 
       calculate_array_index_concrete_size rest
   | IndexMultiDimRange (_, size, rest) ->
       size * (calculate_array_index_concrete_size rest)
+
+(* Offer matches: a case applies when exactly its arms were taken. Arms are
+   identified by their message groups, which must be disjoint. *)
+let same_msg_set (a : message_specifier list) (b : message_specifier list) =
+  List.sort_uniq compare a = List.sort_uniq compare b
+
+(** Every non-empty combination of arms, as the messages of the arms taken. *)
+let offer_arm_combinations (groups : message_specifier list list) =
+  let rec subsets = function
+    | [] -> [ [] ]
+    | g :: rest -> List.concat_map (fun s -> [ s; g @ s ]) (subsets rest)
+  in
+  List.filter (fun s -> s <> []) (subsets groups)
+
+(** The case for exactly [taken], or the default case. *)
+let offer_match_lookup (cases : (message_specifier list option * 'a) list) taken =
+  match List.find_opt (fun (on, _) ->
+      match on with Some ms -> same_msg_set ms taken | None -> false) cases with
+  | Some (_, x) -> Some x
+  | None -> List.find_map (fun (on, x) -> if on = None then Some x else None) cases
+
+(** An error message if the cases are not one per combination of arms. *)
+let check_offer_match_cases (groups : message_specifier list list)
+    (cases : (message_specifier list option * 'a) list) =
+  let combinations = offer_arm_combinations groups in
+  let keys = List.filter_map fst cases in
+  let defaults = List.length (List.filter (fun (on, _) -> on = None) cases) in
+  let missing = List.filter (fun c -> offer_match_lookup cases c = None) combinations in
+  let names ms = "{" ^ String.concat ", " (List.map string_of_msg_spec ms) ^ "}" in
+  match List.find_opt (fun k -> not (List.exists (same_msg_set k) combinations)) keys with
+  | Some k -> Some ("Offer match case " ^ names k ^ " is not a combination of the offer's arms")
+  | None ->
+    if List.length (List.sort_uniq compare (List.map (List.sort_uniq compare) keys)) <> List.length keys
+    then Some "Offer match has two cases for the same arms"
+    else if defaults > 1 then Some "Offer match has more than one default case"
+    else match missing with
+      | m :: _ -> Some ("Offer match has no case for arms " ^ names m)
+      | [] -> None

@@ -85,6 +85,17 @@ let describe_event_source (source : EventGraph.event_source) =
       (String.concat "; " (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
       
 
+(* Whether arm [idx] of the offer joined at [join_id] was taken. A fresh offer
+   can finish in its selection cycle; when an older offer is pending, roots in
+   this cycle belong to its successor. An arm known to take a cycle has always
+   been recorded by the time the join is reached. *)
+let select_join_arm_taken ?(recorded = false) thread_id join_id idx (root : EventGraph.event) =
+  let selected_q = EventStateFormatter.format_select_selected thread_id join_id ^ "_q" in
+  if recorded then Printf.sprintf "%s[%d]" selected_q idx
+  else
+    Printf.sprintf "(%s[%d] || (!(|%s) && %s))" selected_q idx selected_q
+      (EventStateFormatter.format_current thread_id root.id)
+
 let collect_reg_states g =
   let open EventGraph in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
@@ -517,18 +528,12 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           let selected_n = selected_name ^ "_n" in
           let done_q = done_name ^ "_q" in
           let done_n = done_name ^ "_n" in
-          let selected_bit idx = Printf.sprintf "%s[%d]" selected_q idx in
           let done_bit idx = Printf.sprintf "%s[%d]" done_q idx in
           let join_node_current (join_node : EventGraph.event) =
             EventStateFormatter.format_current g.thread_id join_node.id
           in
           let pending = Printf.sprintf "(|%s)" selected_q in
-          (* A fresh offer can finish in its selection cycle. When an older
-             offer is pending, roots in this cycle belong to its successor. *)
-          let selected idx (root : EventGraph.event) =
-            Printf.sprintf "(%s || (!%s && %s))"
-              (selected_bit idx) pending (join_node_current root)
-          in
+          let selected idx root = select_join_arm_taken g.thread_id e.id idx root in
           let any_selected =
             if width = 0 then
               "1'b0"

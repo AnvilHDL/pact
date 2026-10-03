@@ -179,6 +179,7 @@ and join_info = {
   join_parent : event; (** the event that branches out to the events in {!join_roots} *)
   join_roots : event list; (** the events that start the join *)
   join_nodes : event list; (** the events that are joined together *)
+  join_tag : int option; (** stable name of an offer whose match reads the arms taken *)
 }
 
 (** An action that starts at an event but may last multiple cycles.

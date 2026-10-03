@@ -97,6 +97,9 @@ let expr_parts (e : expr) : string * (string option * expr_node) list =
   | XOffer (list, sel) ->
     arms ("xoffer" ^ (match sel with Some s -> " " ^ s | None -> "")) list
   | Offer list -> arms "offer" list
+  | OfferMatch (list, cases) ->
+    let label, kids = arms "offer" list in
+    (label ^ " match", kids @ List.map (fun (on, body) -> (Some (string_of_match_on on), body)) cases)
   | Read lv -> ("*" ^ lvalue lv, [])
   | Debug (DebugPrint (fmt, es)) -> ("dprint \"" ^ fmt ^ "\"", plain es)
   | Debug DebugFinish -> ("dfinish", [])

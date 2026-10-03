@@ -969,6 +969,11 @@ let rec unfold_leaves ~is_leaf ~shadows expr_full_node expr_node =
           (arm_type, unfold e_body)
         ) arms
       )
+    | OfferMatch (arms, cases) ->
+      OfferMatch (
+        List.map (fun (arm_type, e_body) -> (arm_type, unfold e_body)) arms,
+        List.map (fun (on, e_body) -> (on, unfold e_body)) cases
+      )
     | Recurse -> Recurse
     in
     {expr_node with d = expr'}

@@ -154,6 +154,18 @@ let rec substitute_quantified_var (var_name : identifier) (value : int) (sty : s
         }
       in
       StyOffer (List.map subst_offering offerings)
+  | StyOfferMatch (offerings, cases) ->
+      let subst_offering (off : offering_session_type) : offering_session_type =
+        {
+          trigger = subsitute_action off.trigger var_name value;
+          continuation = Option.map (substitute_quantified_var var_name value) off.continuation;
+        }
+      in
+      let subst_case (c : offer_match_case) = {
+        match_on = Option.map (List.map (fun m -> Lang.sub_ep_index m value var_name)) c.match_on;
+        match_body = substitute_quantified_var var_name value c.match_body;
+      } in
+      StyOfferMatch (List.map subst_offering offerings, List.map subst_case cases)
   | StySkip -> StySkip
   | StyEnd id -> StyEnd id
   | StyRec (id, s) -> 
@@ -353,6 +365,12 @@ let rec expand_quantifiers (sty : session_type) : session_type =
         }
       in
       StyOffer (List.map expand_offering offerings)
+  | StyOfferMatch (offerings, cases) ->
+      let expand_offering (off : offering_session_type) : offering_session_type =
+        { off with continuation = Option.map expand_quantifiers off.continuation }
+      in
+      StyOfferMatch (List.map expand_offering offerings,
+        List.map (fun c -> { c with match_body = expand_quantifiers c.match_body }) cases)
   | StySkip -> StySkip
   | StyEnd id -> StyEnd id
   | StyRec (id, s) -> 
@@ -417,6 +435,18 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
           }
         in
         Lang.StyOffer (List.map process_offering offerings)
+    | Lang.StyOfferMatch (offerings, cases) ->
+        let process_offering (off : Lang.offering_session_type) : Lang.offering_session_type =
+          {
+            trigger = replace_in_action_with_gap off.trigger;
+            continuation = Option.map preprocess_sty off.continuation;
+          }
+        in
+        let process_case (c : Lang.offer_match_case) : Lang.offer_match_case = {
+          match_on = Option.map (List.map replace_endpoint_in_msg_spec) c.match_on;
+          match_body = preprocess_sty c.match_body;
+        } in
+        Lang.StyOfferMatch (List.map process_offering offerings, List.map process_case cases)
     | Lang.StySkip -> Lang.StySkip
     | Lang.StyEnd id -> Lang.StyEnd id
     | Lang.StyRec (id, s) -> Lang.StyRec (id, preprocess_sty s)

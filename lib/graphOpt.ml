@@ -596,6 +596,7 @@ module CombSimplPass = struct
               join_parent = replace_event join_info.join_parent;
               join_roots = List.map replace_event join_info.join_roots;
               join_nodes = List.map replace_event join_info.join_nodes;
+              join_tag = join_info.join_tag;
             } in
             `SelectJoin new_join_info
           )

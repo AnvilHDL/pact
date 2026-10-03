@@ -28,6 +28,7 @@ module Wire = struct
     | MessageValidPort of Lang.message_specifier (* New wire source for message valid port *)
     | MessageAckPort of Lang.message_specifier (* New wire source for message ack port *)
     | MessageReadyPort of Lang.message_specifier (* New wire source for message ready port *)
+    | OfferSelected of int (** one bit per offer arm taken, read at the join of the offer with this tag *)
     | Update of t * (int * int * t) list (** update to existing value *)
     | Concat of t list
     | Slice of t * t MaybeConst.maybe_int_const * int (** third component is size *)
@@ -191,6 +192,14 @@ module Wire = struct
       size = 1;
       is_const = false;
     }
+  let new_offer_selected id thread_id join_id arms =
+    {
+      id;
+      thread_id;
+      source = OfferSelected join_id;
+      size = arms;
+      is_const = false;
+    }
   let new_msg_ack_port id thread_id _typedefs msg_spec =
     {
       id;
@@ -297,4 +306,9 @@ let add_msg_ready_port thread_id (typedefs : TypedefMap.t)
   (msg_spec : Lang.message_specifier) (wc : t) : t * wire =
   let id = wc.wire_last_id + 1 in
   let w = Wire.new_msg_ready_port id thread_id typedefs msg_spec in
+  (add_wire wc w, w)
+
+let add_offer_selected thread_id (tag : int) (arms : int) (wc : t) : t * wire =
+  let id = wc.wire_last_id + 1 in
+  let w = Wire.new_offer_selected id thread_id tag arms in
   (add_wire wc w, w)

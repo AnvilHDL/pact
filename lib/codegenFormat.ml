@@ -115,6 +115,8 @@ let format_wire_source_comment (w : WireCollection.wire) =
       Printf.sprintf "message ack port %s" (Lang.string_of_msg_spec msg)
     | MessageReadyPort msg ->
       Printf.sprintf "message ready port %s" (Lang.string_of_msg_spec msg)
+    | OfferSelected tag ->
+      Printf.sprintf "arms taken by offer %d" tag
     | Update (base_wire, updates) ->
       let update_count = List.length updates in
       Printf.sprintf "update %s with %d %s"

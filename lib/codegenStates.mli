@@ -17,3 +17,7 @@ val codegen_states :
     EventGraph.proc_graph ->
     EventGraph.event_graph ->
     Lang.message_specifier option -> unit
+
+(** [select_join_arm_taken thread join idx root]: whether arm [idx] (starting at
+    [root]) of the offer joined at event [join] was taken. *)
+val select_join_arm_taken : ?recorded:bool -> int -> int -> int -> EventGraph.event -> string

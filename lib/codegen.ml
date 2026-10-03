@@ -237,6 +237,22 @@ let codegen_wire_assignment resolve printer (graphs : event_graph_collection) (g
          | None -> "1'b1")
         
         
+      | OfferSelected tag ->
+        (match List.find_map (fun (ev : EventGraph.event) ->
+             match ev.source with
+             | `SelectJoin ({ join_tag = Some t; _ } as join_info) when t = tag && not ev.removed ->
+               Some (ev, join_info)
+             | _ -> None) g.events with
+         | Some (join, join_info) ->
+           List.mapi (fun idx ((root : EventGraph.event), (node : EventGraph.event)) ->
+             (* Reading only the record avoids a combinational path through a
+                selection made in the join's own cycle. *)
+             let dist = GraphAnalysis.events_pred_min_dist node in
+             let recorded = root.id < Array.length dist && dist.(root.id) >= 1 in
+             CodegenStates.select_join_arm_taken ~recorded g.thread_id join.id idx root)
+             (List.combine join_info.join_roots join_info.join_nodes)
+           |> List.rev |> String.concat ", " |> Printf.sprintf "{%s}"
+         | None -> failwith (Printf.sprintf "Offer match %d: its join was optimised away" tag))
       | Cases _ | Update _ -> failwith "Something went wrong!"
     in
     CodegenPrinter.print_line printer
@@ -250,6 +266,11 @@ let codegen_wire_assignment resolve printer (graphs : event_graph_collection) (g
       else
         Printf.sprintf "assign %s = %s;" wire_name expr
   )
+
+let wire_reads_event_state (w : WireCollection.wire) =
+  match w.source with
+  | OfferSelected _ -> true
+  | _ -> false
 
 let codegen_post_declare resolve printer (graphs : event_graph_collection) (g : event_graph) =
   let codegen_wire_decl = fun (w: WireCollection.wire) ->
@@ -267,7 +288,14 @@ let codegen_post_declare resolve printer (graphs : event_graph_collection) (g : 
   List.iter codegen_wire_decl declared_wires;
   if wires_in_id_order <> [] then
     CodegenPrinter.print_section printer (Printf.sprintf "Thread %d wire assignments" g.thread_id);
-  List.iter (codegen_wire_assignment resolve printer graphs g) wires_in_id_order
+  List.iter (codegen_wire_assignment resolve printer graphs g)
+    (List.filter (fun w -> not (wire_reads_event_state w)) wires_in_id_order)
+
+(* Wires that read event state, assigned once that state is declared. *)
+let codegen_post_states resolve printer (graphs : event_graph_collection) (g : event_graph) =
+  List.rev g.wires.wire_li
+  |> List.filter wire_reads_event_state
+  |> List.iter (codegen_wire_assignment resolve printer graphs g)
 
 let codegen_regs printer (graphs : event_graph_collection) (g : event_graph) =
   let visible_regs = Utils.StringMap.filter (fun _ (r : reg_def) -> r.d_type <> Lang.unit_dtype) g.regs in
@@ -389,6 +417,7 @@ let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.e
           CodegenPrinter.print_section printer (Printf.sprintf "Thread %d implementation" thread.thread_id);
           codegen_post_declare resolve printer graphs thread;
           CodegenStates.codegen_states shared_regs printer config graphs g thread reset_by;
+          codegen_post_states resolve printer graphs thread;
       ) g.threads
   );
 

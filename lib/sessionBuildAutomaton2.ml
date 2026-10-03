@@ -105,6 +105,9 @@ let repeat_with_progress member_id body =
     | StySeq (a, b) | StyChoice (a, b) | StyParallel (a, b) ->
         variables (variables acc a) b
     | StyFuture body | StyAtom (AtomTerminal body) -> variables acc body
+    | StyOfferMatch (offerings, cases) ->
+        List.fold_left (fun acc c -> variables acc c.match_body)
+          (variables acc (StyOffer offerings)) cases
     | StyOffer offerings | StyXOffer offerings ->
         List.fold_left (fun acc off ->
           let acc = match off.trigger with
@@ -148,7 +151,7 @@ let infer_fair_choice left right =
     | StySeq (prefix, _) -> first_messages prefix
     | StyChoice (a, b) | StyParallel (a, b) ->
         first_messages a @ first_messages b
-    | StyOffer offerings | StyXOffer offerings ->
+    | StyOffer offerings | StyXOffer offerings | StyOfferMatch (offerings, _) ->
         List.concat_map
           (fun off ->
             match trigger_actions off.trigger with
@@ -248,6 +251,10 @@ let rec messages_of_session_type sty =
       List.fold_left
         (fun acc off -> MsgSet.union acc (from_offering off))
         MsgSet.empty offerings
+  | StyOfferMatch (offerings, cases) ->
+      List.fold_left
+        (fun acc c -> MsgSet.union acc (messages_of_session_type c.match_body))
+        (messages_of_session_type (StyOffer offerings)) cases
   | StyForall _ -> MsgSet.empty
 
 let rec build_automaton (name : identifier option) (st : session_type)
@@ -380,6 +387,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
         build_xoffer offerings current rec_env let_env
     | StyOffer offerings ->
         build_offer offerings current rec_env let_env
+    | StyOfferMatch (offerings, cases) ->
+        build_offer_match offerings cases current rec_env let_env
     | StyParallel (left, right) ->
         mark_nonfinal ();
         let rec collect acc = function
@@ -506,6 +515,102 @@ let rec build_automaton (name : identifier option) (st : session_type)
         finals := build else_ty else_target rec_env let_env @ !finals
     | None ->
         ());
+    !finals)
+
+  (* An offer match records the arms taken as their messages arrive, so an arm
+     may enable another later in the same cycle. Once no further arm can be
+     taken this cycle, it runs the taken arms and the case for exactly them. *)
+  and build_offer_match offerings cases current rec_env let_env =
+    if offer_is_blocking_without_else offerings then
+      build (blocking_offer_expansion (fresh_blocking_rec_var ()) offerings
+               (fun offs -> StyOfferMatch (offs, cases)))
+        current rec_env let_env
+    else
+    (let arms =
+      validate_offerings default_span offerings "offer match"
+      |> List.filter_map (fun (off, _) ->
+             match trigger_msg_group off.trigger with
+             | Some group -> Some (off, group)
+             | None -> None)
+      |> Array.of_list
+    in
+    let case_list = List.map (fun c -> (c.match_on, c.match_body)) cases in
+    (match check_offer_match_cases
+             (Array.to_list arms |> List.map (fun (_, g) -> MsgSet.elements g)) case_list with
+     | Some err -> raise (TypeError [ Text err; codespan_local default_span ])
+     | None -> ());
+    let n = Array.length arms in
+    let group_of mask =
+      Array.to_list arms
+      |> List.filteri (fun k _ -> mask land (1 lsl k) <> 0)
+      |> List.fold_left (fun acc (_, g) -> MsgSet.union acc g) MsgSet.empty
+    in
+    let all = (1 lsl n) - 1 in
+    let head_set = group_of all in
+    let states = Hashtbl.create 8 in
+    Hashtbl.replace states 0 current;
+    let pending = Queue.create () in
+    Queue.add 0 pending;
+    let state_for mask =
+      match Hashtbl.find_opt states mask with
+      | Some s -> s
+      | None ->
+          let s = TypeAutomaton.new_state auto false in
+          Hashtbl.replace states mask s;
+          Queue.add mask pending;
+          s
+    in
+    let finals = ref [] in
+    while not (Queue.is_empty pending) do
+      let mask = Queue.take pending in
+      let st = Hashtbl.find states mask in
+      TypeAutomaton.set_accepting auto st false;
+      TypeAutomaton.make_adversary auto st;
+      let remaining = group_of (all land lnot mask) in
+      (* Take one more arm. *)
+      for k = 0 to n - 1 do
+        if mask land (1 lsl k) = 0 then begin
+          let group = snd arms.(k) in
+          TypeAutomaton.add_transition auto st (state_for (mask lor (1 lsl k)))
+            (message_actions group)
+            { any_guard with require_now = group; forbid_clock = false } group
+        end
+      done;
+      (* Wait while a remaining arm may still be taken this cycle. *)
+      MsgSet.iter (fun head ->
+        TypeAutomaton.add_transition auto st st epsilon
+          { any_guard with
+            forbid_now = remaining;
+            forbid_clock = true;
+            future_members = MsgSet.singleton head }
+          remaining) remaining;
+      (* No further arm this cycle: continue with the case for the arms taken. *)
+      if mask <> 0 then begin
+        let taken = Array.to_list arms |> List.filteri (fun k _ -> mask land (1 lsl k) <> 0) in
+        let body = Option.get (offer_match_lookup case_list (MsgSet.elements (group_of mask))) in
+        let arm_bodies = List.filter_map (fun (off, _) ->
+          match off.continuation with
+          | None | Some StySkip -> None
+          | Some cont -> Some cont) taken in
+        let after = match arm_bodies with
+          | [] -> body
+          | conts -> StySeq (parallel_of_list conts, body)
+        in
+        let target = TypeAutomaton.new_state auto false in
+        TypeAutomaton.add_transition auto st target epsilon
+          { any_guard with forbid_now = remaining; future_disjoint = remaining; forbid_clock = true }
+          MsgSet.empty;
+        finals := build after target rec_env let_env @ !finals
+      end
+    done;
+    (match wildcard_continuation_opt offerings with
+    | Some else_ty ->
+        let else_target = TypeAutomaton.new_state auto false in
+        TypeAutomaton.add_transition auto current else_target epsilon
+          (xoffer_else_guard head_set head_set)
+          head_set;
+        finals := build else_ty else_target rec_env let_env @ !finals
+    | None -> ());
     !finals)
 
   and build_offer offerings current rec_env let_env =

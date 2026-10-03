@@ -393,6 +393,9 @@ local_session_type:
   { Lang.StyChoice (act1, act2) }
 | and_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyOffer offering_list }
+| and_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN;
+  PERIOD; LEFT_PAREN; cases = separated_nonempty_list(COMMA, offer_match_case); RIGHT_PAREN
+  { Lang.StyOfferMatch (offering_list, cases) }
 | xor_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyXOffer offering_list }
 | act1 = local_session_type; DOUBLE_OR; act2 = local_session_type
@@ -505,6 +508,15 @@ offering_arm:
   { { Lang.trigger = Lang.AtomConjunction trig_list; Lang.continuation = Some cont } : Lang.offering_session_type }
 | LEFT_BRACE; trig_list = separated_nonempty_list(COMMA, atomic_action); RIGHT_BRACE
   { { Lang.trigger = Lang.AtomConjunction trig_list; Lang.continuation = None } : Lang.offering_session_type }
+// A case of an offer match, keyed by exactly the arms taken.
+offer_match_case:
+| m = message_specifier; COLON; body = local_session_type
+  { { Lang.match_on = Some [m]; Lang.match_body = body } }
+| LEFT_BRACE; ms = separated_nonempty_list(COMMA, message_specifier); RIGHT_BRACE; COLON; body = local_session_type
+  { { Lang.match_on = Some ms; Lang.match_body = body } }
+| ASTERISK; COLON; body = local_session_type
+  { { Lang.match_on = None; Lang.match_body = body } }
+
 atomic_action:
 | id = message_specifier
   { Lang.AtomBMsg id }
@@ -860,6 +872,9 @@ expr:
 | KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
   { Lang.Offer (ParserHelper.add_offer_else offer_arms else_v) }
+| KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  KEYWORD_MATCH; LEFT_BRACE; cases = separated_nonempty_list(COMMA, offer_match_arm); RIGHT_BRACE
+  { Lang.OfferMatch (offer_arms, cases) }
 expr_in_parenthese:
   LEFT_PAREN; e = expr; RIGHT_PAREN
   { e }
@@ -996,6 +1011,17 @@ index:
 match_arm:
 | pattern = node(expr); EQ_GT body_opt = node(expr)
   { (pattern, Some body_opt) }
+;
+
+// A case of an offer match, keyed by exactly the offer arms taken.
+offer_match_arm:
+| m = message_specifier; EQ_GT; body = node(expr)
+  { (Some [m], body) }
+| LEFT_BRACE; ms = separated_nonempty_list(COMMA, message_specifier); RIGHT_BRACE; EQ_GT; body = node(expr)
+  { (Some ms, body) }
+| id = IDENT; EQ_GT; body = node(expr)
+  { if id = "_" then (None, body)
+    else raise (Except.TypeError [Except.Text ("Offer match cases name messages or _, not " ^ id)]) }
 ;
 
 // The else branch of an offer/xoffer; desugars to a wildcard arm.
