@@ -85,6 +85,31 @@ let describe_event_source (source : EventGraph.event_source) =
       (String.concat "; " (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
       
 
+(* The number of cycles every arm of an offer takes from its selection to its
+   end, when it is the same fixed number for all arms: arms made only of delays,
+   register writes and instantaneous actions. All arms of one offer are selected
+   in the same cycle, so they then also finish together. *)
+let select_join_fixed_latency (join_info : EventGraph.join_info) =
+  let rec latency (root : EventGraph.event) (ev : EventGraph.event) =
+    if ev.id = root.id then Some 0
+    else match ev.source with
+      | `Seq (prev, `Cycles n) -> Option.map (( + ) n) (latency root prev)
+      | `Seq (prev, (`Send (_, Lang.Instant) | `Recv (_, Lang.Instant))) -> latency root prev
+      | `Later (a, b) ->
+        (match latency root a, latency root b with
+         | Some x, Some y -> Some (max x y)
+         | _ -> None)
+      | `Root (Some (parent, _)) -> latency root parent
+      | `Branch (_, info) ->
+        (match List.map (latency root) info.branches_val with
+         | Some x :: rest when List.for_all (( = ) (Some x)) rest -> Some x
+         | _ -> None)
+      | _ -> None
+  in
+  match List.map2 latency join_info.join_roots join_info.join_nodes with
+  | Some d :: rest when List.for_all (( = ) (Some d)) rest -> Some d
+  | _ -> None
+
 (* Whether arm [idx] of the offer joined at [join_id] was taken. A fresh offer
    can finish in its selection cycle; when an older offer is pending, roots in
    this cycle belong to its successor. An arm known to take a cycle has always
@@ -152,10 +177,13 @@ let collect_reg_states g =
     | `SelectJoin join_info ->
       let width = List.length join_info.join_roots in
       let ty = Printf.sprintf "logic[%d:0]" (max 0 (width - 1)) in
-      [
-        (ty, EventStateFormatter.format_select_selected g.thread_id e.id);
-        (ty, EventStateFormatter.format_select_done g.thread_id e.id);
-      ]
+      let selected = (ty, EventStateFormatter.format_select_selected g.thread_id e.id) in
+      (* Arms that finish together need no done bits, and the arms taken are
+         kept only for an offer match. *)
+      (match select_join_fixed_latency join_info, join_info.join_tag with
+       | Some _, Some _ -> [ selected ]
+       | Some _, None -> []
+       | None, _ -> [ selected; (ty, EventStateFormatter.format_select_done g.thread_id e.id) ])
       ) in 
       collect_event_reg_states e.source
   ) g.events
@@ -519,6 +547,34 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             select_condition
             trigger
           |> print_line
+        | `SelectJoin join_info when Option.is_some (select_join_fixed_latency join_info) ->
+          (* All taken arms finish in the same cycle, so the join fires when
+             any arm ends. The arms taken are recorded only for an offer match. *)
+          let join_arms = List.combine join_info.join_roots join_info.join_nodes in
+          let join_node_current (join_node : EventGraph.event) =
+            EventStateFormatter.format_current g.thread_id join_node.id
+          in
+          let any_done = match join_arms with
+            | [] -> "1'b0"
+            | _ ->
+              List.map (fun (_, node) -> join_node_current node) join_arms
+              |> String.concat " || " |> Printf.sprintf "(%s)"
+          in
+          Printf.sprintf "assign %s = %s %s;" cn any_done trigger |> print_line;
+          if Option.is_some join_info.join_tag then begin
+            let selected_name = EventStateFormatter.format_select_selected g.thread_id e.id in
+            let selected_q = selected_name ^ "_q" and selected_n = selected_name ^ "_n" in
+            CodegenPrinter.print_line ~lvl_delta_post:1 printer
+              @@ Printf.sprintf "always_comb begin: _thread_%d_event_%d_select_join_state"
+                g.thread_id e.id;
+            Printf.sprintf "%s = %s ? '0 : %s;" selected_n cn selected_q |> print_line;
+            List.iteri (fun idx ((root : EventGraph.event), _) ->
+              Printf.sprintf "if (%s && (!%s || (|%s))) %s[%d] = 1'b1;"
+                (EventStateFormatter.format_current g.thread_id root.id)
+                cn selected_q selected_n idx
+              |> print_line) join_arms;
+            CodegenPrinter.print_line ~lvl_delta_pre:(-1) printer "end"
+          end
         | `SelectJoin join_info ->
           let join_arms = List.combine join_info.join_roots join_info.join_nodes in
           let width = List.length join_arms in
