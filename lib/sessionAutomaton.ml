@@ -365,7 +365,7 @@ let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
       ) acts
     | Lang.StySeq (s1, _) -> (first_messages s1)
     | Lang.StyChoice (s1, s2) -> (first_messages s1) @ (first_messages s2)
-    | Lang.StyOffer offerings | Lang.StyXOffer offerings ->
+    | Lang.StyOffer offerings | Lang.StyXOffer offerings | Lang.StyOfferMatch (offerings, _) ->
       List.flatten (List.map (fun o ->
         match o.Lang.trigger with
         | Lang.AtomicAct (Lang.AtomBMsg m) -> [m]

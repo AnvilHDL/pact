@@ -517,9 +517,12 @@ let rec build_automaton (name : identifier option) (st : session_type)
         ());
     !finals)
 
-  (* An offer match records the arms taken as their messages arrive, so an arm
-     may enable another later in the same cycle. Once no further arm can be
-     taken this cycle, it runs the taken arms and the case for exactly them. *)
+  (* An offer match is a conjunctive offer that also records the arms taken.
+     As in a conjunctive offer, an arm is taken as soon as its message is
+     immediate, and each remaining arm resolves like an exclusive offer of its
+     own. Once none can be taken this cycle, the case for exactly the arms
+     taken follows their bodies. Bodies must start with a delay, so running
+     them after that point loses no same-cycle behaviour. *)
   and build_offer_match offerings cases current rec_env let_env =
     if offer_is_blocking_without_else offerings then
       build (blocking_offer_expansion (fresh_blocking_rec_var ()) offerings
@@ -537,6 +540,9 @@ let rec build_automaton (name : identifier option) (st : session_type)
     let case_list = List.map (fun c -> (c.match_on, c.match_body)) cases in
     (match check_offer_match_cases
              (Array.to_list arms |> List.map (fun (_, g) -> MsgSet.elements g)) case_list with
+     | Some err -> raise (TypeError [ Text err; codespan_local default_span ])
+     | None -> ());
+    (match check_offer_match_arms offerings with
      | Some err -> raise (TypeError [ Text err; codespan_local default_span ])
      | None -> ());
     let n = Array.length arms in
@@ -565,7 +571,6 @@ let rec build_automaton (name : identifier option) (st : session_type)
       let mask = Queue.take pending in
       let st = Hashtbl.find states mask in
       TypeAutomaton.set_accepting auto st false;
-      TypeAutomaton.make_adversary auto st;
       let remaining = group_of (all land lnot mask) in
       (* Take one more arm. *)
       for k = 0 to n - 1 do
@@ -576,14 +581,17 @@ let rec build_automaton (name : identifier option) (st : session_type)
             { any_guard with require_now = group; forbid_clock = false } group
         end
       done;
-      (* Wait while a remaining arm may still be taken this cycle. *)
+      (* Wait while a remaining arm may still be taken this cycle. Before any
+         arm the offer offers every arm; afterwards each remaining arm offers
+         itself only while it is still possible this cycle. *)
       MsgSet.iter (fun head ->
-        TypeAutomaton.add_transition auto st st epsilon
-          { any_guard with
-            forbid_now = remaining;
-            forbid_clock = true;
-            future_members = MsgSet.singleton head }
-          remaining) remaining;
+        let guard = { any_guard with
+                      forbid_now = remaining;
+                      forbid_clock = true;
+                      future_members = MsgSet.singleton head } in
+        if mask = 0 then TypeAutomaton.add_transition auto st st epsilon guard remaining
+        else TypeAutomaton.add_transition ~offers_pending:remaining auto st st epsilon guard MsgSet.empty)
+        remaining;
       (* No further arm this cycle: continue with the case for the arms taken. *)
       if mask <> 0 then begin
         let taken = Array.to_list arms |> List.filteri (fun k _ -> mask land (1 lsl k) <> 0) in

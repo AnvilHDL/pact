@@ -1382,3 +1382,18 @@ let check_offer_match_cases (groups : message_specifier list list)
     else match missing with
       | m :: _ -> Some ("Offer match has no case for arms " ^ names m)
       | [] -> None
+
+(** An error message unless every arm of an offer match is a message whose
+    continuation starts with a delay. *)
+let check_offer_match_arms (offerings : offering_session_type list) =
+  let rec starts_with_delay = function
+    | StySkip | StyAtom (AtomDelay _) -> true
+    | StySeq (a, _) -> starts_with_delay a
+    | _ -> false
+  in
+  List.find_map (fun (off : offering_session_type) ->
+    match off.trigger, off.continuation with
+    | AtomTerminal _, _ -> Some "Offer match arms must be messages"
+    | (AtomicAct _ | AtomConjunction _), Some cont when not (starts_with_delay cont) ->
+        Some "An offer match arm must wait a cycle before continuing; put same-cycle actions in the cases"
+    | _ -> None) offerings

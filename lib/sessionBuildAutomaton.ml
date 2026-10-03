@@ -272,6 +272,86 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           );
         end_state
       )
+    | Lang.StyOfferMatch (offerings, cases) ->
+      (* One state per set of arms taken so far. Any remaining arms may be
+         taken together or later in the cycle; once none can be, the taken
+         arms' bodies and the case for exactly them follow. *)
+      (
+        (Hashtbl.find auto.states current).accepting <- false;
+        let fail err = raise (TypeError [Text err; Except.codespan_local default_span]) in
+        let arms = List.filter_map (fun (o : offering_session_type) ->
+          Option.map (fun g -> (o, g)) (trigger_msg_group o.Lang.trigger)) offerings |> Array.of_list in
+        let case_list = List.map (fun c -> (c.match_on, c.match_body)) cases in
+        Option.iter fail (check_offer_match_cases (Array.to_list arms |> List.map snd) case_list);
+        Option.iter fail (check_offer_match_arms offerings);
+        let all_blocking = Array.for_all (fun ((o : offering_session_type), _) -> trigger_is_blocking o.Lang.trigger) arms in
+        let all_nonblocking = Array.for_all (fun ((o : offering_session_type), _) -> trigger_is_nonblocking o.Lang.trigger) arms in
+        if not (all_blocking || all_nonblocking) then
+          fail "Mixed blocking and non-blocking offerings in offer match";
+        let n = Array.length arms in
+        let full = (1 lsl n) - 1 in
+        let taken mask = Array.to_list arms |> List.filteri (fun k _ -> mask land (1 lsl k) <> 0) in
+        let groups mask = List.map snd (taken mask) in
+        let msgs mask = List.concat (groups mask) in
+        let end_state = TypeAutomaton.new_state auto true in
+        let states = Hashtbl.create 8 in
+        Hashtbl.replace states 0 current;
+        let state_for mask =
+          match Hashtbl.find_opt states mask with
+          | Some s -> s
+          | None -> let s = TypeAutomaton.new_state auto false in Hashtbl.replace states mask s; s
+        in
+        for mask = 0 to full do
+          match Hashtbl.find_opt states mask with
+          | None -> ()
+          | Some st ->
+            let remaining = full land lnot mask in
+            (* every non-empty set of remaining arms, taken in one step *)
+            let rec take t =
+              if t > 0 then begin
+                let label = List.fold_left (fun acc m -> LabelSet.add (Action m) acc) LabelSet.empty (msgs t) in
+                TypeAutomaton.add_transition auto st (state_for (mask lor t)) label false false false false;
+                take ((t - 1) land remaining)
+              end
+            in
+            take remaining;
+            TypeAutomaton.append_offers auto st (msgs remaining);
+            if mask <> 0 then begin
+              let closed = TypeAutomaton.new_state auto false in
+              if remaining = 0 then
+                TypeAutomaton.add_transition auto st closed LabelSet.empty true false false false
+              else
+                TypeAutomaton.add_transition auto st closed (LabelSet.singleton (Negation (groups remaining))) false false false true;
+              let body = Option.get (offer_match_lookup case_list (msgs mask)) in
+              let arm_bodies = List.filter_map (fun ((o : offering_session_type), _) ->
+                match o.Lang.continuation with
+                | None | Some StySkip -> None
+                | Some cont -> Some cont) (taken mask) in
+              let after = match arm_bodies with
+                | [] -> body
+                | first :: rest ->
+                  StySeq (List.fold_left (fun acc c -> StyParallel (acc, c)) first rest, body)
+              in
+              let branch_end = build after closed var_map in
+              TypeAutomaton.reroute_transitions auto branch_end end_state var_map
+            end
+        done;
+        (match List.find_opt (fun (o : offering_session_type) ->
+                 match o.Lang.trigger with Lang.AtomDelay _ -> true | _ -> false) offerings with
+         | Some wildcard ->
+           let wildcard_state = TypeAutomaton.new_state auto true in
+           TypeAutomaton.add_transition auto current wildcard_state
+             (LabelSet.singleton (Negation (groups full))) false false false true;
+           let branch_end = match wildcard.Lang.continuation with
+             | Some cont -> build cont wildcard_state var_map
+             | None -> wildcard_state in
+           TypeAutomaton.reroute_transitions auto branch_end end_state var_map
+         | None ->
+           if all_blocking then
+             TypeAutomaton.add_transition auto current current
+               (LabelSet.singleton (OptionDelay (groups full))) false false false false);
+        end_state
+      )
     | Lang.StyParallel (st1, st2) ->
       (Hashtbl.find auto.states current).accepting <- false;
       let final_state = create_synchronous_product auto st1 st2 current default_span in
