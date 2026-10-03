@@ -51,6 +51,8 @@ type events_order =
 | Unordered (** events can occur simultaneously or in undetermined order *)
 | Unreachable (** events can't be reached in one trace *)
 
+val string_of_event_order : events_order -> string
+
 val is_strict_ordered : events_order -> bool
 
 (** Check if two events are ordered in all possible traces in which both of them appear (also returns true if
@@ -142,6 +144,10 @@ val imm_preds_nonrecursive : EventGraph.event -> EventGraph.event list
 
 val recurse_unfold :
   Lang.expr_node -> Lang.expr_node -> Lang.expr_node
+
+(** [unfold_named_recursion id body] is [body] with each [recurse id] replaced
+    by a copy of [body], i.e. [rec id { body }] unrolled once. *)
+val unfold_named_recursion : Lang.identifier -> Lang.expr_node -> Lang.expr_node
 
 (** Unroll [expr_node] the minimum number of times required so that the body
     latency exceeds the recursion gap, as computed by a lightweight dry-run of

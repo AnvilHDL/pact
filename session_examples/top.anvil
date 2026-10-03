@@ -8,15 +8,12 @@ chan ch{
 proc foo(ep : left ch){
     loop{
         xoffer{
-            x = irecv ep.m1 =>{
+            x = recv ep.m1 =>{
                 dprint "Received on m1: %d" (x)
             },
-            y = irecv ep.m2 =>{
+            y = recv ep.m2 =>{
                 dprint "Received on m2: %d" (y)
             }
-        } 
-        else{
-            dprint "No messages available" ()
         } >>
         cycle 1 
     }

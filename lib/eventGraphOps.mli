@@ -1,7 +1,7 @@
 (** Basic operations for event graphs. *)
 
 (** Print the structure of the graph to standard error stream. *)
-val print_graph : EventGraph.event_graph -> unit
+val print_graph : EventGraph.event_graph -> out_channel -> unit
 
 (** Print the graph in dot format to output. *)
 val print_dot_graph : EventGraph.event_graph -> out_channel -> unit

@@ -677,14 +677,14 @@ let combinational_codegen (config : Config.compile_config) (graph : event_graph)
           match a.d with
           | DebugFinish
           | DebugPrint _ -> (
-            Printf.eprintf "[Warning] Optimization for combinational possible but skipping for there being Debug actions in %d thread\n" graph.thread_id;
+            CliOutput.warning "Thread %d could be combinational but has debug actions; not optimising it" graph.thread_id;
             (SpanPrinter.print_code_span ~indent:2 ~trunc:(-5) stderr a.span);
             false
           )
           | _ -> true
         ) last_event.actions in
         if synth then(
-          Printf.eprintf "[Info: Optimization] Thread id = %d detected to be combinational\n" graph.thread_id;
+          CliOutput.status "Thread %d detected to be combinational" graph.thread_id;
           { graph with events = [last_event]; comb = true }
         )
         else graph

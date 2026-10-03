@@ -43,8 +43,8 @@ let find_next_states transitions_list state_id offers =
         (acc @ [(stid, offers_covered)], pending_offer_filtered)
     ) ([], offers) offer_state_pair_sorted
   in
-  assert (if(remaining_offers = []) then true else (Printf.eprintf "Remaining offers: %s\n" (String.concat "," (List.map Lang.string_of_msg_spec remaining_offers)); false));
-  Printf.eprintf "State %d: Offers = [%s], Next states = [%s]\n" state_id (String.concat "," (List.map Lang.string_of_msg_spec offers)) (String.concat "," (List.map (fun (stid, _) -> string_of_int stid) next_states));
+  assert (if(remaining_offers = []) then true else (DebugLog.line "product" "next_states.log" "Remaining offers: %s" (String.concat "," (List.map Lang.string_of_msg_spec remaining_offers)); false));
+  DebugLog.line "product" "next_states.log" "State %d: Offers = [%s], Next states = [%s]" state_id (String.concat "," (List.map Lang.string_of_msg_spec offers)) (String.concat "," (List.map (fun (stid, _) -> string_of_int stid) next_states));
   next_states
 
 

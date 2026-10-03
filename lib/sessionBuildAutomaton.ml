@@ -123,7 +123,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       
       if (infer_fair_choice st1 st2) then (
          TypeAutomaton.make_fair auto current;
-          Printf.eprintf "[Warning]: Inferring fair choice for %s vs %s\n" (string_of_protocol st1) (string_of_protocol st2);
+          CliOutput.warning "Inferring fair choice for %s vs %s" (string_of_protocol st1) (string_of_protocol st2);
       );
       let left_root = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto current left_root (LabelSet.singleton (Theta st1)) false true false false;

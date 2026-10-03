@@ -51,9 +51,8 @@ let guard_check_line ~component ~state_id ~ok ~guard ~env =
       Printf.sprintf "        E      : %s" env;
     ]
 
-let print_combo_verdict ~verbose verdict =
-  if verbose then
-    Printf.eprintf "%s\n\n%!"
+let print_combo_verdict ~verbose:_ verdict =
+    DebugLog.text "product" "combos.log" @@ Printf.sprintf "%s\n\n"
       (String.concat "\n"
          ([
             "------------------------------------------------------------";

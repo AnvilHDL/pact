@@ -28,7 +28,8 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
       (* Optimise before lifetime check so the check sees the simplified graph *)
       let tmp_graph = GraphOpt.optimize config true ci tmp_graph in
       if not config.Config.disable_lt_checks then
-        LifetimeCheck.lifetime_check config ci tmp_graph;
+        LifetimeCheck.lifetime_check
+          ~name:(Printf.sprintf "%s_thread%d" module_name graph.thread_id) config ci tmp_graph;
       if config.Config.two_round_graph then
         Some tmp_graph
       else
@@ -36,6 +37,7 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
     ) else None
   in
   (* Round 2: codegen graph (possibly reusing Round 1 result) *)
+  let g =
   match graph_opt with
   | Some g -> g
   | None ->
@@ -45,11 +47,16 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
     graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
     if not config.Config.disable_session_checks && Option.is_some graph.interface_protocol then begin
         SessionCheck.check_generalized_session config graph module_name;
-        Printf.eprintf "[Info] Session check passed for process %s thread %d\n" module_name graph.thread_id
+        CliOutput.status "Session check passed for process %s thread %d" module_name graph.thread_id
     end;
     graph.is_general_recursive <- graph.last_event_id <> td.ld.lt.live.id;
     let g' = GraphOpt.optimize config false ci graph in
     GraphOpt.combinational_codegen config g' ci
+  in
+  let name = Printf.sprintf "%s_thread%d" module_name g.thread_id in
+  DebugLog.file "event_graph" (name ^ ".dot") (EventGraphOps.print_dot_graph g);
+  DebugLog.file "event_graph" (name ^ ".log") (EventGraphOps.print_graph g);
+  g
 
 
 (* Builds the graph representation for each process To Do: Add support for commands outside loop (be executed once or continuosly)*)
@@ -125,7 +132,9 @@ let build_proc (config : Config.compile_config) sched module_name param_values
       (* create hash table for fast lookup of endpoint name with protocol *)
       let protocol_map = Hashtbl.create (List.length protocol_list_filtered) in
       List.iter (fun (ep_name, proto) -> Hashtbl.add protocol_map ep_name proto) protocol_list_filtered;
-      if (config.verbose) then Printf.eprintf "[Info] Protocol list for process %s: %s\n" module_name (String.concat ", " (List.map(fun f -> Lang.string_of_protocol (snd f).d) protocol_list_filtered));
+      List.iter (fun (ep_name, proto) ->
+        DebugLog.line "session_check" (module_name ^ "_protocols.log") "%s: %s"
+          ep_name (Lang.string_of_protocol proto.d)) protocol_list_filtered;
       
       let proc_interface_protocol = Array.init (List.length body.threads) (fun i ->
         if i >= List.length proc.interface then None
@@ -272,7 +281,7 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
           (
               let check, err = SessionFastCompat.check_compatibility_multiparty ~silent:config.silent session_with_ids ps.d.p_id config.verbose in
               let ast_spans = List.map (fun ((session : session_type ast_node),_) -> Except.codespan_local session.span) session_with_ids in
-              if check then CliOutput.info "Compatibility check passed for pool instance %s in process %s" ps.d.p_id module_name
+              if check then CliOutput.status "Compatibility check passed for pool instance %s in process %s" ps.d.p_id module_name
               else
                 raise (Except.TypeError (
                   Text ("Incompatibility detected between interfaces in pool instance " ^ ps.d.p_id ^ ": " ^ err)

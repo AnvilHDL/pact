@@ -2,13 +2,18 @@ open Lang
 open EventGraph
 open GraphAnalysis
 
+
+(* Details of the current thread's check go to lifetime/<name>.log. *)
+let log_name = ref "lifetime"
+let log fmt = Printf.ksprintf (DebugLog.text "lifetime" (!log_name ^ ".log")) fmt
+
 let string_of_lt (lt : lifetime) : string =
   String.concat "" (List.map (fun s ->
       Printf.sprintf "%d |> %s | " (fst s).id (string_of_delay_pat (snd s))
     ) lt.dead)
 
 (** Check if the uses of endpoints and registers follow defined order. *)
-let check_linear (config : Config.compile_config) lookup_message (g : event_graph) =
+let check_linear lookup_message (g : event_graph) =
   let events_rev = List.rev g.events in
   let reg_ops = ref [] in (* all uses of registers *)
   let msg_uses = Hashtbl.create 2 in (* uses of messages *)
@@ -46,18 +51,18 @@ let check_linear (config : Config.compile_config) lookup_message (g : event_grap
     )
     events_rev;
 
-  if config.verbose then (
+  if DebugLog.enabled () then (
     List.iter (fun (ev, range, _span) ->
       let range_s = match range.subreg_range_interval with
       | (Const n, sz) -> Printf.sprintf "%s[%d, %d]" range.subreg_name n sz
       | (NonConst _, sz) -> Printf.sprintf "%s[var, %d]" range.subreg_name sz
       in
-      Printf.eprintf "RegAssign at %d to %s\n" ev.id range_s
+      log "RegAssign at %d to %s\n" ev.id range_s
     ) !reg_ops;
     Hashtbl.iter (fun msg_str li ->
-      Printf.eprintf "Uses of %s:\n" msg_str;
+      log "Uses of %s:\n" msg_str;
       List.iter (fun (ev, sa_span) ->
-        Printf.eprintf "  %d -> %d\n" ev.id sa_span.d.until.id
+        log "  %d -> %d\n" ev.id sa_span.d.until.id
       ) !li
     ) msg_uses
   );
@@ -66,8 +71,12 @@ let check_linear (config : Config.compile_config) lookup_message (g : event_grap
   let rec check_reg_violation = function
     | (ev, range, span)::remaining ->
       List.iter (fun (ev', range', span') ->
+        let order = events_get_order g.events lookup_message ev ev' in
+        if EventGraphOps.subreg_ranges_possibly_intersect range range' then
+          log "Register %s assigned at %d and %d: %s\n" range.subreg_name ev.id ev'.id
+            (string_of_event_order order);
         if (EventGraphOps.subreg_ranges_possibly_intersect range range') &&
-           (events_get_order g.events lookup_message ev ev' |> is_strict_ordered |> not) then
+           (order |> is_strict_ordered |> not) then
             raise (LifetimeCheckError
                 [
                   Text "Non-linearizable register assignment!";
@@ -101,6 +110,11 @@ let check_linear (config : Config.compile_config) lookup_message (g : event_grap
             | 0, _ | _, 0 -> true
             | _ -> false
           in
+          log "Message use %d->%d vs %d->%d: order(%d,%d)=%s order(%d,%d)=%s %s\n"
+            ev.id sa_span.d.until.id ev'.id sa_span'.d.until.id
+            ev.id sa_span'.d.until.id (string_of_event_order order1)
+            sa_span.d.until.id ev'.id (string_of_event_order order2)
+            (if check_ok then "ok" else "CONFLICT");
           if not check_ok then
             raise (LifetimeCheckError
                   [
@@ -138,9 +152,9 @@ let event_pat_rel2 events lookup_message ev_pat1 ev_pat2 =
     (* source_points is the set of source points to consider *)
     (* dist1 is the distance required, -1 to indicate eternal *)
     let (source_points, dist1) = get_points_dist spat1 in
-    (* Printf.eprintf "Sources %d (%d) = " (fst spat1).id dist1;
-    List.iter (fun source -> Printf.eprintf "%d " source.id) source_points;
-    Printf.eprintf "\n"; *)
+    (* log "Sources %d (%d) = " (fst spat1).id dist1;
+    List.iter (fun source -> log "%d " source.id) source_points;
+    log "\n"; *)
     let targets_list = List.map get_points_dist ev_pat2 in
     if dist1 = -1 then
       (* If eternal *)
@@ -152,9 +166,9 @@ let event_pat_rel2 events lookup_message ev_pat1 ev_pat2 =
         if dist2 = -1 then
           true
         else (
-          (* Printf.eprintf "Targets (%d) = " dist2;
-          List.iter (fun target -> Printf.eprintf "%d " target.id) target_points;
-          Printf.eprintf "\n"; *)
+          (* log "Targets (%d) = " dist2;
+          List.iter (fun target -> log "%d " target.id) target_points;
+          log "\n"; *)
           (* neither dist2 nor dist1 is -1 *)
           List.for_all (fun target ->
             let slacks = GraphAnalysis.events_max_dist events lookup_message target in
@@ -203,16 +217,18 @@ let lifetime_disjoint events lookup_message lt1 lt2 =
 (* An internal identifier for a message specifier. *)
 let msg_ident msg = Printf.sprintf "%s@%s" msg.endpoint msg.msg
 
+
 module StringHashtbl = Hashtbl.Make(String)
 
-let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event_graph) =
+let lifetime_check ?(name = "thread") (_config : Config.compile_config) (ci : cunit_info) (g : event_graph) =
+  log_name := name;
   let lookup_message msg = MessageCollection.lookup_message g.messages msg ci.channel_classes in
 
-  if config.verbose then (
-    Printf.eprintf "==== Lifetime Check Details ====\n";
-    EventGraphOps.print_graph g;
-    EventGraphOps.print_dot_graph g Out_channel.stderr;
-  );
+  (* The two-iteration unrolling the check runs on. *)
+  if DebugLog.enabled () then begin
+    DebugLog.file "event_graph" (name ^ "_unrolled.log") (EventGraphOps.print_graph g);
+    DebugLog.file "event_graph" (name ^ "_unrolled.dot") (EventGraphOps.print_dot_graph g)
+  end;
 
   GraphAnalysis.events_prepare_outs g.events;
 
@@ -228,7 +244,7 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       ]
     );
 
-  check_linear config lookup_message g;
+  check_linear lookup_message g;
 
   let reg_borrows = StringHashtbl.create 8 in (* regname -> (lifetime, range)*)
   let msg_borrows = StringHashtbl.create 8 in
@@ -307,11 +323,11 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
     ) td.reg_borrows
   ) !td_to_live_until;
 
-  if config.verbose then (
+  if DebugLog.enabled () then (
   StringHashtbl.iter (fun reg_name borrows ->
-    Printf.eprintf "Register %s has %d borrow(s):\n" reg_name (List.length borrows);
+    log "Register %s has %d borrow(s):\n" reg_name (List.length borrows);
     List.iter (fun (lt_tagged, range) ->
-      Printf.eprintf "  Borrow from event %d, dead at %s, range: %s\n" 
+      log "  Borrow from event %d, dead at %s, range: %s\n" 
         lt_tagged.d.live.id 
         (string_of_lt lt_tagged.d)
         (match range.subreg_range_interval with
@@ -451,13 +467,13 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
           )
           g.events;
   (* Now we have all messages we need to check. *)
-  if config.verbose then (
-    Config.debug_println config "Messages requiring sync mode checks below:";
+  if DebugLog.enabled () then (
+    log "Messages requiring sync mode checks below:\n";
     Utils.StringMap.iter
       (fun m (o, relative_msg, n, self_check, other_check) ->
         Printf.sprintf "Message %s with init offset %d, gap %d, relative to %s(<=: %b, >=: %b)"
             m o n relative_msg self_check other_check
-        |> Config.debug_println config)
+        |> log "%s\n")
     !msg_to_check
   );
   (* Check per message *)
@@ -479,8 +495,8 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
       | None -> false
     in
     (* if msg is an action at this event, obtain until *)
-    if config.verbose then (
-      Printf.eprintf "Checking sync mode %s %s %b %b\n" msg relative_msg self_check other_check
+    if DebugLog.enabled () then (
+      log "Checking sync mode %s %s %b %b\n" msg relative_msg self_check other_check
     );
 
     let has_msg msg ev =
@@ -532,10 +548,10 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
                     slacks.(ev'.id) <- GraphAnalysis.event_distance_max
                 ) g.events;
                 let min_weights = GraphAnalysis.event_min_among_succ g.events slacks in
-                if config.verbose then (
-                  Printf.eprintf "Relative to %d:\n" sa.d.until.id;
-                  Array.iteri (fun idx sl -> Printf.eprintf "Sl %d = %d\n" idx sl) slacks;
-                  Array.iteri (fun idx sl -> Printf.eprintf "Mw %d = %d\n" idx sl) min_weights
+                if DebugLog.enabled () then (
+                  log "Relative to %d:\n" sa.d.until.id;
+                  Array.iteri (fun idx sl -> log "Sl %d = %d\n" idx sl) slacks;
+                  Array.iteri (fun idx sl -> log "Mw %d = %d\n" idx sl) min_weights
                 );
                 if min_weights.(sa.d.until.id) > gap && not is_one_cycle_static_1_1 then (
                   let error_msg = Printf.sprintf "Static sync mode mismatch between %s and %s (actual gap = %d > expected gap %d)!"
@@ -594,8 +610,8 @@ let lifetime_check (config : Config.compile_config) (ci : cunit_info) (g : event
           match has_msg msg ev with
           | Some sa ->
             let slacks = GraphAnalysis.events_max_dist g.events lookup_message ev in
-            if config.verbose then (
-              Array.iteri (fun idx sl -> Printf.eprintf "Sl %d = %d\n" idx sl) slacks
+            if DebugLog.enabled () then (
+              Array.iteri (fun idx sl -> log "Sl %d = %d\n" idx sl) slacks
             );
             List.iter (fun ev' ->
               if msg = relative_msg && !is_first && GraphAnalysis.event_is_graph_root ev' then

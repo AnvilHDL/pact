@@ -34,9 +34,9 @@ endif
 
 $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
 ifdef LOG
-	dune exec anvil $(ANVIL_FLAGS) $< > $@ 2> compile.log
+	dune exec pact $(ANVIL_FLAGS) $< > $@ 2> compile.log
 else
-	dune exec anvil $(ANVIL_FLAGS) $< > $@
+	dune exec pact $(ANVIL_FLAGS) $< > $@
 endif
 
 ifdef DEBUG

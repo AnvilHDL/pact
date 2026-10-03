@@ -36,7 +36,7 @@ let compile_with_json_output config =
 let compile_with_normal_output config =
   let open Anvil.Config in
   if config.input_filenames = [] && not config.stdin then begin
-    Printf.eprintf "Error: a file name must be supplied!\n";
+    Anvil.CliOutput.error "A file name must be supplied";
     exit 1
   end else begin
     let out_channel = match config.output_filename with
@@ -52,7 +52,7 @@ let compile_with_normal_output config =
       if Option.is_some config.output_filename then
         close_out_noerr out_channel;
       let open Anvil.Lang in
-      Printf.eprintf "Compilation failed!\n";
+      Anvil.CliOutput.error "Compilation failed";
       let open Anvil.Except in
       List.iter (
         function

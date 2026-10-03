@@ -12,6 +12,7 @@ type compile_config = {
   opt_level : int;
   merge_reg_writes : bool;
   output_filename : string option;
+  log_dir : string option; (* where debug logs go; None disables them *)
   just_check : bool;
   two_round_graph: bool;
   json_output: bool;
@@ -33,6 +34,7 @@ let parse_args () : compile_config =
   let two_round_graph = ref false in
   let json_output = ref false in
   let input_filenames = ref []
+  and log_dir = ref None
   and output_filename = ref None
   and just_check = ref false in
 
@@ -42,8 +44,9 @@ let parse_args () : compile_config =
   Arg.parse
     [
       ("-stdin", Arg.Set stdin, "Read from standard input. If a filename is provided despite this flag, it is treated as the path of standard input data.");
-      ("-verbose", Arg.Set verbose, "Enable verbose output");
-      ("-silent", Arg.Set silent, "Write compatibility traces to files; keep concise results on stderr");
+      ("-verbose", Arg.Set verbose, "Show progress and write debug logs to ./logs/<input>/");
+      ("-log-dir", Arg.String (fun s -> log_dir := Some s), "Write debug logs to the given directory");
+      ("-silent", Arg.Set silent, "Write compatibility traces to the log directory; keep concise results on stderr");
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-strict-dtc", Arg.Set strong_typecasts, "Restrict Abstract Typecasts");
       ("-disable-session-checks", Arg.Set disable_session_checks, "Disable session type related checks");
@@ -58,7 +61,7 @@ let parse_args () : compile_config =
       ("-verbose-max", Arg.Set verbose_max, "Enable verbose output with maximum detail");
     ]
     add_input_filename
-    "pact [-stdin] [-verbose] [-silent] [-disable-lt-checks] [-O <opt-level>] [-two-round] [-json] [-strict-dtc] <file1> [<file2>] ...";
+    "pact [-stdin] [-verbose] [-log-dir <dir>] [-silent] [-disable-lt-checks] [-O <opt-level>] [-two-round] [-json] [-strict-dtc] <file1> [<file2>] ...";
   {
     debug_mode = (!debug_choice <> -1);
     verbose = !verbose;
@@ -76,11 +79,17 @@ let parse_args () : compile_config =
     json_output = !json_output;
     input_filenames = !input_filenames;
     output_filename = !output_filename;
+    log_dir =
+      (match !log_dir, List.rev !input_filenames with
+       | Some d, _ -> Some d
+       | None, _ when not (!verbose || !verbose_max || !silent) -> None
+       | None, first :: _ ->
+         Some (Filename.concat "logs"
+                 (Filename.remove_extension (Filename.basename first)))
+       | None, [] -> Some (Filename.concat "logs" "stdin"));
     just_check = !just_check;
   }
 
 
-let debug_println (config : compile_config) (msg : string) =
-  if config.verbose then
-    Printf.eprintf "%s\n" msg
-  else ()
+let debug_println (_config : compile_config) (msg : string) =
+  DebugLog.line "lifetime" "sync_modes.log" "%s" msg

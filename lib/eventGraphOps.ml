@@ -26,12 +26,12 @@ let subreg_ranges_possibly_intersect r1 r2 =
     | _ -> true
     )
 
-let print_graph (g: event_graph) =
+let print_graph (g: event_graph) out =
   List.iter (fun ev ->
     let rec src_string src =
       (
     match src with
-    | `Later (e1, e2) -> Printf.eprintf "> %d: later %d %d\n" ev.id e1.id e2.id
+    | `Later (e1, e2) -> Printf.fprintf out "> %d: later %d %d\n" ev.id e1.id e2.id
     | `Seq (ev', a) ->
       let c = match a with
       | `Cycles n -> Printf.sprintf "C %d" n
@@ -40,18 +40,18 @@ let print_graph (g: event_graph) =
       | `Choice _-> "IC"
       | `Sync s -> Printf.sprintf "S %s" s
       in
-      Printf.eprintf "> %d: seq %d %s\n" ev.id ev'.id c
-    | `Branch (ev', _) -> Printf.eprintf "> %d: branch %d\n" ev.id ev'.id
-    | `Root None -> Printf.eprintf "> %d: root\n" ev.id
+      Printf.fprintf out "> %d: seq %d %s\n" ev.id ev'.id c
+    | `Branch (ev', _) -> Printf.fprintf out "> %d: branch %d\n" ev.id ev'.id
+    | `Root None -> Printf.fprintf out "> %d: root\n" ev.id
     | `Root (Some (ev', br_side_info)) ->
-        Printf.eprintf "> %d: branch-root %d %d\n" ev.id br_side_info.branch_side_sel ev'.id
+        Printf.fprintf out "> %d: branch-root %d %d\n" ev.id br_side_info.branch_side_sel ev'.id
     | `Recurse (source, id) ->
         src_string source;
-        Printf.eprintf "> %d: recurse id:%d\n" ev.id id
+        Printf.fprintf out "> %d: recurse id:%d\n" ev.id id
     | `Select (e, msg_group) ->
-        Printf.eprintf "> %d: select %d with msg group %s\n" ev.id e.id (String.concat ";" (List.map Lang.string_of_msg_spec msg_group))
+        Printf.fprintf out "> %d: select %d with msg group %s\n" ev.id e.id (String.concat ";" (List.map Lang.string_of_msg_spec msg_group))
     | `SelectJoin join_info ->
-        Printf.eprintf "> %d: select join with parent %d, join roots [%s], join nodes [%s]\n" ev.id join_info.join_parent.id
+        Printf.fprintf out "> %d: select join with parent %d, join roots [%s], join nodes [%s]\n" ev.id join_info.join_parent.id
           (String.concat ";" (List.map (fun e -> string_of_int e.id) join_info.join_roots))
           (String.concat ";" (List.map (fun e -> string_of_int e.id) join_info.join_nodes))
       )

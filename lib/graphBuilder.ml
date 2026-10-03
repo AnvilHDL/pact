@@ -24,6 +24,47 @@ List.iter (fun ((msg_spec : message_specifier), message_def) ->
       Except.codespan_local span])
   ) msg_list
 
+(* Offer arms never wait themselves: a blocking offer is
+   mu X . offer(instantaneous arms) else { cycle 1 >> X }, and the choice's own
+   wait realises that retry. *)
+let instant_offer_atom = function
+  | OfferSend sp -> OfferSend { sp with send_handshake = Instant }
+  | OfferRecv (id, rp) -> OfferRecv (id, { rp with recv_handshake = Instant })
+  | OfferWildcard -> OfferWildcard
+
+let offer_retry_counter = ref 0
+
+(* A blocking offer is mu X . offer(instantaneous B) else { cycle 1 >> X }.
+   Returns the arms with that else arm added and the name X, or [None] if the
+   offer is not blocking. Blocking offers cannot have their own else arm. *)
+let desugar_blocking_offer (span : code_span) arms =
+  let kinds = List.concat_map (fun (arm, _) ->
+    let of_atom = function
+      | OfferSend sp -> [sp.send_handshake]
+      | OfferRecv (_, rp) -> [rp.recv_handshake]
+      | OfferWildcard -> []
+    in
+    match arm with
+    | OfferAtom a -> of_atom a
+    | OfferConjunction atoms -> List.concat_map of_atom atoms) arms in
+  if kinds = [] || List.mem Instant kinds then None
+  else begin
+    incr offer_retry_counter;
+    let x = Printf.sprintf "__offer_retry_%d" !offer_retry_counter in
+    let node d = { d; span } in
+    let instant (arm, body) = match arm with
+      | OfferAtom a -> (OfferAtom (instant_offer_atom a), body)
+      | OfferConjunction atoms -> (OfferConjunction (List.map instant_offer_atom atoms), body)
+    in
+    let retry = node (Wait (node (Cycle 1), node (Recursor x))) in
+    Some (List.map instant arms @ [ (OfferAtom OfferWildcard, retry) ], x)
+  end
+
+(* Whether a lowered branch ends by recursing rather than completing. *)
+let ends_in_recursion (td : node_data) =
+  td.ld.lt.live.is_recurse
+  || (match td.ld.lt.live.source with `Recurse _ -> true | _ -> false)
+
 (* The handshake kind of each non-wildcard atom in an offer arm. *)
 let offer_arm_kinds (arm : offer_arm_type) : handshake_kind list =
   let of_atom = function
@@ -280,7 +321,8 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     | _ ->
         let ctx_with_bindings, completion_events, recv_bindings =
           List.fold_left (fun (ctx_acc, evs, recv_bindings) atom ->
-            let ctx_acc, completion_ev, recv_binding = lower_offer_atom_from_root ctx_root ctx_acc atom in
+            let ctx_acc, completion_ev, recv_binding =
+              lower_offer_atom_from_root ctx_root ctx_acc (instant_offer_atom atom) in
             (ctx_acc, completion_ev :: evs, (match recv_binding with Some b -> b :: recv_bindings | None -> recv_bindings))
           ) (ctx_root, [], []) (offer_atoms_of_arm e.span arm)
         in
@@ -423,7 +465,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
           (* no need to wait if the value is current *)
           if td1.ld.lt.live.id <> ctx.current.id && not binding.binding_used then (
             (* raise (event_graph_error_default "Value is potentially not awaited!" e1.span) *)
-            Printf.eprintf "[Warning] Value bound to %s is potentially not awaited!\n" ident;
+            CliOutput.warning "Value bound to %s is potentially not awaited" ident;
             (SpanPrinter.print_code_span ~indent:2 ~trunc:(-5) stderr e1.span)
           ;
           );
@@ -788,7 +830,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
           let total_offset_le = MaybeConst.add (binop_td_const e.span Add) (_binop_td_td e.span Add) offset_le inner_le_nd in
           let off_i = MaybeConst.map_off total_offset_le in
           let (off, le') = if off_i < 0 then (
-            Printf.eprintf "[Warning] The offset is not a constant value for %s, borrowing full range\n" reg_ident;
+            CliOutput.warning "The offset is not a constant value for %s, borrowing full range" reg_ident;
             (0, len)
           ) else (off_i, len) in
           let (wire', w') = WireCollection.add_slice graph.thread_id w (MaybeConst.map (fun td -> unwrap_or_err "Invalid indexing in lvalue" e.span td.ld.w) total_offset_le) le' graph.wires in
@@ -808,7 +850,7 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
           let total_offset_le = MaybeConst.add_const field_offset_le (binop_td_const e.span Add) inner_le_nd in
           let off_i = MaybeConst.map_off total_offset_le in
           let (off, le') = if off_i < 0 then (
-            Printf.eprintf "[Warning] The offset is not a constant value for indirection %s, borrowing full range\n" field_id;
+            CliOutput.warning "The offset is not a constant value for indirection %s, borrowing full range" field_id;
             (0, len)
           ) else (off_i, len) in
           let (wi', new_w) = WireCollection.add_slice graph.thread_id w (MaybeConst.map (fun td -> unwrap_or_err "Invalid indexing in indirection" e.span td.ld.w) total_offset_le) le' graph.wires in
@@ -868,11 +910,24 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
 | Offer offer_arms ->
     check_offer_arm_kinds "offer" offer_arms
       (List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms) e.span;
+    (* Blocking arms are lowered as instantaneous; keep the ports they had. *)
+    if offer_construct_kind offer_arms = Blocking then
+      HandshakeResolve.mark_protocol_agnostic e.span;
+    let offer_arms, retry_var =
+      match desugar_blocking_offer e.span offer_arms with
+      | Some (arms, x) -> (arms, Some x)
+      | None -> (offer_arms, None)
+    in
     let offer_msg_groups =
       List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
     in
     let cond_td = Typing.offer_condition graph ctx offer_msg_groups (offer_construct_kind offer_arms) in
     let ctx_after_choice = BuildContext.wait graph ctx cond_td.ld.lt.live in
+    (* The retry re-enters the choice itself, not anything before it. *)
+    let ctx_after_choice = match retry_var with
+      | Some x -> BuildContext.add_rec_var_binding ctx_after_choice x ctx_after_choice.current.id
+      | None -> ctx_after_choice
+    in
     let only_wildcard_offer =
       match offer_arms with
       | [(offer_arm, _)] -> is_wildcard_arm offer_arm
@@ -894,10 +949,15 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
         List.map (fun (offer_arm, arm_expr) ->
           let select_ctx = select_context_for_arm offer_arm in
           let td_result = lower_offer_arm_from_root select_ctx arm_expr offer_arm in
-          if td_result.ld.lt.live.is_recurse then
+          if ends_in_recursion td_result && not (is_wildcard_arm offer_arm) then
             raise (Except.TypeError [Except.Text "Recursive types not supported in offer branch ends"; Except.codespan_local e.span]);
           (select_ctx, td_result)
         ) offer_arms
+      in
+      (* An else arm that recurses never reaches the join; it is only taken when
+         no other arm is, and the join waits for the next attempt. *)
+      let select_contexts_and_tds =
+        List.filter (fun (_, td) -> not (ends_in_recursion td)) select_contexts_and_tds
       in
       let select_ctxs, arm_tds = List.split select_contexts_and_tds in
       let merged_event =
@@ -941,6 +1001,11 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       HandshakeResolve.mark_protocol_agnostic e.span
     else
       HandshakeResolve.mark_exclusive_offer e.span;
+    let offer_arms, retry_var =
+      match desugar_blocking_offer e.span offer_arms with
+      | Some (arms, x) -> (arms, Some x)
+      | None -> (offer_arms, None)
+    in
     let offer_msg_groups =
       List.map (fun (offer_arm, _) -> offer_msg_group_of_arm e.span offer_arm) offer_arms
     in
@@ -960,6 +1025,11 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
 
     let cond_td = Typing.offer_condition graph ctx offer_msg_groups (offer_construct_kind offer_arms) in
     let ctx = BuildContext.wait graph ctx cond_td.ld.lt.live in
+    (* The retry re-enters the choice itself, not anything before it. *)
+    let ctx = match retry_var with
+      | Some x -> BuildContext.add_rec_var_binding ctx x ctx.current.id
+      | None -> ctx
+    in
     
     (*==================== At this point one of the messages must have been received ==========================================================*)
     (* Now we match 1'd1 with respective valid ready port of branch conditions *)
@@ -1099,7 +1169,13 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let merged_borrows = List.fold_left Utils.list_unordered_join [] (List.map (fun td -> td.ld.reg_borrows) branch_tds) in
     let lt = {live = ctx_br.current; dead = merged_dead} in
     
-    (* Return the selected arm's value, using the same selector as its control. *)
+    (* Return the selected arm's value, using the same selector as its control.
+       A branch that recurses never completes, so it contributes no value. *)
+    let completing =
+      List.combine required_branch_conditions branch_tds
+      |> List.filter (fun (_, td) -> not (ends_in_recursion td))
+    in
+    let branch_tds = List.map snd completing in
     let result_dtype = match branch_tds with
       | [] -> unit_dtype
       | hd::_ -> hd.ld.dtype
@@ -1113,8 +1189,8 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
             ci.weak_typecasts ci.typedefs ci.macro_defs;
           unwrap_or_err "Every value-returning xoffer branch must return a value" e.span td.ld.w
         ) branch_tds in
-        let cases = List.map2 (fun index value -> (Option.get index.ld.w, value))
-          required_branch_conditions values in
+        let cases = List.map2 (fun (index, _) value -> (Option.get index.ld.w, value))
+          completing values in
         let wires, result = WireCollection.add_cases graph.thread_id ci.typedefs
           cond_w cases (List.hd values) graph.wires in
         graph.wires <- wires;
@@ -1306,6 +1382,11 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     ctx.current.is_recurse <- true;
     Typing.const_data graph None unit_dtype ctx.current
   | Recursion (id, body) ->
+    (* For checking, unroll once so uses in adjacent iterations are compared,
+       as is done for thread-level recursion. *)
+    let body =
+      if ctx.lt_check_phase then GraphAnalysis.unfold_named_recursion id body else body
+    in
     let new_ctx = BuildContext.add_rec_var_binding ctx id ctx.current.id in
     let endi = construct_graphIR graph ci new_ctx body in 
     if endi.ld.lt.live.id = ctx.current.id then
@@ -1315,6 +1396,12 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let rec_event_id_opt = BuildContext.lookup_rec_var_binding ctx id in
     if Option.is_none rec_event_id_opt then
       raise (Except.TypeError [Text ("Undefined recursion variable " ^ id); Except.codespan_local e.span]);
+    (* The check graph is already unrolled, so the last copy ends here instead
+       of looping back; this keeps the graph acyclic. *)
+    if ctx.lt_check_phase then begin
+      ctx.current.is_recurse <- true;
+      Typing.const_data graph None unit_dtype ctx.current
+    end else
     
     let rec_event_id = Option.get rec_event_id_opt in
     let rec_event = Typing.lookup_event graph rec_event_id

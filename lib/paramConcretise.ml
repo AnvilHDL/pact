@@ -25,7 +25,7 @@ and concretise_dtype_params int_env type_env (dtype : data_type) : data_type =
     let size = match concretise int_env n with
       | Some s -> s
       | None ->
-          Printf.eprintf "[ERROR] Failed to concretise array size parameter: %s\n"
+          CliOutput.error "Failed to concretise array size parameter: %s"
             (match n with
              | ParamEnv.Concrete i -> Printf.sprintf "Concrete(%d)" i
              | ParamEnv.Param p   -> Printf.sprintf "Param(%s)" p
@@ -147,7 +147,7 @@ let concretise_array_dimm params param_values (dimm : Lang.array_dimensions) : a
         (match ParamEnv.concretise_and_get int_param_env (ParamEnv.Param id) with
          | Some v -> v
          | None   ->
-             Printf.eprintf "[ERROR] Unknown parameter '%s' in array size expression | Current Mappings = %s\n" id mappings;
+             CliOutput.error "Unknown parameter '%s' in array size expression | Current Mappings = %s" id mappings;
              failwith ("Unknown parameter in array size expression: " ^ id))
     | ParamEnv.PE_Add (e1, e2) -> eval_param_expr e1 + eval_param_expr e2
     | ParamEnv.PE_Sub (e1, e2) -> eval_param_expr e1 - eval_param_expr e2
@@ -180,7 +180,7 @@ let concretise_array_dimm params param_values (dimm : Lang.array_dimensions) : a
         (match concretise_and_get int_param_env n with
          | Some v -> ParamEnv.Concrete v
          | None   ->
-             Printf.eprintf "[ERROR] Failed to concretise array dimension parameter: %s | Current Mappings = %s\n"
+             CliOutput.error "Failed to concretise array dimension parameter: %s | Current Mappings = %s"
                (show_param n) mappings;
              failwith "Array dimension concretisation failed")
   in

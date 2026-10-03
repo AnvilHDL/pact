@@ -1,9 +1,19 @@
+chan ch{
+    left m1 : (logic@#1),
+    left m2 : (logic@#1)
+}
 
 
-pool p16{
-    ep_le -- ep_ri : ch;
-    p1 : ^(ep.m1,ep.m2);#1,
-    p2 : ^(ep.m2,*);#2,
-    p3 : ^(ep.m3,*);#1
-
+proc foo(ep : left ch){
+    loop{
+        offer{
+            x = recv ep.m1 =>{
+                dprint "Received on m1: %d" (x)
+            },
+            y = recv ep.m2 =>{
+                dprint "Received on m2: %d" (y)
+            }
+        } >>
+        cycle 1 
+    }
 }

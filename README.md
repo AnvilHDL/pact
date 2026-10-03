@@ -85,10 +85,10 @@ opam reinstall .
 
 ## Compiler Usage
 
-Run the AnvilHDL compiler using `dune`. **Note**: For a global installation, replace `dune exec anvil --` with `anvil`.
+Run the AnvilHDL compiler using `dune`. **Note**: For a global installation, replace `dune exec pact --` with `pact`.
 
 ```bash
-dune exec anvil -- [OPTIONS] <anvil-source-file>
+dune exec pact -- [OPTIONS] <anvil-source-file>
 ```
 
 **Common Options:**

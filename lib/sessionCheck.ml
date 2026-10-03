@@ -278,17 +278,22 @@ let event_session_action_msgs (ev : event) =
   immediate_msgs @ sustained_msgs @ source_msgs
 
 (* Error handler that outputs the graph with session types before raising error *)
-let error_handler g err_msg err_span module_name  =
-  Printf.eprintf "\nPrinting file %s with session types for debugging...\n" module_name;
-  let file_handler = Out_channel.open_text (Printf.sprintf "%s_error.dot" module_name) in
-  EventGraphOps.print_graph_with_session_types g file_handler;
-  Out_channel.close file_handler;
+let log_name module_name (g : event_graph) =
+  Printf.sprintf "%s_thread%d" module_name g.thread_id
 
-  raise (Except.TypeError [
+let error_handler g err_msg err_span module_name  =
+  let name = log_name module_name g ^ "_error.dot" in
+  DebugLog.file "session_check" name (EventGraphOps.print_graph_with_session_types g);
+  let hint = match DebugLog.path "session_check" name with
+    | Some p -> [Except.Text ("Annotated event graph: " ^ p)]
+    | None -> []
+  in
+  let msg : Except.error_message = [
     Text "Session type violation: ";
     Text err_msg;
     Except.codespan_local err_span
-  ])
+  ] in
+  raise (Except.TypeError (msg @ hint))
   
     
 
@@ -340,12 +345,47 @@ let offerings_of_head = function
   | Offers offerings | XOffers offerings -> Some offerings
   | _ -> None
 
+(* A blocking offer is mu X . offer(#B) else #1;X. A matched blocking choice
+   has already done that waiting, so the arms it leads to are non-blocking. *)
+let nonblocking_offerings (offerings : offering_session_type list) =
+  let nb = function
+    | Lang.AtomBMsg m -> Lang.AtomNBMsg m
+    | act -> act
+  in
+  List.map (fun (off : offering_session_type) ->
+    match off.trigger with
+    | Lang.AtomicAct act -> { off with trigger = Lang.AtomicAct (nb act) }
+    | Lang.AtomConjunction acts -> { off with trigger = Lang.AtomConjunction (List.map nb acts) }
+    | _ -> off) offerings
+
+(* A blocking offer with no else arm is mu X . offer(#B) else #1;X: the same
+   arms made non-blocking, plus an else arm that waits a cycle and offers again. *)
+let expand_blocking_offer (whole : session_type) (offerings : offering_session_type list) =
+  let msg_offerings =
+    List.filter (fun (o : offering_session_type) ->
+      match o.trigger with Lang.AtomicAct _ | Lang.AtomConjunction _ -> true | _ -> false) offerings
+  in
+  let blocking (o : offering_session_type) =
+    match o.trigger with
+    | Lang.AtomicAct act -> is_blocking_atomic_action act
+    | Lang.AtomConjunction acts -> List.for_all is_blocking_atomic_action acts
+    | _ -> false
+  in
+  if msg_offerings = [] || List.length msg_offerings <> List.length offerings
+     || not (List.for_all blocking msg_offerings) then offerings
+  else
+    nonblocking_offerings offerings
+    @ [{ trigger = Lang.AtomDelay 0;
+         continuation = Some (StySeq (StyAtom (Lang.AtomDelay 1), whole)) }]
+
 let choice_residual_for_head ?kind msg_list hc =
   match hc.head with
   | Offers offerings when match_offerings_with_msgs ?kind offerings msg_list ->
-      Some (residual_of_head_cont hc)
+      Some (residual_with_head (StyOffer (nonblocking_offerings offerings)) hc.cont)
   | XOffers offerings when match_offerings_with_msgs ?kind offerings msg_list ->
-      Some (seq_of_sty_opt (Some (build_choice_from_xofferings offerings)) hc.cont)
+      Some (seq_of_sty_opt
+              (Some (build_choice_from_xofferings (nonblocking_offerings offerings)))
+              hc.cont)
   | _ -> None
 
 let head_matches_offer_choice ?kind msg_list hc =
@@ -487,9 +527,9 @@ let rec get_head_continuation_pair
     let head_conts_transform = List.map (fun hc -> {hc with is_choice = true}) head_conts in
     possible_delay :: head_conts_transform
   | StyXOffer offerings ->
-      [{default_head_continuation_pair with head = XOffers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+      [{default_head_continuation_pair with head = XOffers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
-      [{default_head_continuation_pair with head = Offers offerings; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+      [{default_head_continuation_pair with head = Offers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StySkip -> [{default_head_continuation_pair with head = Terminal ParallelDone; cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyRec(id,s') -> get_head_continuation_pair ~inside_parallel s' sp ((id, sty_node)::rec_var_context)
   | StyVar id -> 
@@ -652,24 +692,22 @@ let delay_continuation_after_terminal_closure n sp head_conts init =
 
 (* Generalized session type checking : traverse event graph and assign types to node for successors based on edges *)
 let check_generalized_session 
-    (config : Config.compile_config) 
+    (_config : Config.compile_config) 
     (g : event_graph) 
     module_name =
   
   if Option.is_none g.interface_protocol then
-      Printf.eprintf "[Warning] No interface protocol specified for thread %d in module %s, skipping check.\n " (g.thread_id+1) module_name
+      CliOutput.warning "No interface protocol specified for thread %d in module %s, skipping check" (g.thread_id+1) module_name
   
   else
     let protocol_node = Option.get g.interface_protocol in
     GraphAnalysis.events_prepare_outs g.events;
 
-    if config.verbose then (
-      Printf.eprintf "\n[Generalized Session Type Check] Starting generalized session type check...\n";
-      Printf.eprintf "Checking graph with %d events...\n" (List.length g.events);
-      let file_handler = Out_channel.open_text (Printf.sprintf "%sgraph_before.dot" module_name) in
-      EventGraphOps.print_dot_graph g file_handler;
-      Out_channel.close file_handler;
-    );
+    let trace = log_name module_name g ^ "_trace.log" in
+    DebugLog.file "session_check" (log_name module_name g ^ "_before.dot")
+      (EventGraphOps.print_dot_graph g);
+    DebugLog.line "session_check" trace "Checking %d events against %s"
+      (List.length g.events) (string_of_protocol protocol_node.d);
 
     let event_residuals : session_residual IntHashtbl.t =
       IntHashtbl.create (List.length g.events)
@@ -737,9 +775,8 @@ let check_generalized_session
                 in
                 error_handler g err_msg g.thread_codespan module_name
           in
-          if config.verbose then
-            Printf.eprintf "Processing event %d with residual %s\n"
-              ev.id (string_of_residual current_residual);
+          DebugLog.line "session_check" trace "Event %d: residual %s"
+            ev.id (string_of_residual current_residual);
 
           let child_events = ev.outs in
           let head_conts =
@@ -748,12 +785,9 @@ let check_generalized_session
             | None, [] -> []
             | None, _ -> restart_head_continuation_pairs protocol_node.d g.thread_codespan
           in
-          if config.verbose then (
-            Printf.eprintf "Extracted head-continuation pairs for event %d:\n" ev.id;
-            List.iter (fun hc ->
-              Printf.eprintf "  %s\n" (print_string_of_head_cont_pair hc)
-            ) head_conts
-          );
+          List.iter (fun hc ->
+            DebugLog.line "session_check" trace "  head %s" (print_string_of_head_cont_pair hc)
+          ) head_conts;
 
           let choice_msg_lists = choice_msg_lists_of_children child_events in
           let structural_residual, structural_recvars =
@@ -1198,6 +1232,42 @@ let check_generalized_session
     Queue.add root_ev q;
 
     generalized_session_judgement q processed_count_tbl;
+
+    (* A recursion re-enters its target from the recursor, so the recursor's
+       residual, taken through the target's choice when it has one, must match
+       the residual the target already has. *)
+    List.iter (fun (t : event) ->
+      match t.source with
+      | `Recurse (src, rid) ->
+        (match List.find_opt (fun (e : event) -> e.id = rid) g.events with
+         | Some r when not r.removed ->
+           (match get_event_residual r, get_event_residual t with
+            | Some (Some rr), Some existing ->
+              let recvars = get_event_recvars r @ get_event_recvars t in
+              let entering =
+                match src with
+                | `Seq (_, `Choice (msg_list, kind)) ->
+                  get_head_continuation_pair rr g.thread_codespan recvars
+                  |> List.find_map (choice_residual_for_head ~kind msg_list)
+                | _ -> Some (Some rr)
+              in
+              let ok = match entering with
+                | Some residual -> residual_matches recvars existing residual protocol_node.d
+                | None -> false
+              in
+              DebugLog.line "session_check" trace "Recursion %d -> %d: %s"
+                r.id t.id (if ok then "matches" else "MISMATCH");
+              if not ok then
+                error_handler g
+                  (Printf.sprintf
+                    "Recursion from event %d re-enters event %d with %s, but event %d has %s"
+                    r.id t.id (string_of_residual (Some rr)) t.id (string_of_residual existing))
+                  g.thread_codespan module_name
+            | _ -> ())
+         | _ -> ())
+      | _ -> ()
+    ) g.events;
+
     let unassigned_events =
       List.filter (fun ev ->
         (not ev.removed)
@@ -1231,9 +1301,7 @@ let check_generalized_session
         Except.codespan_local g.thread_codespan
       ])
     );
-    let file_name = Printf.sprintf "%sgraph.dot" module_name in
-    let file_handler = Out_channel.open_text file_name in
-    EventGraphOps.print_graph_with_session_types g file_handler;
-    Out_channel.close file_handler
+    DebugLog.file "session_check" (log_name module_name g ^ "_typed.dot")
+      (EventGraphOps.print_graph_with_session_types g)
     
     (* Output final graph with annotated session types *)

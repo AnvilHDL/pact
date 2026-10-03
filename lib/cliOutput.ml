@@ -11,6 +11,18 @@ let info fmt =
   Printf.ksprintf (fun message ->
     Printf.eprintf "%s %s\n%!" (styled stderr "36" "[info]") message) fmt
 
+(* Set by -verbose; status lines are shown only then. *)
+let verbose = ref false
+
+let status fmt =
+  Printf.ksprintf (fun message ->
+    if !verbose then
+      Printf.eprintf "%s %s\n%!" (styled stderr "36" "[info]") message) fmt
+
+let warning fmt =
+  Printf.ksprintf (fun message ->
+    Printf.eprintf "%s %s\n%!" (styled stderr "1;33" "[warning]") message) fmt
+
 let error fmt =
   Printf.ksprintf (fun message ->
     Printf.eprintf "%s %s\n%!" (styled stderr "1;31" "[error]") message) fmt

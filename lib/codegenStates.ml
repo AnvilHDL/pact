@@ -127,7 +127,7 @@ let collect_reg_states g =
     | `Branch _  -> []
     | `Root (Some _) ->
       if need_delay_reg e then(
-        Printf.eprintf "[Warning] Added Delay Register for Event %d in Thread %d to prevent combinational loop! If you dont expect this, please report a bug.\n" e.id g.thread_id;
+        CliOutput.warning "Added a delay register for event %d in thread %d to prevent a combinational loop. If you do not expect this, please report a bug." e.id g.thread_id;
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
       )
@@ -967,8 +967,14 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
     ) e.actions;
 
     (* Handle Choice events: assert signals while waiting for handshake *)
-    match e.source with
-    | `Seq (choice_parent, `Choice (msg_groups, choice_kind)) ->
+    (* A retried choice is wrapped in a recursion; it is still the same choice. *)
+    let rec choice_source = function
+      | `Seq (p, `Choice (groups, kind)) -> Some (p, groups, kind)
+      | `Recurse (src, _) -> choice_source src
+      | _ -> None
+    in
+    match choice_source e.source with
+    | Some (choice_parent, msg_groups, choice_kind) ->
       let msg_list = flatten_choice_msg_groups msg_groups in
       (* An instantaneous choice has no syncstate to sustain the assertion. *)
       let is_wildcard = is_wildcard_present msg_groups || choice_kind = Lang.Instant in
@@ -979,7 +985,8 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
             parent_current
             (EventStateFormatter.format_syncstate g.thread_id e.id)
         else
-          parent_current
+          (* Fires on the first attempt and on every retry. *)
+          EventStateFormatter.format_current g.thread_id e.id
       in
         List.iter (fun (msg : Lang.message_specifier) ->
           if msg.endpoint <> "*" || msg.msg <> "*" then

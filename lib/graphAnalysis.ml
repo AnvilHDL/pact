@@ -94,7 +94,9 @@ let toposort_with_preds preds events =
   !res
 
 
-let toposort = toposort_with_preds imm_preds
+(* Order ignoring recursion back edges: they always point to an earlier event,
+   so the rest of the graph is acyclic and still has a topological order. *)
+let toposort = toposort_with_preds imm_preds_nonrecursive
 
 let event_predecessors (ev : event) : event list =
   let visitor add_to_queue cur =
@@ -448,7 +450,8 @@ let events_pred_min_dist ev =
   List.rev preds
     |> List.iter (fun e ->
       let v = res.(e.id) in
-      match e.source with
+      let rec from_source src =
+      match src with
       | `Seq (e', d) -> (
         let gap =
           (* if we want max delay of pred we change send recv to <max> *)
@@ -491,7 +494,11 @@ let events_pred_min_dist ev =
         update_dist e' v
       | `SelectJoin {join_nodes; _} ->
         List.iter (fun e -> update_dist e v) join_nodes
+      (* A back edge only leads to an earlier occurrence; follow the forward source. *)
+      | `Recurse (src, _) -> from_source src
       | _ -> raise (Except.unknown_error_default "Unexpected event source!")
+      in
+      from_source e.source
     );
   res
 
@@ -799,6 +806,11 @@ type events_order =
 | Unordered
 | Unreachable
 
+let string_of_event_order = function
+  | Before -> "Before" | After -> "After" | BeforeEq -> "BeforeEq"
+  | AfterEq -> "AfterEq" | AlwaysEq -> "AlwaysEq" | Unordered -> "Unordered"
+  | Unreachable -> "Unreachable"
+
 let is_strict_ordered = function
   | Before | After | Unreachable -> true
   | _ -> false
@@ -867,9 +879,11 @@ let message_is_immediate msg is_send =
 
 (** Substitutes every {!Lang.Recurse} leaf in [expr_node] with
     [expr_full_node], effectively unrolling one recursion level. *)
-let rec recurse_unfold expr_full_node expr_node =
-  let unfold = recurse_unfold expr_full_node in
-  if expr_node.d = Recurse then
+(* Replaces each leaf matching [is_leaf] in [expr_node] with [expr_full_node],
+   not descending into a [rec] whose name [shadows] the one being replaced. *)
+let rec unfold_leaves ~is_leaf ~shadows expr_full_node expr_node =
+  let unfold = unfold_leaves ~is_leaf ~shadows expr_full_node in
+  if is_leaf expr_node.d then
     expr_full_node
   else
     let expr' = match expr_node.d with
@@ -893,7 +907,7 @@ let rec recurse_unfold expr_full_node expr_node =
           Binop (op, unfold e1, (`Single e2n))
       )
     | Recursion (id, body) ->
-      Recursion (id, unfold body)
+      if shadows id then Recursion (id, body) else Recursion (id, unfold body)
     | Recursor id ->
       Recursor id
     | Unop (op, expr_node') ->
@@ -953,9 +967,20 @@ let rec recurse_unfold expr_full_node expr_node =
           (arm_type, unfold e_body)
         ) arms
       )
-    | Recurse -> failwith "Shouldn't reach here!"
+    | Recurse -> Recurse
     in
     {expr_node with d = expr'}
+
+let recurse_unfold expr_full_node expr_node =
+  unfold_leaves ~is_leaf:(fun d -> d = Recurse) ~shadows:(fun _ -> false)
+    expr_full_node expr_node
+
+(* [rec id { body }] unrolled once: each [recurse id] becomes a copy of [body]. *)
+let unfold_named_recursion id body =
+  unfold_leaves
+    ~is_leaf:(function Recursor id' -> id' = id | _ -> false)
+    ~shadows:(fun id' -> id' = id)
+    body body
 
 module IntHashTbl = Hashtbl.Make(Int)
 

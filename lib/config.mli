@@ -16,6 +16,7 @@ type compile_config = {
   opt_level : int; (** optimisation level *)
   merge_reg_writes : bool; (** merge each multi-writer register into one always_comb next-state signal instead of per-event non-blocking assigns; off by default *)
   output_filename : string option; (** optional output filename *)
+  log_dir : string option; (** debug log directory; [None] disables logs *)
 
   just_check : bool; (** only typecheck and validate the input files without generating output *)
   two_round_graph: bool; (** enable codegen of two rounds for each thread

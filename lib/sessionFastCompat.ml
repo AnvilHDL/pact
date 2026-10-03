@@ -26,16 +26,11 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
     get_outgoing_from_index outgoing_maps.(idx) state_id
   in
 
-  if verbose then (
-    List.iter (fun (auto, intf_id) ->
-      let out_chan = open_out (intf_id ^ "_automaton.dot") in
-      print_automaton_dot auto out_chan;
-      close_out out_chan;
-      flush stderr;
-    ) automata_ids_list
-  );
+  List.iter (fun (auto, intf_id) ->
+    DebugLog.file "type_automata" (intf_id ^ ".dot") (print_automaton_dot auto)
+  ) automata_ids_list;
 
-  CliOutput.info "All individual automata built. Starting product construction...";
+  CliOutput.status "All individual automata built. Starting product construction...";
   
   let state_map : (int list, int) Hashtbl.t = Hashtbl.create 10 in
   let prod_auto = TypeAutomaton.create () in
@@ -51,7 +46,7 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
   in
 
   if verbose then (
-    CliOutput.info "Combining %d automata" automata_count;
+    CliOutput.status "Combining %d automata" automata_count;
     Array.iter (fun (auto, intf_id) ->
       CliOutput.counts stderr "Type automaton" intf_id
         (Hashtbl.length auto.states) (List.length auto.transitions)
@@ -67,7 +62,7 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
   let inc_iter () =
     incr iter;
     if !iter mod 10000 = 0 then (
-      CliOutput.info "Product iteration %d: %d queued, %d visited states"
+      CliOutput.status "Product iteration %d: %d queued, %d visited states"
         !iter (Queue.length worklist) (IntListSet.cardinal !visited)
     )
   in
@@ -462,17 +457,9 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
               let state = Hashtbl.find auto.states st_id in
               Printf.sprintf "\nAutomaton %d offers: [%s] | has delay: %b" idx (String.concat "," (List.map Lang.string_of_msg_spec state.offers)) ((List.nth delay_transitions idx) <> [])
             ) current_states));
-            let msg = if silent then
-                SessionGame2.explain_trace ~silent _name summary
-                  (Some (trace ^ Buffer.contents details))
-              else (
-                Printf.eprintf "%s" (Buffer.contents details);
-                summary ^ "\n" ^ trace)
-            in
-            let out_channel = open_out ("incompat_prod_auto_"^_name^".dot") in
-            print_automaton_dot prod_auto out_channel;
-            close_out out_channel;
-            flush stderr;
+            DebugLog.text "compat" (_name ^ "_failure.log") (Buffer.contents details);
+            DebugLog.file "product" (_name ^ "_incompatible.dot") (print_automaton_dot prod_auto);
+            let msg = SessionGame2.explain_trace ~silent _name summary (Some trace) in
             raise (Failure msg)
           )
       )
@@ -524,8 +511,9 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
   ) state_map;
 
   (* Debug output *)
-  if verbose && not silent then Hashtbl.iter (fun states prod_state_id ->
-      Printf.eprintf "Product state %d corresponds to states %s\n" prod_state_id (String.concat "," (List.map string_of_int states))
+  Hashtbl.iter (fun states prod_state_id ->
+      DebugLog.line "product" (_name ^ "_states.log") "Product state %d corresponds to states %s"
+        prod_state_id (String.concat "," (List.map string_of_int states))
   ) state_map;
 
   prod_auto
@@ -549,8 +537,9 @@ let check_compatibility_multiparty ?(silent = false)
 
 
     let prod_auto = create_product ~silent session_ids verbose pool_id in
-    CliOutput.counts stderr "Product" pool_id
-      (Hashtbl.length prod_auto.states) (List.length prod_auto.transitions);
+    if verbose then
+      CliOutput.counts stderr "Product" pool_id
+        (Hashtbl.length prod_auto.states) (List.length prod_auto.transitions);
 
     Hashtbl.iter (fun state_id _ ->
         label_adversary_state prod_auto state_id
@@ -560,11 +549,5 @@ let check_compatibility_multiparty ?(silent = false)
     
     let result, err = play_game ~silent prod_auto ids_list in
 
-    if verbose || (not result) then begin
-    let res_prefix = if result then "compat_" else "incompat_" in
-    let out = Stdlib.open_out (res_prefix^"prod_auto_"^pool_id^".dot") in
-    print_automaton_dot prod_auto out;
-    Stdlib.close_out out;
-    flush stderr;
-    end;
+    DebugLog.file "product" (pool_id ^ "_product.dot") (print_automaton_dot prod_auto);
     (result, err)

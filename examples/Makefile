@@ -32,7 +32,7 @@ endif
 
 
 $(MODULE_NAME).anvil.sv: $(MODULE_NAME).anvil
-	dune exec anvil $(ANVIL_FLAGS) $< > $@
+	dune exec pact $(ANVIL_FLAGS) $< > $@
 
 obj_dir/V$(MODULE_NAME): $(MODULE_NAME)_driver.cpp $(MODULE_NAME).anvil.sv
 	verilator --cc --exe --build $(VERILATOR_FLAGS) $^

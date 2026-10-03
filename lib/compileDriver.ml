@@ -7,8 +7,10 @@ let debug_types out config =
 
 let compile out config =
   let open Config in
+  CliOutput.verbose := config.verbose || config.verbose_max;
+  Option.iter (fun dir -> DebugLog.enable dir; at_exit DebugLog.report) config.log_dir;
   if config.debug_mode then(
-    Printf.eprintf "Debug mode enabled\n";
+    CliOutput.status "Debug mode enabled";
     debug_types out config
   )
   else(
@@ -21,6 +23,9 @@ let compile out config =
         (Except.Text "Type error:")::msg
           |> raise_compile_error None
   );
+  List.iter (fun (file_name, cunit) ->
+    DebugLog.file "ast" (Filename.basename file_name ^ ".log") (AstDump.print cunit)
+  ) !cunits;
   (* collect all channel class and type definitions *)
   let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits in
   let all_session_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in

@@ -16,3 +16,4 @@ session_examples/*.dot
 **.csv
 **.png
 **.txt
+*logs

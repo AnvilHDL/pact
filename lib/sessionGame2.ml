@@ -123,14 +123,11 @@ let explain_trace ~silent name summary = function
   | None -> summary
   | Some trace when not silent -> summary ^ "\n" ^ trace
   | Some trace ->
-      let name = String.map (function
-        | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-') as c -> c
-        | _ -> '_') name in
-      let path = "losing_trace_" ^ name ^ ".txt" in
-      let out = open_out path in
-      Fun.protect ~finally:(fun () -> close_out out) (fun () ->
-        Printf.fprintf out "%s\n%s\n" summary trace);
-      summary ^ " Losing trace: " ^ path
+      let file = name ^ "_losing_trace.log" in
+      DebugLog.file "compat" file (fun out -> Printf.fprintf out "%s\n%s\n" summary trace);
+      (match DebugLog.path "compat" file with
+       | Some path -> summary ^ " Losing trace: " ^ path
+       | None -> summary ^ "\n" ^ trace)
 
 let indent_block prefix text =
   text
@@ -824,8 +821,7 @@ let build_arena name product =
     arena_edges = List.rev !edges;
   }
 
-let print_arena_dot path arena =
-  let out = open_out path in
+let print_arena_dot arena out =
   let dot_id id = "\"" ^ escape_dot id ^ "\"" in
   let html_label text = html_of_text_block text in
   let node_attrs kind =
@@ -855,11 +851,8 @@ let print_arena_dot path arena =
           (dot_id edge.arena_edge_to)
           (html_of_edge_label edge.arena_edge_label))
       arena.arena_edges;
-    Printf.fprintf out "}\n";
-    close_out out
-  with exn ->
-    close_out_noerr out;
-    raise exn
+    Printf.fprintf out "}\n"
+  with exn -> raise exn
 
 
 let play_game product progress_ids =

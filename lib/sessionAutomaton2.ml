@@ -757,11 +757,11 @@ let unified_product verbose automata boundary_messages internal_messages =
             (get_outgoing_from_index automata_outgoing_transitions.(i) state_id)
     in
     pick 0;
-    if verbose && Hashtbl.length emitted = 0 then
-      Printf.eprintf "Product state %d has no synchronized successor.\n%!" from_state
+    if Hashtbl.length emitted = 0 then
+      DebugLog.line "product" "unified_product.log" "Product state %d has no synchronized successor" from_state
   done;
   recompute_state_summaries product_automaton;
-  if verbose then CliOutput.info "Unified product: %d reachable states, %d transitions"
+  if verbose then CliOutput.status "Unified product: %d reachable states, %d transitions"
     (Hashtbl.length product_automaton.states) (List.length product_automaton.transitions);
   product_automaton
 

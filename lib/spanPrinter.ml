@@ -54,6 +54,6 @@ let print_code_span ?(indent = 2) ?(trunc = 0) out span =
   | None -> ()
 
 let warn msg span _file_name =
-  Printf.eprintf "[Warning] %s\n" msg;
+  CliOutput.warning "%s" msg;
   print_code_span ~indent:2 ~trunc:(-5) stderr span;
   flush stderr

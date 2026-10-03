@@ -86,15 +86,9 @@ let prepare_pool channel_classes session_defs pool =
   in
   (session_ids, message_sets)
 
-let sanitize_filename name =
-  String.map (function
-    | ('a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '_' | '-') as c -> c
-    | _ -> '_') name
-
-let write_automaton_dot verbose path automaton =
-  let out = open_out path in
-  Fun.protect ~finally:(fun () -> close_out_noerr out) (fun () ->
-    print_automaton_dot ~show_guards:verbose ~show_transition_debug:verbose
+let write_automaton_dot category name automaton =
+  DebugLog.file category name (fun out ->
+    print_automaton_dot ~show_guards:true ~show_transition_debug:true
       ~show_empty_boundary:true automaton out)
 
 let build_members message_sets session_ids verbose =
@@ -105,10 +99,8 @@ let build_members message_sets session_ids verbose =
       | Some messages -> messages
       | None -> messages_of_session_type session_node.d
     in
-    if verbose then (
-      print_automaton_counts automaton stderr;
-      write_automaton_dot verbose
-        (sanitize_filename member_id ^ "_generalized_v2_automaton.dot") automaton);
+    if verbose then print_automaton_counts automaton stderr;
+    write_automaton_dot "type_automata" (member_id ^ ".dot") automaton;
     { member_id; automaton; messages; progress_ids = [member_id] }) session_ids
 
 let compose verbose name inputs =
@@ -162,15 +154,14 @@ let check_compatibility_multiparty ?(silent = false) inputs pool_id verbose =
   if verbose && silent then print_automaton_counts product stderr;
   let arena = SessionGame2.build_arena pool_id product in
   let game = SessionGame2.play_arena arena ~progress_ids in
-  let path = sanitize_filename pool_id in
-  write_automaton_dot verbose ("product_" ^ path ^ ".dot") product;
-  SessionGame2.print_arena_dot ("arena_" ^ path ^ ".dot") arena;
+  write_automaton_dot "product" (pool_id ^ "_product.dot") product;
+  DebugLog.file "product" (pool_id ^ "_arena.dot") (SessionGame2.print_arena_dot arena);
   if verbose then
-    CliOutput.info "Stage %s (I={%s}; B={%s}): %s"
+    CliOutput.status "Stage %s (I={%s}; B={%s}): %s"
       pool_id (string_of_msgset internal_messages)
       (string_of_msgset boundary_messages) game.summary;
   let residual = residual_input pool_id product boundary_messages progress_ids in
   if game.compatible then
-    write_automaton_dot verbose ("residual_" ^ path ^ ".dot") residual.automaton;
+    write_automaton_dot "product" (pool_id ^ "_residual.dot") residual.automaton;
   let compatible, message = explain_result ~silent pool_id game in
   (compatible, message, residual)

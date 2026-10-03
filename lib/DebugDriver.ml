@@ -13,11 +13,9 @@ let generalized_type_debug _out config =
   );
   let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
     let open Lang in
-    if config.verbose && not config.silent then CliOutput.section "Generalized types";
-  if config.verbose && not config.silent then
     List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
       let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
-      Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol preprocess);
+      DebugLog.line "types" "session_types.log" "%s: %s" sdef.d.name (string_of_protocol preprocess);
     ) session_type_defs;
     
 
@@ -31,10 +29,7 @@ let generalized_type_debug _out config =
         let gen_type = build_automaton None sdef.d.body.d sdef.d.body.span in 
         if config.verbose then CliOutput.counts stderr "Type automaton" sdef.d.name
           (Hashtbl.length gen_type.states) (List.length gen_type.transitions);
-        let out_channel = Printf.sprintf "generalized_type_%s.dot" sdef.d.name in
-        let out = open_out out_channel in
-        print_automaton_dot gen_type out;
-        close_out out
+        DebugLog.file "type_automata" (sdef.d.name ^ ".dot") (print_automaton_dot gen_type)
     with
     | Except.TypeError msg ->
         let err_msg = List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; " in
@@ -68,8 +63,7 @@ let generalized_type_debug _out config =
       | Failure msg -> (false, msg)
     in
     CliOutput.compatibility pool.d.pool_id (string_of_bool compat) err;
-  ) pool_defs;
-  Printf.eprintf "\n"
+  ) pool_defs
 
 (* Each stage checks the accumulated subsystem together with one new member. *)
 let sequential_compatibility ~silent members pool_id verbose =
@@ -113,12 +107,10 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
   );
   let session_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
   let open Lang in
-  if config.verbose && not config.silent then CliOutput.section "Generalized types";
-  if config.verbose && not config.silent then
-    List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
-      let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
-      Printf.eprintf "Session Type %s: %s \n" sdef.d.name (string_of_protocol preprocess);
-    ) session_type_defs;
+  List.iter (fun (sdef :Lang.session_def Lang.ast_node) ->
+    let preprocess = SessionHelper.expand_session_type_quantifiers sdef.d.body.d in
+    DebugLog.line "types" "session_types.log" "%s: %s" sdef.d.name (string_of_protocol preprocess);
+  ) session_type_defs;
 
   if config.verbose then CliOutput.section "Type automata";
   List.iter(
@@ -130,10 +122,7 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
       let gen_type = SessionBuildAutomaton2.build_automaton
         (Some sdef.d.name) repeated_type sdef.d.body.span in
       if config.verbose then SessionAutomaton2.print_automaton_counts gen_type stderr;
-      let out_channel = Printf.sprintf "generalizedv2_type_%s.dot" sdef.d.name in
-      let out = open_out out_channel in
-      SessionAutomaton2.print_automaton_dot gen_type out;
-      close_out out
+      DebugLog.file "type_automata" (sdef.d.name ^ ".dot") (SessionAutomaton2.print_automaton_dot gen_type)
     with
     | Except.TypeError msg ->
       let err_msg = List.filter_map (fun x -> match x with Except.Text msg -> Some msg | _ -> None) msg |> String.concat "; " in
@@ -174,8 +163,7 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
       | Failure msg -> ("error", msg)
     in
     CliOutput.compatibility ~mode pool.d.pool_id result err;
-  ) pool_defs;
-  Printf.eprintf "\n"
+  ) pool_defs
 
 let profile_compatibility_checks _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
