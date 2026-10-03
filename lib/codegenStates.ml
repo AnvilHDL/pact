@@ -88,8 +88,8 @@ let describe_event_source (source : EventGraph.event_source) =
 (* The number of cycles every arm of an offer takes from its selection to its
    end, when it is the same fixed number for all arms: arms made only of delays,
    register writes and instantaneous actions. All arms of one offer are selected
-   in the same cycle, so they then also finish together. *)
-let select_join_fixed_latency (join_info : EventGraph.join_info) =
+   in the same cycle, so they then also finish together. Used at -O 3. *)
+let select_join_fixed_latency (config : Config.compile_config) (join_info : EventGraph.join_info) =
   let rec latency (root : EventGraph.event) (ev : EventGraph.event) =
     if ev.id = root.id then Some 0
     else match ev.source with
@@ -106,7 +106,8 @@ let select_join_fixed_latency (join_info : EventGraph.join_info) =
          | _ -> None)
       | _ -> None
   in
-  match List.map2 latency join_info.join_roots join_info.join_nodes with
+  if config.opt_level < 3 then None
+  else match List.map2 latency join_info.join_roots join_info.join_nodes with
   | Some d :: rest when List.for_all (( = ) (Some d)) rest -> Some d
   | _ -> None
 
@@ -121,7 +122,7 @@ let select_join_arm_taken ?(recorded = false) thread_id join_id idx (root : Even
     Printf.sprintf "(%s[%d] || (!(|%s) && %s))" selected_q idx selected_q
       (EventStateFormatter.format_current thread_id root.id)
 
-let collect_reg_states g =
+let collect_reg_states config g =
   let open EventGraph in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
   List.concat_map (fun e ->
@@ -180,7 +181,7 @@ let collect_reg_states g =
       let selected = (ty, EventStateFormatter.format_select_selected g.thread_id e.id) in
       (* Arms that finish together need no done bits, and the arms taken are
          kept only for an offer match. *)
-      (match select_join_fixed_latency join_info, join_info.join_tag with
+      (match select_join_fixed_latency config join_info, join_info.join_tag with
        | Some _, Some _ -> [ selected ]
        | Some _, None -> []
        | None, _ -> [ selected; (ty, EventStateFormatter.format_select_done g.thread_id e.id) ])
@@ -189,7 +190,7 @@ let collect_reg_states g =
   ) g.events
 
 (* prints out declarations for event-related wires and registers *)
-let codegen_decl printer (g : EventGraph.event_graph) =
+let codegen_decl config printer (g : EventGraph.event_graph) =
   let st_count = List.length g.events in
   CodegenPrinter.print_section printer (Printf.sprintf "Thread %d event state" g.thread_id);
   CodegenPrinter.print_comment printer "event_current marks events active in the current cycle";
@@ -201,7 +202,7 @@ let codegen_decl printer (g : EventGraph.event_graph) =
   Printf.sprintf "logic _init_%d;" g.thread_id |> CodegenPrinter.print_line printer;
 
   (* print per-event states *)
-  collect_reg_states g
+  collect_reg_states config g
   |> List.iter (fun (ty, sn) ->
     Printf.sprintf "%s %s_q, %s_n;" ty sn sn |> CodegenPrinter.print_line printer
   )
@@ -222,7 +223,7 @@ let _codegen_next_comb printer (g : EventGraph.event_graph) =
 
                 
 (* generate the next-cycle signals*)
-let codegen_next printer (graphs : EventGraph.event_graph_collection)
+let codegen_next config printer (graphs : EventGraph.event_graph_collection)
                          (pg : EventGraph.proc_graph) (g : EventGraph.event_graph) =
   let print_line = CodegenPrinter.print_line printer in
   let print_lines = List.iter print_line in
@@ -547,7 +548,7 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
             select_condition
             trigger
           |> print_line
-        | `SelectJoin join_info when Option.is_some (select_join_fixed_latency join_info) ->
+        | `SelectJoin join_info when Option.is_some (select_join_fixed_latency config join_info) ->
           (* All taken arms finish in the same cycle, so the join fires when
              any arm ends. The arms taken are recorded only for an offer match. *)
           let join_arms = List.combine join_info.join_roots join_info.join_nodes in
@@ -809,7 +810,7 @@ let codegen_transition shared_regs printer (config : Config.compile_config) (gra
   let open EventGraph in
   let print_line ?(lvl_delta_pre = 0) ?(lvl_delta_post = 0) =
     CodegenPrinter.print_line printer ~lvl_delta_pre:lvl_delta_pre ~lvl_delta_post:lvl_delta_post in
-  let reg_states = collect_reg_states g in
+  let reg_states = collect_reg_states config g in
   (* reset states *)
 
   let owned_regs = GraphAnalysis.graph_owned_regs g |> Utils.StringSet.of_list in
@@ -866,10 +867,11 @@ let codegen_transition shared_regs printer (config : Config.compile_config) (gra
   print_line ~lvl_delta_pre:(-1) "end";
   print_line ~lvl_delta_pre:(-1) "end"
 
-let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collection)
+let codegen_sustained_actions (config : Config.compile_config) printer (graphs : EventGraph.event_graph_collection)
                                       (pg : EventGraph.proc_graph) (g : EventGraph.event_graph) =
   let print_line = CodegenPrinter.print_line printer in
   let send_or_assigns = Hashtbl.create 8 in
+  let send_msg_defs = Hashtbl.create 8 in
   let recv_or_assigns = Hashtbl.create 8 in
   let choice_valid_asserts = Hashtbl.create 8 in (* For Choice ValidAck send assertions (no data) *)
   let send_valid_only_assigns = Hashtbl.create 8 in
@@ -958,6 +960,9 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
       if Option.is_some td.w then
         (* Non-void message: has data wire *)
         let w = Option.get td.w in
+        Hashtbl.replace send_msg_defs
+          (CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
+          msg_def;
         insert_to send_or_assigns
           (CodegenFormat.format_msg_valid_signal_name (CodegenFormat.canonicalize_endpoint_name msg.endpoint g) msg.msg)
           has_valid_port
@@ -1118,9 +1123,26 @@ let codegen_sustained_actions printer (graphs : EventGraph.event_graph_collectio
       ) !conds_dw
     in
     let n = List.length conds_with_data in
+    (* At -O 3, when the data lives only in the handshake cycle and each
+       site's own valid covers every cycle it is sent, the data can follow
+       the active site without a stored selector. *)
+    let sites_cover_valid =
+      config.Config.opt_level >= 3
+      && (match Hashtbl.find_opt send_msg_defs w_name with
+          | Some (msg_def : Lang.message_def) ->
+              List.for_all (fun (st : Lang.sig_type_chan_local) -> st.lifetime.e = `Cycles 1) msg_def.sig_types
+          | None -> false)
+      && List.for_all (fun (valid_cond, _, dw, _) -> Option.is_some valid_cond && dw <> "") !conds_dw
+    in
     if n = 1 then (
       let (_, dw, vw) = List.hd conds_with_data in
       Printf.sprintf "assign %s = %s; // send data" dw vw
+      |> print_line
+    ) else if n > 1 && sites_cover_valid then (
+      let (_, dw, _) = List.hd conds_with_data in
+      List.map (fun (c, _, vw) -> Printf.sprintf "(%s ? %s : '0)" c vw) conds_with_data
+      |> String.concat " | "
+      |> Printf.sprintf "assign %s = %s; // send data of the active site" dw
       |> print_line
     ) else if n > 1 then (
       (* if we have more than one site that sends, keep track of which event is the last send (TODO: optimisation) *)
@@ -1183,11 +1205,11 @@ let codegen_states shared_regs printer
   (g : EventGraph.event_graph)
   (reset_by : Lang.message_specifier option) =
   if g.comb then(
-    codegen_sustained_actions printer graphs pg g
+    codegen_sustained_actions config printer graphs pg g
   ) else (
-    codegen_decl printer g;
-    codegen_next printer graphs pg g;
-    codegen_sustained_actions printer graphs pg g;
+    codegen_decl config printer g;
+    codegen_next config printer graphs pg g;
+    codegen_sustained_actions config printer graphs pg g;
     codegen_transition shared_regs printer config graphs g reset_by
   )
 

@@ -474,6 +474,43 @@ let residual_matches recvar_map lhs rhs init_ty =
   | None, Some rhs_sty when rhs_sty = init_ty -> true
   | _ -> false
 
+(* The residual after the process takes an internal choice of skip now,
+   e.g. leaving [rec B . (() + (X ; B))] without doing X. *)
+let rec residual_after_skip_choice = function
+  | StySkip -> Some None
+  | StyChoice (a, b) ->
+      (match residual_after_skip_choice a with
+      | Some r -> Some r
+      | None -> residual_after_skip_choice b)
+  | StyRec (_, body) -> residual_after_skip_choice body
+  | StySeq (a, b) ->
+      (match residual_after_skip_choice a with
+      | Some None -> Some (Some b)
+      | _ -> None)
+  | _ -> None
+
+(* A residual common to all branches of a join. A branch that did nothing
+   after an internal choice of skip may take it to agree with the others. *)
+let common_join_residual recvars_of branch_residuals init_ty =
+  let options residual =
+    match residual with
+    | Some sty ->
+        (match residual_after_skip_choice sty with
+        | Some exited -> [residual; exited]
+        | None -> [residual])
+    | None -> [residual]
+  in
+  match branch_residuals with
+  | [] -> None
+  | (first_ev, first_residual) :: _ ->
+      List.find_opt (fun target ->
+        List.for_all (fun (ev, residual) ->
+          List.exists (fun option ->
+            residual_matches (recvars_of first_ev @ recvars_of ev) target option init_ty
+          ) (options residual)
+        ) branch_residuals
+      ) (options first_residual)
+
 let rec get_head_continuation_pair
     ?(inside_parallel=false)
     (sty_node : session_type)
@@ -1214,13 +1251,18 @@ let check_generalized_session
                               first_residual residual protocol_node.d
                           ) rest
                         in
-                        if branches_match then begin
+                        let common =
+                          if branches_match then Some first_residual
+                          else common_join_residual get_event_recvars branch_residuals protocol_node.d
+                        in
+                        match common with
+                        | Some joined -> begin
                           mark_structural_propagation ();
                           assign_child_residual
                             ~from_structural:true
-                            child_ev merged_recvars first_residual
+                            child_ev merged_recvars joined
                         end
-                        else
+                        | None ->
                           let branch_residual_str = String.concat "," (List.map(fun (_,res) -> string_of_residual res)rest) in
                           error_handler g
                             (Printf.sprintf "Mismatched session residuals {%s} in branch event %d"
@@ -1262,13 +1304,18 @@ let check_generalized_session
                               first_residual residual protocol_node.d
                           ) rest
                         in
-                        if join_residuals_match then begin
+                        let common =
+                          if join_residuals_match then Some first_residual
+                          else common_join_residual get_event_recvars join_residuals protocol_node.d
+                        in
+                        match common with
+                        | Some joined -> begin
                           mark_structural_propagation ();
                           assign_child_residual
                             ~from_structural:true
-                            child_ev merged_recvars first_residual
+                            child_ev merged_recvars joined
                         end
-                        else
+                        | None ->
                           error_handler g
                             (Printf.sprintf "Mismatched session residuals in select join event %d"
                               child_ev.id)

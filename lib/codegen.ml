@@ -51,9 +51,10 @@ let codegen_spawns printer (graphs : event_graph_collection) (g : proc_graph) =
         else false
       )
     | _ -> true in
+    (* A process that spawns others passes its clock on, so it keeps it. *)
     let spawn_is_comb = (List.for_all (fun (thread , _) ->
     (thread : EventGraph.event_graph).comb
-  ) spawned_proc.threads) && uses_anvil_port_layout in
+  ) spawned_proc.threads) && uses_anvil_port_layout && spawned_proc.spawns = [] in
 
     let child_resolve = HandshakeResolve.resolver_for graphs spawned_proc in
 
@@ -324,7 +325,7 @@ let codegen_proc printer (config : Config.compile_config) (graphs : EventGraph.e
     | _ -> true in
   let is_mod_comb = (List.for_all (fun (thread , _) ->
     (thread : EventGraph.event_graph).comb
-  ) g.threads) && uses_anvil_port_layout in
+  ) g.threads) && uses_anvil_port_layout && g.spawns = [] in
 
 
   CodegenPrinter.print_section printer (Printf.sprintf "Process %s" g.name);

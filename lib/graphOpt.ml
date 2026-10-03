@@ -162,7 +162,7 @@ module CombSimplPass = struct
     );
     !changed
 
-  let merge_pass_isomorphic_branch _config for_lt_check (_ci : cunit_info) (graph : event_graph) event_ufs event_arr_old =
+  let merge_pass_isomorphic_branch ?(hoist_at_boundary=false) _config for_lt_check (_ci : cunit_info) (graph : event_graph) event_ufs event_arr_old =
     assert (not for_lt_check); (* this cannot be enabled for lifetime checks *)
     let changed = ref false in
     let n = List.length graph.events in
@@ -246,6 +246,12 @@ module CombSimplPass = struct
             )
         )
       in
+      match hoist_delay ev ev_r br_info with
+      | Some (new_ev_branch, new_ev_br_info) -> merge_branch new_ev_branch ev_r new_ev_br_info
+      | None -> try_merge_branch_root ()
+    (* When every branch ends in the same #n delay, join first and delay once. *)
+    and hoist_delay ev ev_r br_info =
+      let branches_val = List.map find_event br_info.branches_val in
       let ev_v = List.hd branches_val in
       let ev_l = List.tl branches_val in
       (* need to insert extra nodes *)
@@ -283,22 +289,39 @@ module CombSimplPass = struct
           List.iter (fun e -> union_ufs event_ufs e.id new_ev_delay.id) branches_val;
           union_ufs event_ufs ev.id new_ev_delay.id;
           changed := true;
-          merge_branch new_ev_branch ev_r new_ev_br_info
+          Some (new_ev_branch, new_ev_br_info)
         ) else
-          try_merge_branch_root ()
-      | _ -> try_merge_branch_root ()
+          None
+      | _ -> None
+    in
+    (* A join that ends the loop or triggers a recursion must stay its own
+       event, so the hoist is done in place: the latest branch-end delay becomes
+       the join of the branches and the boundary becomes the delay after it. *)
+    let hoist_delay_at_boundary ev ev_r br_info =
+      let branches_val = List.map find_event br_info.branches_val in
+      let delay_of e =
+        match e.source with
+        | `Seq (e', `Cycles n) when event_is_empty e && not (event_is_control_boundary e) -> Some (e', n)
+        | _ -> None
+      in
+      match List.map delay_of branches_val with
+      | Some (_, n) :: _ as delays when List.for_all (function Some (_, m) -> m = n | None -> false) delays ->
+        let ends = List.map (fun d -> fst (Option.get d)) delays in
+        let last = List.fold_left (fun a e -> if e.id > a.id then e else a) (List.hd branches_val) branches_val in
+        last.source <- `Branch (ev_r, {br_info with branches_val = ends});
+        ev.source <- `Seq (last, `Cycles n);
+        List.iter (fun e -> if e.id <> last.id then union_ufs event_ufs e.id last.id) branches_val;
+        changed := true
+      | _ -> ()
     in
     List.rev graph.events
     |> List.iter (fun ev ->
-      let check_src src =
-      match src with
-      | `Branch (ev_r, br_info) ->
+      match ev.source with
+      | `Branch (ev_r, br_info) when not (event_is_control_boundary ev) ->
         merge_branch ev ev_r br_info
-      | `Recurse _ -> ()
+      | `Branch (ev_r, br_info) when hoist_at_boundary && ev.is_recurse ->
+        hoist_delay_at_boundary ev ev_r br_info
       | _ -> ()
-      in
-      if not (event_is_control_boundary ev) then
-        check_src ev.source
     );
     !changed
 
@@ -653,6 +676,7 @@ module CombSimplPass = struct
         |> codegen_only 1 merge_pass_triangle_fuse
         |> codegen_only 1 merge_pass_prune
         |> codegen_only 2 merge_pass_unbalanced_later
+        |> codegen_only 3 (merge_pass_isomorphic_branch ~hoist_at_boundary:true)
     done;
     !graph
 end
@@ -666,7 +690,14 @@ let optimize config for_lt_check ci graph =
 let combinational_codegen (config : Config.compile_config) (graph : event_graph) (_ci : cunit_info) : event_graph = 
   if config.opt_level > 2 then (
     let last_event = List.hd (List.rev graph.events) in
-    if (((List.length graph.events) = 2)  && (List.is_empty last_event.sustained_actions)) then (
+    (* The loop must be the root followed by a bare one-cycle delay; a longer
+       delay or an action there makes the thread sequential. *)
+    let loop_delay_is_bare =
+      match List.hd graph.events with
+      | { source = `Seq (_, `Cycles 1); actions = []; sustained_actions = []; _ } -> true
+      | _ -> false
+    in
+    if (((List.length graph.events) = 2) && loop_delay_is_bare && (List.is_empty last_event.sustained_actions)) then (
       let is_notregassign : bool = List.for_all (fun act ->
       match act.d with
         | RegAssign _ -> false
