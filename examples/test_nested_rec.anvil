@@ -27,7 +27,7 @@ proc test_nested_rec(){
         set r2 := *r2 + 8'd1
     }
     loop{
-        cycle 400 >>
+        cycle 10 >>
         dfinish >>
         cycle 1
     }

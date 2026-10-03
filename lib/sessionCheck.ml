@@ -718,6 +718,10 @@ let check_generalized_session
     let event_from_structural_propagation : bool IntHashtbl.t =
       IntHashtbl.create (List.length g.events)
     in
+    (* Each event's heads; the visited ones are the options the walk took. *)
+    let event_matched_heads : head_continuation_pair list IntHashtbl.t =
+      IntHashtbl.create (List.length g.events)
+    in
 
     let get_event_residual ev =
       try Some (IntHashtbl.find event_residuals ev.id) with Not_found -> None
@@ -1205,6 +1209,8 @@ let check_generalized_session
             assign_session_type child_ev.source
           ) child_events;
 
+          IntHashtbl.replace event_matched_heads ev.id head_conts;
+
           List.iter (fun hc ->
             if not hc.visited
                && not hc.is_choice
@@ -1255,8 +1261,33 @@ let check_generalized_session
                   |> List.find_map (choice_residual_for_head ~kind msg_list)
                 | _ -> Some (Some rr)
               in
+              (* The target may hold options (F, +) that the body's first step
+                 settled; re-entry then only has to offer the steps taken. *)
+              let matches_steps_taken residual =
+                let heads = Option.value ~default:[] (IntHashtbl.find_opt event_matched_heads t.id) in
+                let taken, skipped = List.partition (fun hc -> hc.visited) heads in
+                match taken, residual with
+                | _ :: _, Some sty when List.for_all (fun hc -> hc.is_choice) skipped ->
+                  let rec unfold_lead = function
+                    | StyVar _ as v ->
+                      let v' = resolve_recvar recvars v in
+                      if v' == v then v else unfold_lead v'
+                    | StySeq (h, k) -> StySeq (unfold_lead h, k)
+                    | s -> s
+                  in
+                  let steps = get_head_continuation_pair (unfold_lead sty) g.thread_codespan recvars in
+                  let same a b =
+                    residual_matches recvars (residual_of_head_cont a) (residual_of_head_cont b)
+                      protocol_node.d
+                  in
+                  List.for_all (fun hc -> List.exists (same hc) steps) taken
+                  && List.for_all (fun hc -> hc.is_choice || List.exists (same hc) taken) steps
+                | _ -> false
+              in
               let ok = match entering with
-                | Some residual -> residual_matches recvars existing residual protocol_node.d
+                | Some residual ->
+                  residual_matches recvars existing residual protocol_node.d
+                  || matches_steps_taken residual
                 | None -> false
               in
               DebugLog.line "session_check" trace "Recursion %d -> %d: %s"

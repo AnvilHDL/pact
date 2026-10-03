@@ -219,30 +219,20 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
       |> String.concat " && "
       |> Printf.sprintf "(%s)"
   in
-  let select_condition_for_event (select_event : EventGraph.event) msg_group =
+  let select_condition_for_event (parent_event : EventGraph.event) msg_group =
     if not (is_wildcard_msg_group msg_group) then
       readiness_condition_of_msg_group msg_group
     else
+      (* Siblings share the choice; a recursing else arm is not in the join. *)
       let sibling_conditions =
         g.events
-        |> List.find_map (fun (event : EventGraph.event) ->
+        |> List.filter_map (fun (event : EventGraph.event) ->
           match event.source with
-          | `SelectJoin join_info
-            when List.exists
-              (fun (root : EventGraph.event) -> root.id = select_event.id)
-              join_info.join_roots ->
-              Some (
-                join_info.join_roots
-                |> List.filter_map (fun (root : EventGraph.event) ->
-                  match root.source with
-                  | `Select (_, sibling_group) when not (is_wildcard_msg_group sibling_group) ->
-                    Some (readiness_condition_of_msg_group sibling_group)
-                  | _ -> None
-                )
-              )
+          | `Select (p, sibling_group)
+            when p.id = parent_event.id && not (is_wildcard_msg_group sibling_group) ->
+            Some (readiness_condition_of_msg_group sibling_group)
           | _ -> None
         )
-        |> Option.value ~default:[]
       in
       match sibling_conditions with
       | [] -> "1'b1"
@@ -511,7 +501,7 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
           gen_next source trigger_string
         | `Select (parent_event, msg_group) ->
           let parent_current = EventStateFormatter.format_current g.thread_id parent_event.id in
-          let select_condition = select_condition_for_event e msg_group in
+          let select_condition = select_condition_for_event parent_event msg_group in
           Printf.sprintf "assign %s = (%s && %s) %s;"
             cn
             parent_current
