@@ -1387,6 +1387,10 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
     let body =
       if ctx.lt_check_phase then GraphAnalysis.unfold_named_recursion id body else body
     in
+    (* Recursion re-enters a fresh entry step in the same cycle, so actions
+       already on the current event are not run again. *)
+    let entry = Typing.event_create graph (`Seq (ctx.current, `Cycles 0)) in
+    let ctx = {ctx with current = entry} in
     let new_ctx = BuildContext.add_rec_var_binding ctx id ctx.current.id in
     let endi = construct_graphIR graph ci new_ctx body in 
     if endi.ld.lt.live.id = ctx.current.id then

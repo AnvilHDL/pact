@@ -95,6 +95,7 @@ let collect_reg_states g =
     match src with
     | `Seq (_, d) -> (
       match d with
+      | `Cycles 0 -> []
       | `Cycles n ->
         if g.is_general_recursive || n = 1 then (
           (* split into one-hot single cycles in general recursive case *)
@@ -281,6 +282,9 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
                 Printf.sprintf "assign %s = (%s_q == %d'd%d) %s;" cn sn width n trigger |> print_line;
                 Printf.sprintf "assign %s_n = %s ? %d'd1 : %s ? '0 : %s_q ? (%s_q + %d'd1) : %s_q;" sn cn' width cn sn sn width sn |> print_line
               )
+            | `Cycles 0 ->
+              (* a step in the same cycle *)
+              Printf.sprintf "assign %s = %s %s;" cn cn' trigger |> print_line
             | `Cycles _ ->
               failwith "Invalid number of cycles" (* TODO: proper handling *)
             | `Send (msg, kind) ->
@@ -385,8 +389,10 @@ let codegen_next printer (graphs : EventGraph.event_graph_collection)
               ] |> print_lines
           )
         | `Branch (_e, br_info) ->
-          let branch_cond = List.map (fun (e : EventGraph.event) ->
-            EventStateFormatter.format_current g.thread_id e.id) br_info.branches_val |> String.concat " || " in
+          let branch_cond = match br_info.branches_val with
+            | [] -> "1'b0" (* no side completes *)
+            | vals -> List.map (fun (e : EventGraph.event) ->
+                EventStateFormatter.format_current g.thread_id e.id) vals |> String.concat " || " in
           Printf.sprintf "assign %s = (%s) %s;" cn branch_cond trigger |> print_line
         | `Later (e1, e2) ->
           let cn1 = EventStateFormatter.format_current g.thread_id e1.id in

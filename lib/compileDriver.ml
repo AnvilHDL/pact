@@ -24,7 +24,7 @@ let compile out config =
           |> raise_compile_error None
   );
   List.iter (fun (file_name, cunit) ->
-    DebugLog.file "ast" (Filename.basename file_name ^ ".log") (AstDump.print cunit)
+    DebugLog.file "ast" (Filename.basename file_name ^ ".dot") (AstDump.print cunit)
   ) !cunits;
   (* collect all channel class and type definitions *)
   let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits in

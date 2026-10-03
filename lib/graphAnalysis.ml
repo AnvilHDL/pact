@@ -185,6 +185,8 @@ let event_succ_distance non_succ_dist msg_dist_f later_dist_f either_dist_f even
       (* We need to check carefully to decide if we are sure
         the branch has/hasn't been taken. *)
         get_dist ev1
+    | `Branch (_, {branches_val = []; _}) ->
+      non_succ_dist
     | `Branch (_, {branches_val = [ev]; _}) ->
       get_dist ev
     | `Branch (_, {branches_val = ev1::ev2::el; _}) ->

@@ -994,6 +994,10 @@ let check_generalized_session
               | `Seq (_, `Recv (msg, kind)) ->
                   assign_msg_from_heads ~kind child_ev msg "Recv"
 
+              | `Seq (_, `Cycles 0) ->
+                  (* a step in the same cycle consumes nothing *)
+                  mark_structural_propagation ();
+                  assign_child_residual ~from_structural:true child_ev rec_var_cont current_residual
               | `Seq (_, `Cycles n) ->
                   (match delay_continuation_after_terminal_closure
                       n g.thread_codespan head_conts protocol_node.d with

@@ -177,7 +177,11 @@ module Typing = struct
       let br_info = {br_info with branches_val = new_branch_ends} in
       if List.length br_info.branches_val = 0 then(
         SpanPrinter.warn "Branch with all branches being recursive detected: This may lead to non-termination!" g.thread_codespan file_name;
-        ctx
+        (* Every side recurses, so the branch never completes: its result is a
+           join that never fires, marked so enclosing branches drop it too. *)
+        let never = event_create g (`Branch (ctx.current, br_info)) in
+        never.is_recurse <- true;
+        {ctx with current = never}
       )
       else if List.length br_info.branches_val = 1 then
         {ctx with current = List.hd br_info.branches_val}
