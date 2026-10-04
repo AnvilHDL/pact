@@ -1,139 +1,42 @@
 {
-	"name": "AnvilHDL",
-	"version": "0.1",
-	"fileTypes": [
-		"anvil"
-	],
+	"name": "Pact",
 	"scopeName": "source.anvil",
-
+	"fileTypes": [
+		"anvil",
+		"anvilh"
+	],
 	"foldingStartMarker": "\\{\\s*$",
 	"foldingStopMarker": "^\\s*\\}",
 	"patterns": [
 		{
-			"include":"#comments"
+			"include": "#comments"
 		},
 		{
-			"include": "#types"
+			"include": "#strings"
 		},
 		{
-			"match": "\\b(struct)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.struct.anvil storage.type.anvil"
-				},
-				"2": {
-					"name": "entity.name.type.struct.anvil"
-				}
-			}
+			"include": "#interface"
 		},
 		{
-			"match": "\\b(enum)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.enum.anvil storage.type.anvil"
-				},
-				"2": {
-					"name": "entity.name.type.enum.anvil"
-				}
-			}
+			"include": "#pool"
 		},
 		{
-			"match": "\\b(proc)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.proc.anvil"
-				},
-				"2": {
-					"name": "entity.name.type.proc.anvil"
-				}
-			}
+			"include": "#channel-class"
 		},
 		{
-			"match": "\\b(chan)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\s*(--)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.other.anvil storage.type.anvil"
-				},
-				"2": {
-					"name": "variable.other.anvil"
-				},
-				"3": {
-					"name": "keyword.operator.connect.anvil"
-				},
-				"4": {
-					"name": "variable.other.anvil"
-				}
-			}
-
+			"include": "#struct"
 		},
 		{
-			"match": "\\b(chan)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.chan.anvil"
-				},
-				"2": {
-					"name": "entity.name.type.chan.anvil"
-				}
-			}
+			"include": "#enum"
 		},
 		{
-			"match": "\\b(spawn)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.other.anvil storage.type.anvil"
-				},
-				"2": {
-					"name": "entity.name.type.proc.anvil"
-				}
-			}
+			"include": "#proc-header"
 		},
 		{
-			"match": "\\b(reg)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.other.anvil storage.type.anvil"
-				},
-				"2": {
-					"name": "variable.other.anvil"
-				}
-			}
+			"include": "#func-header"
 		},
 		{
-			"match": "\\b(type)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.type.anvil"
-				},
-				"2": {
-					"name": "entity.name.type.other.anvil"
-				}
-			}
-		},
-		{
-			"match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.function.anvil"
-				},
-				"2": {
-					"name": "entity.name.function.anvil"
-				}
-			}
-		},
-		{
-			"match": "\\b(const)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-			"captures": {
-				"1": {
-					"name": "keyword.declaration.constant.anvil"
-				},
-				"2": {
-					"name": "entity.name.constant.anvil"
-				}
-			}
-		},
-		{
-			"include": "#keywords"
+			"include": "#declarations"
 		},
 		{
 			"include": "#expressions"
@@ -143,52 +46,33 @@
 		"comments": {
 			"patterns": [
 				{
-					"include": "#comments-block"
-				},
-				{
-					"include": "#comments-inline"
-				}
-			]
-		},
-		"comments-block": {
-			"patterns": [
-				{
 					"name": "comment.block.anvil",
 					"begin": "/\\*",
 					"end": "\\*/",
+					"beginCaptures": {
+						"1": {
+							"name": "punctuation.definition.comment.anvil"
+						}
+					},
+					"endCaptures": {
+						"1": {
+							"name": "punctuation.definition.comment.anvil"
+						}
+					},
 					"patterns": [
 						{
-							"include": "#comments-block"
+							"include": "#comments"
 						}
 					]
-				}
-			]
-		},
-		"comments-inline": {
-			"patterns": [
+				},
 				{
-					"match": "((//).*)$",
+					"match": "(//).*$",
+					"name": "comment.line.double-slash.anvil",
 					"captures": {
 						"1": {
-							"name": "comment.line.double-slash.anvil"
+							"name": "punctuation.definition.comment.anvil"
 						}
 					}
-				}
-			]
-		},
-		"constants": {
-			"patterns": [
-				{
-					"name": "constant.numeric.anvil",
-					"match": "\\b(([0-9]+'(d[0-9]+|b[01]+|h[0-9a-fA-F]+))|([0-9]+(?!')))\\b"
-				}
-			]
-		},
-		"variables": {
-			"patterns": [
-				{
-					"name": "variable.other.anvil",
-					"match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
 				}
 			]
 		},
@@ -196,145 +80,1315 @@
 			"patterns": [
 				{
 					"name": "string.quoted.double.anvil",
-					"begin": "(\")",
+					"begin": "\"",
+					"end": "\"",
 					"beginCaptures": {
 						"1": {
-							"name": "punctuation.definition.string.anvil"
+							"name": "punctuation.definition.string.begin.anvil"
 						}
 					},
-					"end": "(\")",
 					"endCaptures": {
 						"1": {
-							"name": "punctuation.definition.string.anvil"
+							"name": "punctuation.definition.string.end.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"match": "\\\\.",
+							"name": "constant.character.escape.anvil"
+						},
+						{
+							"match": "%[-0-9]*[dxXbouscf%]",
+							"name": "constant.other.placeholder.anvil"
+						}
+					]
+				}
+			]
+		},
+		"numbers": {
+			"patterns": [
+				{
+					"match": "\\b([0-9]+)(')([dbh])([0-9a-fA-F_]+)\\b",
+					"name": "constant.numeric.sized.anvil",
+					"captures": {
+						"1": {
+							"name": "constant.numeric.width.anvil"
+						},
+						"2": {
+							"name": "punctuation.separator.anvil"
+						},
+						"3": {
+							"name": "storage.type.numeric.base.anvil"
+						},
+						"4": {
+							"name": "constant.numeric.value.anvil"
 						}
 					}
+				},
+				{
+					"match": "\\b[0-9]+\\b",
+					"name": "constant.numeric.decimal.anvil"
+				}
+			]
+		},
+		"delay": {
+			"match": "(#)([0-9]+)\\b",
+			"captures": {
+				"1": {
+					"name": "keyword.operator.delay.anvil"
+				},
+				"2": {
+					"name": "constant.numeric.cycles.anvil"
+				}
+			}
+		},
+		"primitive-types": {
+			"match": "\\b(logic|int|void)\\b",
+			"name": "support.type.primitive.anvil"
+		},
+		"types": {
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#primitive-types"
+				},
+				{
+					"match": "\\b(type)\\b",
+					"name": "storage.type.anvil"
+				},
+				{
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=<)",
+					"captures": {
+						"1": {
+							"name": "entity.name.type.anvil"
+						}
+					}
+				},
+				{
+					"match": "[<>]",
+					"name": "punctuation.definition.typeparameters.anvil"
+				},
+				{
+					"match": "\\b[A-Z][A-Z0-9_]+\\b",
+					"name": "variable.other.constant.anvil"
+				},
+				{
+					"match": "\\b(?!left\\b|right\\b)([A-Za-z_][A-Za-z0-9_]*)\\b",
+					"name": "entity.name.type.anvil"
+				},
+				{
+					"include": "#numbers"
+				}
+			]
+		},
+		"typed-name": {
+			"match": "\\b([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)\\s*(:)(?![:=])\\s*(?:(left|right)\\s+)?(?:(logic|int|void)\\b|([A-Za-z_][A-Za-z0-9_]*))?",
+			"captures": {
+				"1": {
+					"name": "variable.parameter.anvil"
+				},
+				"2": {
+					"name": "meta.index.anvil"
+				},
+				"3": {
+					"name": "keyword.operator.type.annotation.anvil"
+				},
+				"4": {
+					"name": "storage.modifier.direction.anvil"
+				},
+				"5": {
+					"name": "support.type.primitive.anvil"
+				},
+				"6": {
+					"name": "entity.name.type.anvil"
+				}
+			}
+		},
+		"type-annotation": {
+			"match": "(?<![+:])(:)(?![:=])\\s*(?:(left|right)\\s+)?(?:(logic|int|void)\\b|([A-Za-z_][A-Za-z0-9_]*)\\b)(?!\\s*\\()",
+			"captures": {
+				"1": {
+					"name": "keyword.operator.type.annotation.anvil"
+				},
+				"2": {
+					"name": "storage.modifier.direction.anvil"
+				},
+				"3": {
+					"name": "support.type.primitive.anvil"
+				},
+				"4": {
+					"name": "entity.name.type.anvil"
+				}
+			}
+		},
+		"type-parameters": {
+			"begin": "<(?=\\s*[A-Za-z_][A-Za-z0-9_]*\\s*:)",
+			"end": ">",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.definition.typeparameters.begin.anvil"
+				}
+			},
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.definition.typeparameters.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(int|type)\\b",
+					"captures": {
+						"1": {
+							"name": "entity.name.type.parameter.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.type.annotation.anvil"
+						},
+						"3": {
+							"name": "storage.type.anvil"
+						}
+					}
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"message-specifier": {
+			"match": "\\b([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)(\\.)([A-Za-z_][A-Za-z0-9_]*)\\b",
+			"captures": {
+				"1": {
+					"name": "variable.other.object.endpoint.anvil"
+				},
+				"2": {
+					"name": "meta.index.anvil"
+				},
+				"3": {
+					"name": "punctuation.accessor.anvil"
+				},
+				"4": {
+					"name": "variable.other.property.message.anvil"
+				}
+			}
+		},
+		"session-type": {
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#braces-session"
+				},
+				{
+					"match": "(?:\\b(rec)|(μ))\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\.)(?!\\()",
+					"captures": {
+						"1": {
+							"name": "keyword.control.recursion.anvil"
+						},
+						"2": {
+							"name": "keyword.control.recursion.anvil"
+						},
+						"3": {
+							"name": "entity.name.type.session-variable.anvil"
+						},
+						"4": {
+							"name": "punctuation.separator.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+					"captures": {
+						"1": {
+							"name": "storage.type.anvil"
+						},
+						"2": {
+							"name": "entity.name.type.session-variable.anvil"
+						},
+						"3": {
+							"name": "keyword.operator.assignment.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\bin\\b",
+					"name": "keyword.control.anvil"
+				},
+				{
+					"match": "(?:\\b(forall)|(∀))\\s*(\\()\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(?:(:)|(∈))",
+					"captures": {
+						"1": {
+							"name": "keyword.control.quantifier.anvil"
+						},
+						"2": {
+							"name": "keyword.control.quantifier.anvil"
+						},
+						"3": {
+							"name": "punctuation.section.parens.anvil"
+						},
+						"4": {
+							"name": "variable.other.index.anvil"
+						},
+						"5": {
+							"name": "keyword.operator.anvil"
+						},
+						"6": {
+							"name": "keyword.operator.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\bnot\\b| ̸",
+					"name": "keyword.operator.exclusion.anvil"
+				},
+				{
+					"match": "\\bF\\b",
+					"name": "keyword.other.future.anvil"
+				},
+				{
+					"match": "(#)([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)(\\.)([A-Za-z_][A-Za-z0-9_]*)\\b",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.nonblocking.anvil"
+						},
+						"2": {
+							"name": "variable.other.object.endpoint.anvil"
+						},
+						"3": {
+							"name": "meta.index.anvil"
+						},
+						"4": {
+							"name": "punctuation.accessor.anvil"
+						},
+						"5": {
+							"name": "variable.other.property.message.anvil"
+						}
+					}
+				},
+				{
+					"include": "#message-specifier"
+				},
+				{
+					"include": "#delay"
+				},
+				{
+					"match": "[&^](?=\\s*\\()|[⋀⨁]",
+					"name": "keyword.operator.offer.anvil"
+				},
+				{
+					"match": "[∑∏]|\\|\\||\\+",
+					"name": "keyword.operator.composition.anvil"
+				},
+				{
+					"match": ";",
+					"name": "keyword.operator.sequence.anvil"
+				},
+				{
+					"match": "\\.(?=\\()",
+					"name": "keyword.operator.match.anvil"
+				},
+				{
+					"match": "\\*",
+					"name": "constant.language.wildcard.anvil"
+				},
+				{
+					"match": "\\$",
+					"name": "keyword.operator.terminal.anvil"
+				},
+				{
+					"match": "\\.\\.",
+					"name": "keyword.operator.range.anvil"
+				},
+				{
+					"match": ":",
+					"name": "punctuation.separator.continuation.anvil"
+				},
+				{
+					"match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+					"name": "entity.name.type.session-variable.anvil"
+				},
+				{
+					"match": "\\(\\s*\\)",
+					"name": "constant.language.skip.anvil"
+				},
+				{
+					"include": "#numbers"
+				}
+			]
+		},
+		"braces-session": {
+			"begin": "\\{",
+			"end": "\\}",
+			"beginCaptures": {
+				"0": {
+					"name": "punctuation.section.braces.begin.anvil"
+				}
+			},
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.braces.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#session-type"
+				}
+			]
+		},
+		"interface": {
+			"begin": "\\b(interface)\\b\\s*(?:(<)([^>]*)(>)\\s*)?([A-Za-z_][A-Za-z0-9_]*)?",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.interface.anvil"
+				},
+				"2": {
+					"name": "punctuation.definition.typeparameters.anvil"
+				},
+				"3": {
+					"name": "meta.typeparameters.anvil"
+				},
+				"4": {
+					"name": "punctuation.definition.typeparameters.anvil"
+				},
+				"5": {
+					"name": "entity.name.type.interface.anvil"
+				}
+			},
+			"end": "(?=^\\s*(?:proc|chan|type|struct|enum|func|const|import|extern|interface|pool)\\b)",
+			"patterns": [
+				{
+					"begin": "\\(",
+					"end": "\\)",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.section.parens.begin.anvil"
+						}
+					},
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.section.parens.end.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#typed-name"
+						},
+						{
+							"include": "#types"
+						}
+					]
+				},
+				{
+					"begin": "=",
+					"end": "(?=^\\s*(?:proc|chan|type|struct|enum|func|const|import|extern|interface|pool)\\b)",
+					"beginCaptures": {
+						"0": {
+							"name": "keyword.operator.assignment.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#session-type"
+						}
+					]
+				}
+			]
+		},
+		"pool": {
+			"begin": "\\b(pool)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\{)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.pool.anvil"
+				},
+				"2": {
+					"name": "entity.name.type.pool.anvil"
+				},
+				"3": {
+					"name": "punctuation.section.braces.begin.anvil"
+				}
+			},
+			"end": "\\}",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.braces.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)\\s*(--)\\s*([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "variable.other.object.endpoint.anvil"
+						},
+						"2": {
+							"name": "meta.index.anvil"
+						},
+						"3": {
+							"name": "keyword.operator.connect.anvil"
+						},
+						"4": {
+							"name": "variable.other.object.endpoint.anvil"
+						},
+						"5": {
+							"name": "meta.index.anvil"
+						},
+						"6": {
+							"name": "keyword.operator.type.annotation.anvil"
+						},
+						"7": {
+							"name": "entity.name.type.channel.anvil"
+						}
+					}
+				},
+				{
+					"begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "variable.other.member.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.type.annotation.anvil"
+						},
+						"3": {
+							"name": "entity.name.type.interface.anvil"
+						},
+						"4": {
+							"name": "punctuation.section.parens.begin.anvil"
+						}
+					},
+					"end": "\\)",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.section.parens.end.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+							"name": "variable.other.object.endpoint.anvil"
+						}
+					]
+				},
+				{
+					"begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+					"end": "(?=,\\s*{ID}\\s*:|\\}})",
+					"beginCaptures": {
+						"1": {
+							"name": "variable.other.member.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.type.annotation.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#session-type"
+						}
+					]
+				},
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"channel-class": {
+			"begin": "\\b(chan)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=[<{])",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.channel.anvil"
+				},
+				"2": {
+					"name": "entity.name.type.channel.anvil"
+				}
+			},
+			"end": "\\}",
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.braces.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#type-parameters"
+				},
+				{
+					"match": "\\{",
+					"name": "punctuation.section.braces.begin.anvil"
+				},
+				{
+					"begin": "\\b(protocol)\\s*(::)",
+					"end": "(?=\\})",
+					"beginCaptures": {
+						"1": {
+							"name": "storage.type.protocol.anvil"
+						},
+						"2": {
+							"name": "punctuation.separator.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#session-type"
+						}
+					]
+				},
+				{
+					"match": "\\b(left|right)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+					"captures": {
+						"1": {
+							"name": "storage.modifier.direction.anvil"
+						},
+						"2": {
+							"name": "entity.name.function.message.anvil"
+						},
+						"3": {
+							"name": "keyword.operator.type.annotation.anvil"
+						}
+					}
+				},
+				{
+					"match": "(@)\\s*(dyn|eternal)\\b",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.timing.anvil"
+						},
+						"2": {
+							"name": "constant.language.timing.anvil"
+						}
+					}
+				},
+				{
+					"match": "(@)\\s*(#)([0-9]+)(~)([0-9]+)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.timing.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.delay.anvil"
+						},
+						"3": {
+							"name": "constant.numeric.anvil"
+						},
+						"4": {
+							"name": "keyword.operator.anvil"
+						},
+						"5": {
+							"name": "constant.numeric.anvil"
+						}
+					}
+				},
+				{
+					"match": "(@)\\s*(#)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.timing.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.delay.anvil"
+						},
+						"3": {
+							"name": "variable.other.property.message.anvil"
+						}
+					}
+				},
+				{
+					"match": "(@)\\s*(#)([0-9]+)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.timing.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.delay.anvil"
+						},
+						"3": {
+							"name": "constant.numeric.cycles.anvil"
+						}
+					}
+				},
+				{
+					"match": "(@)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.timing.anvil"
+						},
+						"2": {
+							"name": "variable.other.property.message.anvil"
+						}
+					}
+				},
+				{
+					"match": "<<|>>",
+					"name": "keyword.operator.handshake.anvil"
+				},
+				{
+					"match": "[+\\-]",
+					"name": "keyword.operator.anvil"
+				},
+				{
+					"match": ",",
+					"name": "punctuation.separator.comma.anvil"
+				},
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"struct": {
+			"begin": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+			"end": "\\}",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.struct.anvil"
+				},
+				"2": {
+					"name": "entity.name.type.struct.anvil"
+				}
+			},
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.braces.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#type-parameters"
+				},
+				{
+					"match": "\\{",
+					"name": "punctuation.section.braces.begin.anvil"
+				},
+				{
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)",
+					"captures": {
+						"1": {
+							"name": "variable.other.property.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.type.annotation.anvil"
+						}
+					}
+				},
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"enum": {
+			"begin": "\\b(enum)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+			"end": "\\}",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.enum.anvil"
+				},
+				"2": {
+					"name": "entity.name.type.enum.anvil"
+				}
+			},
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.braces.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#type-parameters"
+				},
+				{
+					"begin": "\\{",
+					"end": "(?=\\})",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.section.braces.begin.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#numbers"
+						},
+						{
+							"begin": "\\(",
+							"end": "\\)",
+							"patterns": [
+								{
+									"include": "#types"
+								}
+							]
+						},
+						{
+							"match": "=",
+							"name": "keyword.operator.assignment.anvil"
+						},
+						{
+							"match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+							"name": "constant.other.enum-member.anvil"
+						}
+					]
+				},
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"proc-header": {
+			"begin": "\\b(proc)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+			"end": "(?=\\{)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.proc.anvil"
+				},
+				"2": {
+					"name": "entity.name.function.proc.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#type-parameters"
+				},
+				{
+					"include": "#strings"
+				},
+				{
+					"match": "\\b(extern)\\s*(\\()",
+					"captures": {
+						"1": {
+							"name": "storage.modifier.extern.anvil"
+						},
+						"2": {
+							"name": "punctuation.section.parens.begin.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\)\\s*(?=\\{)",
+					"name": "punctuation.section.parens.end.anvil"
+				},
+				{
+					"begin": "\\(",
+					"end": "\\)",
+					"beginCaptures": {
+						"0": {
+							"name": "punctuation.section.parens.begin.anvil"
+						}
+					},
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.section.parens.end.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"include": "#comments"
+						},
+						{
+							"include": "#typed-name"
+						},
+						{
+							"include": "#numbers"
+						},
+						{
+							"include": "#types"
+						},
+						{
+							"match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+							"name": "entity.name.type.interface.anvil"
+						}
+					]
+				}
+			]
+		},
+		"func-header": {
+			"begin": "\\b(func)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+			"end": "\\)",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.function.anvil"
+				},
+				"2": {
+					"name": "entity.name.function.anvil"
+				},
+				"3": {
+					"name": "punctuation.section.parens.begin.anvil"
+				}
+			},
+			"endCaptures": {
+				"0": {
+					"name": "punctuation.section.parens.end.anvil"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#comments"
+				},
+				{
+					"include": "#typed-name"
+				},
+				{
+					"include": "#numbers"
+				},
+				{
+					"match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+					"name": "variable.parameter.anvil"
+				}
+			]
+		},
+		"declarations": {
+			"patterns": [
+				{
+					"match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.anvil"
+						},
+						"2": {
+							"name": "entity.name.type.alias.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(const)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.const.anvil"
+						},
+						"2": {
+							"name": "variable.other.constant.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(extern)\\s+(import)\\b",
+					"captures": {
+						"1": {
+							"name": "storage.modifier.extern.anvil"
+						},
+						"2": {
+							"name": "keyword.control.import.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\bimport\\b",
+					"name": "keyword.control.import.anvil"
+				},
+				{
+					"match": "\\b(chan)\\s+([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)\\s*(--)\\s*([A-Za-z_][A-Za-z0-9_]*)((?:\\[[^\\]]*\\])*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.channel.anvil"
+						},
+						"2": {
+							"name": "variable.other.object.endpoint.anvil"
+						},
+						"3": {
+							"name": "meta.index.anvil"
+						},
+						"4": {
+							"name": "keyword.operator.connect.anvil"
+						},
+						"5": {
+							"name": "variable.other.object.endpoint.anvil"
+						},
+						"6": {
+							"name": "meta.index.anvil"
+						},
+						"7": {
+							"name": "keyword.operator.type.annotation.anvil"
+						},
+						"8": {
+							"name": "entity.name.type.channel.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(pool)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.pool.anvil"
+						},
+						"2": {
+							"name": "variable.other.pool.anvil"
+						},
+						"3": {
+							"name": "keyword.operator.type.annotation.anvil"
+						},
+						"4": {
+							"name": "entity.name.type.pool.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(reg)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.register.anvil"
+						},
+						"2": {
+							"name": "variable.other.register.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(spawn)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.spawn.anvil"
+						},
+						"2": {
+							"name": "entity.name.function.proc.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(shared)\\b",
+					"name": "storage.modifier.shared.anvil"
+				},
+				{
+					"match": "(?<=\\))\\s*([A-Za-z_][A-Za-z0-9_]*)\\s+(?=assigned\\b)",
+					"captures": {
+						"1": {
+							"name": "variable.other.shared.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(assigned)\\s+(by)\\b",
+					"captures": {
+						"1": {
+							"name": "storage.modifier.anvil"
+						},
+						"2": {
+							"name": "storage.modifier.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(loop|recursive)\\b",
+					"name": "keyword.control.thread.anvil"
 				}
 			]
 		},
 		"expressions": {
 			"patterns": [
 				{
-					"include": "#constants"
-				},
-				{
-					"match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(::)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-					"captures": {
-						"1": {
-							"name": "entity.name.type.enum.anvil"
-						},
-						"2": {
-							"name": "keyword.operator.namespace.anvil"
-						},
-						"3": {
-							"name": "entity.name.type.variant.anvil"
-						}
-					}
-				},
-				{
-					"match": "\\s+(:)\\s*(left|right)\\s+([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-					"captures": {
-						"1": {
-							"name": "keyword.operator.type.anvil"
-						},
-						"2": {
-							"name": "storage.modifier.anvil"
-						},
-						"3": {
-							"name": "entity.name.type.other.anvil"
-						}
-					}
-				},
-				{
-					"match": "\\s+(:)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\b",
-					"captures": {
-						"1": {
-							"name": "keyword.operator.type.anvil"
-						},
-						"2": {
-							"name": "entity.name.type.other.anvil"
-						}
-					}
-				},
-				{
-					"match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(::)\\s*{\\b",
-					"captures": {
-						"1": {
-							"name": "entity.name.type.enum.anvil"
-						},
-						"2": {
-							"name": "keyword.operator.namespace.anvil"
-						}
-					}
-				},
-				{
-					"include": "#variables"
+					"include": "#comments"
 				},
 				{
 					"include": "#strings"
-				}
-			]
-		},
-		"types": {
-			"patterns": [
-				{
-					"name": "entity.name.type.numeric.anvil",
-					"match": "\\b(logic|int|void)\\b"
 				},
 				{
-					"name": "storage.modifier.anvil",
-					"match": "\\b(left|right|extern)\\b"
+					"match": "<(?=\\()",
+					"name": "punctuation.definition.cast.begin.anvil"
 				},
 				{
-					"name": "keyword.other.anvil storage.type.anvil",
-					"match": "\\b(shared)\\b"
+					"match": "(::)\\s*(?:(logic|int|void)\\b|([A-Za-z_][A-Za-z0-9_]*))((?:\\[[^\\]]*\\])*)\\s*(>)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.cast.anvil"
+						},
+						"2": {
+							"name": "support.type.primitive.anvil"
+						},
+						"3": {
+							"name": "entity.name.type.anvil"
+						},
+						"4": {
+							"name": "meta.index.anvil"
+						},
+						"5": {
+							"name": "punctuation.definition.cast.end.anvil"
+						}
+					}
 				},
 				{
-					"name": "keyword.other.anvil",
-					"match": "\\b(assigned\\s+by)\\b"
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*(?=\\{)",
+					"captures": {
+						"1": {
+							"name": "entity.name.type.struct.anvil"
+						},
+						"2": {
+							"name": "punctuation.separator.namespace.anvil"
+						}
+					}
 				},
 				{
-					"name": "keyword.other.anvil",
-					"match": "\\b(import|generate|generate_seq)\\b"
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(::)\\s*([A-Za-z_][A-Za-z0-9_]*)\\b",
+					"captures": {
+						"1": {
+							"name": "entity.name.type.enum.anvil"
+						},
+						"2": {
+							"name": "punctuation.separator.namespace.anvil"
+						},
+						"3": {
+							"name": "constant.other.enum-member.anvil"
+						}
+					}
 				},
 				{
-					"name": "entity.name.type.timing.anvil",
-					"match": "\\bdyn\\b"
-				}
-			]
-		},
-		"keywords": {
-			"patterns": [
-				{
-                    "name": "punctuation.comma.anvil",
-                    "match": ","
-                },
-				{
-                    "name": "punctuation.semi.anvil",
-                    "match": ";"
+					"match": "(?:\\b(rec)|(μ))\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\{)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.recursion.anvil"
+						},
+						"2": {
+							"name": "keyword.control.recursion.anvil"
+						},
+						"3": {
+							"name": "entity.name.label.anvil"
+						}
+					}
 				},
 				{
-					"name": "keyword.control.anvil",
-					"match": "(?<!\\$)\\b(call|loop|recursive|if|else|try|recurse|irecv|isend|recv|send|dprint|dfinish|set|cycle|sync|match|put|ready|in|flat|shl|shr|probe|protocol|interface|xoffer|offer|when|pool)\\b(?!\\$)"
+					"match": "\\b(recurse)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+					"captures": {
+						"1": {
+							"name": "keyword.control.recursion.anvil"
+						},
+						"2": {
+							"name": "entity.name.label.anvil"
+						}
+					}
 				},
 				{
-					"name": "keyword.other.anvil",
-					"match": "\\b(with)\\b"
+					"match": "\\b(xoffer)\\s+(?:(rotate|tree)\\s+)?([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\{)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.offer.anvil"
+						},
+						"2": {
+							"name": "storage.modifier.order.anvil"
+						},
+						"3": {
+							"name": "variable.other.anvil"
+						}
+					}
 				},
 				{
-					"name": "keyword.other.anvil storage.type.anvil",
-					"match": "\\b(let)\\b"
+					"match": "\\b(call)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.call.anvil"
+						},
+						"2": {
+							"name": "entity.name.function.anvil"
+						}
+					}
 				},
 				{
-                    "name": "keyword.operator.assignment.anvil",
-                    "match": "(:=|=)"
+					"match": "\\b(let)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.let.anvil"
+						},
+						"2": {
+							"name": "variable.other.readwrite.anvil"
+						}
+					}
 				},
 				{
-					"name": "punctuation.wait.anvil",
-					"match": "(?<!\\>)\\>\\>(?!\\>)"
+					"match": "\\b(set|put)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.assign.anvil"
+						},
+						"2": {
+							"name": "variable.other.register.anvil"
+						}
+					}
 				},
 				{
-					"name": "keyword.operator.access.dot.anvil",
-					"match": "\\.(?!\\.)"
+					"match": "\\b(sync)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.control.anvil"
+						},
+						"2": {
+							"name": "variable.other.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(try)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)(?![=>])",
+					"captures": {
+						"1": {
+							"name": "keyword.control.anvil"
+						},
+						"2": {
+							"name": "variable.other.readwrite.anvil"
+						},
+						"3": {
+							"name": "keyword.operator.assignment.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(=)(?![=>])(?=\\s*i?recv\\b)",
+					"captures": {
+						"1": {
+							"name": "variable.other.readwrite.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.assignment.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(=)(?![=>])",
+					"captures": {
+						"1": {
+							"name": "variable.other.property.field.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.assignment.anvil"
+						}
+					}
+				},
+				{
+					"match": "(?<=[\\s(,=+\\-*/&|^!<>:;{\\[])(\\*)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.read.anvil"
+						},
+						"2": {
+							"name": "variable.other.register.anvil"
+						}
+					}
+				},
+				{
+					"match": "(#)\\s*(flat)?\\s*(?=\\{)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.concat.anvil"
+						},
+						"2": {
+							"name": "keyword.control.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(i?send|i?recv|ready|probe)\\b",
+					"name": "keyword.control.message.anvil"
+				},
+				{
+					"match": "\\b(offer|xoffer)\\b",
+					"name": "keyword.control.offer.anvil"
+				},
+				{
+					"match": "\\b(if|else|match|try|cycle|with|generate|generate_seq|dprint|dfinish|in|flat)\\b",
+					"name": "keyword.control.anvil"
+				},
+				{
+					"match": "\\b(shl|shr)\\b",
+					"name": "keyword.operator.word.anvil"
+				},
+				{
+					"include": "#delay"
+				},
+				{
+					"include": "#message-specifier"
+				},
+				{
+					"match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "punctuation.accessor.anvil"
+						},
+						"2": {
+							"name": "variable.other.property.anvil"
+						}
+					}
+				},
+				{
+					"match": ":=",
+					"name": "keyword.operator.assignment.anvil"
+				},
+				{
+					"match": ">>",
+					"name": "keyword.operator.wait.anvil"
+				},
+				{
+					"match": "=>",
+					"name": "keyword.operator.arrow.anvil"
+				},
+				{
+					"match": "==|!=|<=|>=",
+					"name": "keyword.operator.comparison.anvil"
+				},
+				{
+					"match": "&&|\\|\\|",
+					"name": "keyword.operator.logical.anvil"
+				},
+				{
+					"match": "<<",
+					"name": "keyword.operator.bitwise.shift.anvil"
+				},
+				{
+					"match": "--",
+					"name": "keyword.operator.connect.anvil"
+				},
+				{
+					"match": "\\+:",
+					"name": "keyword.operator.range.anvil"
+				},
+				{
+					"match": "[+\\-*/%]",
+					"name": "keyword.operator.arithmetic.anvil"
+				},
+				{
+					"match": "[&|^~!]",
+					"name": "keyword.operator.bitwise.anvil"
+				},
+				{
+					"match": "[<>]",
+					"name": "keyword.operator.comparison.anvil"
+				},
+				{
+					"match": "=",
+					"name": "keyword.operator.assignment.anvil"
+				},
+				{
+					"include": "#type-annotation"
+				},
+				{
+					"include": "#primitive-types"
+				},
+				{
+					"match": "\\b[A-Z][A-Z0-9_]+\\b",
+					"name": "variable.other.constant.anvil"
+				},
+				{
+					"match": ";",
+					"name": "punctuation.terminator.anvil"
+				},
+				{
+					"match": ",",
+					"name": "punctuation.separator.comma.anvil"
+				},
+				{
+					"include": "#numbers"
 				}
 			]
 		}

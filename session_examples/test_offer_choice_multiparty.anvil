@@ -4,9 +4,9 @@ chan ch {
     right ack : (logic@#1) <<
 }
 
-interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req ; ep1.req ; (ep1.ack : (#4 ; ep.reset ; ep.ack)) & ep1.reset (#2 ; ep.ack ; ep.reset)) ; #1;
-interface foo2_intfc (ep : left ch) = ep.req ; ^(ep.reset : F ep.ack,ep.ack : F ep.reset) ; #1;
-interface foo3_intfc (ep1 : left ch) = ep1.req ; 
+interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req ; ep1.req ; ⋀(ep1.ack : (#4 ; ep.reset ; ep.ack), ep1.reset : (#2 ; ep.ack ; ep.reset)) ; #1
+interface foo2_intfc (ep : left ch) = ep.req ; ⨁(ep.reset : F ep.ack,ep.ack : F ep.reset) ; #1
+interface foo3_intfc (ep1 : left ch) = ep1.req ; #1
 
 
 proc foo1 (foo1_intfc){
@@ -23,8 +23,8 @@ proc foo1 (foo1_intfc){
         }else{
             cycle 2 >>
             let ack = recv ep.ack >>
-            send ep.reset(1'd0) >>
-            dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack)
+            dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack) >>
+            send ep.reset(1'd0)
         } 
         >>
         cycle 1
@@ -64,8 +64,8 @@ proc foo2 (foo2_intfc){
 
 pool compat_pool {
     ep_le -- ep_ri : ch;
-    i1 : foo1_intfc(ep_ri);
-    i2 : foo2_intfc(ep_le);
+    i1 : foo1_intfc(ep_ri),
+    i2 : foo2_intfc(ep_le),
     i3 : foo3_intfc(ep_le)
 }
 

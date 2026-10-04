@@ -1,27 +1,27 @@
 
 interface slave_itfc(r_req_ep :left arbiter_slave_ch<T1> , slv_r_ep : left slv_r_ch<r_pack_t> ) =
-         r_req_ep.req ; r_req_ep.gnt ; slv_r_ep.res; ^(slv_r_ep.data, slv_r_ep.err) ; #1 
+         r_req_ep.req ; r_req_ep.gnt ; slv_r_ep.res; ⨁(slv_r_ep.data, slv_r_ep.err) ; #1 
 
 interface rr_arbiter_itfc(slv_ep1 : right arbiter_slave_ch<T>, slv_ep2 : right arbiter_slave_ch<T>, mst_ep : left req_inp_ch<ar_sel_pack_t>) =
 
-^( 
+⨁( 
    slv_ep1.req : mst_ep.req ; slv_ep1.gnt,
    slv_ep2.req : mst_ep.req ; slv_ep2.gnt
 ) ; #1
 
-interface fifo_itfc(ep : left fifo_ch<data_t>) =  ((ep.full ; ep.pop;#1;&(ep.push,ep.pop,*)) + (ep.empty ; ep.push;#1;&(ep.push,ep.pop,*)) + &(ep.push, ep.pop)) ; #1
+interface fifo_itfc(ep : left fifo_ch<data_t>) =  ((ep.full ; ep.pop;#1;⋀(ep.push,ep.pop,*)) + (ep.empty ; ep.push;#1;⋀(ep.push,ep.pop,*)) + ⋀(ep.push, ep.pop)) ; #1
 
 interface master_itfc(mst_req_ep : right ar_mast_ch,  mst_res_ep : left req_inp_ch<r_pack_t>) = mst_req_ep.rdy ; mst_req_ep.data ; mst_res_ep.req ; #1 
 
 
-interface spill_register_itfc(inp_ep : right req_inp_ch<T>, out_ep : left reg_out_ch<T>) = ((inp_ep.req;#1;&(inp_ep.req, out_ep.spill,*)) +  (&(inp_ep.req, out_ep.spill, *)) + (out_ep.spill;#1;&(inp_ep.req,out_ep.spill,*)));#1
+interface spill_register_itfc(inp_ep : right req_inp_ch<T>, out_ep : left reg_out_ch<T>) = ((inp_ep.req;#1;⋀(inp_ep.req, out_ep.spill,*)) +  (⋀(inp_ep.req, out_ep.spill, *)) + (out_ep.spill;#1;⋀(inp_ep.req,out_ep.spill,*)));#1
 
 
 interface mux_ar_main (
     ar_req_ep : right reg_out_ch<ar_sel_pack_t>,
     mst_req_ep : left ar_mast_ch <ar_pack_t>,
     fifo_ep : right fifo_ch<select_t>
-) =^(
+) =⨁(
         fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
         * : mst_req_ep.rdy;ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push
     ) ; #1 
@@ -30,9 +30,9 @@ interface mux_r_main (
     fifo_ep : right fifo_ch<select_t>,
     slv_ep1 : right slv_r_ch<r_pack_t>,
     slv_ep2 : right slv_r_ch<r_pack_t>
-) =^(
-        fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (^(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data )),
-        * : r_sr_ep.spill ; #fifo_ep.pop ; ^(slv_ep1.res : (slv_ep1.err + slv_ep1.data) , slv_ep2.res : (slv_ep2.err + slv_ep2.data) )
+) =⨁(
+        fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (⨁(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data )),
+        * : r_sr_ep.spill ; #fifo_ep.pop ; ⨁(slv_ep1.res : (slv_ep1.err + slv_ep1.data) , slv_ep2.res : (slv_ep2.err + slv_ep2.data) )
 ); #1
 
 pool arbiter_slave_pool {

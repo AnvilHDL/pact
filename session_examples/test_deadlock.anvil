@@ -4,10 +4,8 @@ chan ch {
 }
 
 
-interface foo1_intfc (ep : right ch) = ep.req ; ep.gnt ; #1;
-interface foo2_intfc (ep : left ch) = ep.gnt ; ep.req ; #1;
-
-
+interface foo1_intfc (ep : right ch) = ep.req ; ep.gnt ; #1
+interface foo2_intfc (ep : left ch) = ep.gnt ; ep.req ; #1
 proc foo1 (foo1_intfc){
     reg cyc : logic[8];
     loop{
@@ -40,7 +38,7 @@ proc foo2 (foo2_intfc){
 
 pool test_pool{
     ep_le -- ep_ri : ch;
-    i1 : foo1_intfc(ep_ri);
+    i1 : foo1_intfc(ep_ri),
     i2 : foo2_intfc(ep_le)
 }
 

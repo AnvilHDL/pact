@@ -52,7 +52,7 @@ pool mem_pool{ // true
     rd_ep_le -- rd_ep_ri : rd_ch,
     wr_ep_le -- wr_ep_ri : wr_ch;
     i1 : #1 + (rd_ep_le.req ; rd_ep_le.res ; #1),
-    i2 : &(rd_ep_le.req : F #rd_ep_le.res, wr_ep_ri.req) ; #1,
+    i2 : ⋀(rd_ep_le.req : F #rd_ep_le.res, wr_ep_ri.req) ; #1,
     i3 : wr_ep_ri.req ; #1
 }
 

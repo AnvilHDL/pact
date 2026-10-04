@@ -13,7 +13,7 @@ pool n2 { // false
 
 pool n3 { // false
     ep_le -- ep_ri : ch;
-    in31 : ep.m1 ; ^(#ep.m2, *),
+    in31 : ep.m1 ; ⨁(#ep.m2, *),
     in3 : #ep.m1 + #ep.m2 
 }
 
@@ -33,7 +33,7 @@ pool n5 { // false
 
 pool n6 { // false
     ep_le -- ep_ri : ch;
-    in61 : ^(#ep.m1 : #ep.m3, #ep.m2 : #ep.m4) ,
+    in61 : ⨁(#ep.m1 : #ep.m3, #ep.m2 : #ep.m4) ,
     in62 : #ep.m1;#ep.m3,
     in63 : #ep.m2
 }
@@ -41,12 +41,12 @@ pool n6 { // false
 
 pool n7 { // false
     ep_le -- ep_ri : ch;
-    in71 : ^(#ep.m1, #ep.m2) ,
+    in71 : ⨁(#ep.m1, #ep.m2) ,
     in72 : #ep.m1;#ep.m2
 }
 pool n8 { // true
     ep_le -- ep_ri : ch;
-    n81 : (() + &(#ep.m1, #ep.m2));#1,
+    n81 : (() + ⋀(#ep.m1, #ep.m2));#1,
     n82 :(#ep.m1;#1) ,
     n83 : (#ep.m4; #ep.m2);#1,
     n84 : #ep.m4;#1

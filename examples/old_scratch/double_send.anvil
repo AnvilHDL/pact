@@ -1,9 +1,0 @@
-chan channel = {
-    left req : (logic@#0-#1)
-}
-
-proc demo (p : right channel) =
-    wait send p::req (1'b1) then
-    cycle then
-    wait send p::req (1'b0) then ()
-

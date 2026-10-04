@@ -6,10 +6,8 @@ chan local_ch{
 }
 
 
-interface test_choice (ep : left local_ch) = (ep.req ; F((#ep.ack) + (ep.reset ; ((ep.ack ; ep.reset)+ (ep.reset ; ep.ack)))) ; #1);
-
-interface test_dual_choice (ep : right local_ch) = (ep.req ; F (#ep.ack + ep.reset));
-
+interface test_choice (ep : left local_ch) = (ep.req ; F((#ep.ack) + (ep.reset ; ((ep.ack ; ep.reset)+ (ep.reset ; ep.ack)))) ; #1)
+interface test_dual_choice (ep : right local_ch) = (ep.req ; F (#ep.ack + ep.reset))
 proc test_choice(test_choice){
     loop{
         let r = recv ep.req  >> 

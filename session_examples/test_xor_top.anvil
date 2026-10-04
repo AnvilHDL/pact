@@ -3,22 +3,23 @@ chan ch {
     left ack : (logic@#1)
 }
 
-interface tryand_interface (ep : left ch) = ^(ep.req : #5, ep.ack : #3, *) >> #1 ;
+interface tryand_interface (ep : left ch) = ⨁(#ep.req : #5, #ep.ack : #3, *) ; #1
 proc tryand(tryand_interface){
     reg cyc : logic[8];
     loop{
-       let prio = 2'd2 >>
+       let prio = 1'd0 >>
        xoffer prio{
-            x= recv ep.req => (
+            x= irecv ep.req => (
                 dprint "[Cycle %d] try received req: %d" (*cyc, x) >>
                 cycle 5
             ),
-            x = recv ep.ack => (
+            x = irecv ep.ack => (
                 dprint "[Cycle %d] try received ack: %d" (*cyc, x)
                 >>
                 cycle 3
-            ),
-            # => dprint "[Cycle %d] try received nothing" (*cyc)
+            )
+        } else {
+            dprint "[Cycle %d] try received nothing" (*cyc)
         } >> 
         dprint "[Cycle %d] completed xoffer" (*cyc) >>
         cycle 1

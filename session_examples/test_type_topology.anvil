@@ -5,14 +5,14 @@ pool p1{
 }
 pool p2{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2);#1,
+    ip171 : ⨁(ep.m1,ep.m2);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1
 }
 
 pool p3{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1
@@ -20,7 +20,7 @@ pool p3{
 
 pool p4{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -29,7 +29,7 @@ pool p4{
 
 pool p5{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -40,7 +40,7 @@ pool p5{
 
 pool p6{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -51,7 +51,7 @@ pool p6{
 
 pool p7{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -63,7 +63,7 @@ pool p7{
 
 pool p8{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -76,7 +76,7 @@ pool p8{
 
 pool p9{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -90,7 +90,7 @@ pool p9{
 
 pool p10{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -106,7 +106,7 @@ pool p10{
 
 pool p11{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -122,7 +122,7 @@ pool p11{
 
 pool p12{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -140,7 +140,7 @@ pool p12{
 
 pool p13{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -158,7 +158,7 @@ pool p13{
 
 pool p14{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -178,7 +178,7 @@ pool p14{
 
 pool p15{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -199,7 +199,7 @@ pool p15{
 
 pool p16{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -221,7 +221,7 @@ pool p16{
 
 pool p17{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -243,7 +243,7 @@ pool p17{
 
 pool p18{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17,ep.m18);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17,ep.m18);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -266,7 +266,7 @@ pool p18{
 
 pool p19{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17,ep.m18,ep.m19);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17,ep.m18,ep.m19);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,
@@ -291,7 +291,7 @@ pool p19{
 
 pool p20{
     ep_le -- ep_ri : ch;
-    ip171 : ^(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17,ep.m18,ep.m19,ep.m20);#1,
+    ip171 : ⨁(ep.m1,ep.m2,ep.m3,ep.m4,ep.m5,ep.m6,ep.m7,ep.m8,ep.m9,ep.m10,ep.m11,ep.m12,ep.m13,ep.m14,ep.m15,ep.m16,ep.m17,ep.m18,ep.m19,ep.m20);#1,
     ip172 : F ep.m1;#1,
     ip173 : F ep.m2;#1,
     ip174 : F ep.m3;#1,

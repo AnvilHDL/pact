@@ -5,10 +5,8 @@ chan ch {
 }
 
 
-interface foo1_intfc (ep : right ch) = ep.req ; #4 ; #ep.reset ; ep.ack ; #1;
-interface foo2_intfc (ep : left ch) = ep.req ; ep.reset ; ep.ack ; #1;
-
-
+interface foo1_intfc (ep : right ch) = ep.req ; #4 ; #ep.reset ; ep.ack ; #1
+interface foo2_intfc (ep : left ch) = ep.req ; ep.reset ; ep.ack ; #1
 proc foo1 (foo1_intfc){
     reg cyc : logic[8];
     loop{
@@ -16,7 +14,7 @@ proc foo1 (foo1_intfc){
         cycle 2 >>
         cycle 1 >>
         cycle 1 >>
-        send ep.reset(1'd0) >>
+        isend ep.reset(1'd0) >>
         let ack = recv ep.ack >>
         dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack) >>
         cycle 1
@@ -30,8 +28,9 @@ proc foo2 (foo2_intfc){
     reg cyc : logic[8];
     loop{
         let req = recv ep.req >>
+        dprint "[Cycle %d] [foo2] Received req: %d\n" (*cyc, req) >>
         let reset = recv ep.reset >>
-        dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset) >>
+        dprint "[Cycle %d] [foo2] Received reset: %d\n" (*cyc, reset) >>
         send ep.ack(1'd1) >>
         cycle 1
     }
@@ -41,11 +40,16 @@ proc foo2 (foo2_intfc){
     
 }
 
+pool compat_pool {
+    ep_le -- ep_ri : ch;
+    i1 : foo1_intfc(ep_ri),
+    i2 : foo2_intfc(ep_le)
+}
+
 proc test_compatiblity(){
-    chan ep_le -- ep_ri : ch;
-    interface (foo1_intfc , foo2_intfc);
-    spawn foo1(ep_ri);
-    spawn foo2(ep_le);
+    pool p : compat_pool;
+    spawn foo1[p.i1];
+    spawn foo2[p.i2];
     loop{
         cycle 100 >>
         dfinish

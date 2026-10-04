@@ -2,14 +2,12 @@ chan local_ch{
     left req : (logic@#1),
     right ack : (logic@#1),
     right reset : (logic@#1)
-    protocol :: (ep.req >> ep.ack)
+    protocol :: (ep.req ; ep.ack)
 }
 
 
-interface test_choice (ep : left local_ch) = (ep.req >> #3>> (ep.ack + ep.reset) >> #1);
-
-interface test_dual_choice (ep : right local_ch) = (ep.req >> F (ep.ack + ep.reset));
-
+interface test_choice (ep : left local_ch) = (ep.req ; #3 ; (ep.ack + ep.reset) ; #1)
+interface test_dual_choice (ep : right local_ch) = (ep.req ; F (ep.ack + ep.reset))
 proc test_choice(test_choice){
     loop{
         let r = recv ep.req  >> 

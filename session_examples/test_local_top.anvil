@@ -4,9 +4,7 @@ chan local_ch{
     protocol :: (ep.req ; ep.ack)
 }
 
-interface test_local (ep : left local_ch) = (ep.req ; #3 ; ep.ack ; ep.req ; #1);
-
-
+interface test_local (ep : left local_ch) = (ep.req ; #3 ; ep.ack ; ep.req ; #1)
 proc test_local(test_local){
     loop{
         let r = recv ep.req  >> 
@@ -27,8 +25,7 @@ proc test_local(test_local){
     }
 }
 
-interface test_dual (ep : right local_ch) = (ep.req >> F ep.ack);
-
+interface test_dual (ep : right local_ch) = (ep.req ; F ep.ack)
 proc test_dual(test_dual){
     loop{
         let ack = recv ep.ack >>

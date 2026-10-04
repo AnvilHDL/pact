@@ -3,28 +3,28 @@
 pool cache_coherence_pool {
     ep_lo -- ep_ro : ch;
     i1 : req_ep.rdy; 
-        ^(
+        ⨁(
             req_ep.ar_req : #1;(
-                                ((cs_ep_1.read_req || cs_ep_2.read_req); #1; (cs_ep_1.read_res || cs_ep_2.read_res);#1;^(cs_ep_1.snoop_data, cs_ep_2.snoop_data);req_ep.r_res;#1) 
+                                ((cs_ep_1.read_req || cs_ep_2.read_req); #1; (cs_ep_1.read_res || cs_ep_2.read_res);#1;⨁(cs_ep_1.snoop_data, cs_ep_2.snoop_data);req_ep.r_res;#1) 
                                                     + 
-                                ((cs_ep_1.snoop_invalidate || cs_ep_2.snoop_invalidate);#1;(cs_ep_1.snoop_invalidate_res || cs_ep_2.snoop_invalidate_res);#1;mem_ep.aw_req;#1;^(#cs_ep_1.snoop_data, #cs_ep_2.snoop_data);#mem_ep.w_req;mem_ep.b_resp; req_ep.invalid_resp;#1)
+                                ((cs_ep_1.snoop_invalidate || cs_ep_2.snoop_invalidate);#1;(cs_ep_1.snoop_invalidate_res || cs_ep_2.snoop_invalidate_res);#1;mem_ep.aw_req;#1;⨁(#cs_ep_1.snoop_data, #cs_ep_2.snoop_data);#mem_ep.w_req;mem_ep.b_resp; req_ep.invalid_resp;#1)
                     ),
             req_ep.aw_req : #1//add write path here
         ) ,
 
-    i2 : req_ep.rdy; ^(
-                       cache_ep1.ar_req : #req_ep.ar_req; ^(req_ep.r_res : #cache_ep1.r_res,req_ep.invalid_resp: cache_ep1.invalid_resp),
-                       cache_ep2.ar_req : #req_ep.ar_req; ^(req_ep.r_res : #cache_ep2.r_res,req_ep.invalid_resp: cache_ep2.invalid_resp)
+    i2 : req_ep.rdy; ⨁(
+                       cache_ep1.ar_req : #req_ep.ar_req; ⨁(req_ep.r_res : #cache_ep1.r_res,req_ep.invalid_resp: cache_ep1.invalid_resp),
+                       cache_ep2.ar_req : #req_ep.ar_req; ⨁(req_ep.r_res : #cache_ep2.r_res,req_ep.invalid_resp: cache_ep2.invalid_resp)
                     ); #1,
-    i3 : ^(
-           cs_ep_1.read_req : #1;((cs_ep_1.read_res;#1;^(cs_ep_1.snoop_data,*))),
+    i3 : ⨁(
+           cs_ep_1.read_req : #1;((cs_ep_1.read_res;#1;⨁(cs_ep_1.snoop_data,*))),
            cs_ep_1.snoop_invalidate : #1;cs_ep_1.snoop_invalidate_res;cs_ep_1.snoop_data
            ); #1,
-    i4 : ^(
-           cs_ep_2.read_req : #1;((cs_ep_2.read_res;#1;^(cs_ep_2.snoop_data,*))),
+    i4 : ⨁(
+           cs_ep_2.read_req : #1;((cs_ep_2.read_res;#1;⨁(cs_ep_2.snoop_data,*))),
            cs_ep_2.snoop_invalidate : #1;cs_ep_2.snoop_invalidate_res
            ); #1,
-    i5 : ^(cache_ep1.ar_req : ^(cache_ep1.r_res,cache_ep1.invalid_resp), *); #1,
-    i6 : ^(cache_ep2.ar_req : ^(cache_ep2.r_res,cache_ep2.invalid_resp), *); #1,
-    i7 :  ^(mem_ep.aw_req :  mem_ep.w_req ; #1; mem_ep.b_resp ,  *); #1
+    i5 : ⨁(cache_ep1.ar_req : ⨁(cache_ep1.r_res,cache_ep1.invalid_resp), *); #1,
+    i6 : ⨁(cache_ep2.ar_req : ⨁(cache_ep2.r_res,cache_ep2.invalid_resp), *); #1,
+    i7 :  ⨁(mem_ep.aw_req :  mem_ep.w_req ; #1; mem_ep.b_resp ,  *); #1
 }

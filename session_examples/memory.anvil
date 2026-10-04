@@ -12,8 +12,7 @@ chan write_ch{
     right res : (addr_data_pair@#1)
 }
 
-interface mem_itfc (rd_ep : right read_ch, wr_ep : left write_ch) = &(rd_ep.req : F #rd_ep.res, wr_ep.req) ; #1;
-
+interface mem_itfc (rd_ep : right read_ch, wr_ep : left write_ch) = ⋀(rd_ep.req : F #rd_ep.res, wr_ep.req) ; #1
 proc memory(mem_itfc){
     reg mem : byte[256];
     reg rd_data : byte;
@@ -21,7 +20,7 @@ proc memory(mem_itfc){
         offer {
             addr = recv rd_ep.req => (
                        set rd_data := *mem[addr] >>
-                       send rd_ep.res(*rd_data) >>
+                       isend rd_ep.res(*rd_data) >>
                        cycle 1
                     ),
             inp =  recv wr_ep.req => set mem[inp.addr] := inp.data

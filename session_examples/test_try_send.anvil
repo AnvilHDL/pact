@@ -2,7 +2,7 @@ chan ch{
     left req : (logic@#1)
 }
 
-interface test_try_send_if (ep : left ch) = ^(ep.req : #5, * : #4);
+interface test_try_send_if (ep : left ch) = ⨁(ep.req : #5, * : #4)
 proc test_try_send(test_try_send_if){
     loop{
         try x = recv ep.req{
