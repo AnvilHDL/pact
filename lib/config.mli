@@ -24,6 +24,7 @@ type compile_config = {
                              literally two rounds *)
 
   json_output : bool; (** output compilation results in JSON format *)
+  ast_output : bool; (** include the AST in the JSON output, for tooling such as the language server *)
   input_filenames : string list; (** list of file names to be compiled *)
 }
 

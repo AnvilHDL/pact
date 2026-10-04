@@ -99,6 +99,7 @@ dune exec pact -- [OPTIONS] <anvil-source-file>
   - `-o <output-file>`: Specify output file name.
   - `-just-check`: Only type-check the source file without generating code.
   - `-json-output` : Output compilation results in JSON format.
+  - `-ast` : With `-json`, check the input and include its AST, used by the language server.
   - `-strict-dtc`: Enable strict data type checks (prevents abstract data types conversion).
   - `-help`: Display help information.
 

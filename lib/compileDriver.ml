@@ -5,19 +5,12 @@ let debug_types out config =
 
       
 
-let compile out config =
+let parse ?recover config =
   let open Config in
-  CliOutput.verbose := config.verbose || config.verbose_max;
-  Option.iter (fun dir -> DebugLog.enable dir; at_exit DebugLog.report) config.log_dir;
-  if config.debug_mode then(
-    CliOutput.status "Debug mode enabled";
-    debug_types out config
-  )
-  else(
   let toplevel_filename = List.hd config.input_filenames in
   let cunits = ref [] in
   (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    try parse_recursive ?recover cunits (ref Utils.StringSet.empty) config toplevel_filename
     with
       | Except.TypeError msg ->
         (Except.Text "Type error:")::msg
@@ -26,15 +19,19 @@ let compile out config =
   List.iter (fun (file_name, cunit) ->
     DebugLog.file "ast" (Filename.basename file_name ^ ".dot") (AstDump.print cunit)
   ) !cunits;
-  (* collect all channel class and type definitions *)
-  let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits in
-  let all_session_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) !cunits in
+  !cunits
 
-  let all_pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
-  let all_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.type_defs) !cunits in
-  let all_procs = List.concat_map (fun (file_name, cunit) -> let open Lang in List.map (fun p -> (file_name, p)) cunit.procs) !cunits in
-  let all_func_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.func_defs) !cunits in
-  let all_macro_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.macro_defs) !cunits in
+let compile_units out config cunits =
+  let open Config in
+  (* collect all channel class and type definitions *)
+  let all_channel_classes = List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) cunits in
+  let all_session_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.session_defs) cunits in
+
+  let all_pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) cunits in
+  let all_type_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.type_defs) cunits in
+  let all_procs = List.concat_map (fun (file_name, cunit) -> let open Lang in List.map (fun p -> (file_name, p)) cunit.procs) cunits in
+  let all_func_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.func_defs) cunits in
+  let all_macro_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.macro_defs) cunits in
   let proc_map = List.map (fun (file_name, proc) -> (let open Lang in (proc:proc_def).name, (proc, file_name))) all_procs
     |> Utils.StringMap.of_list in
   let sched = BuildScheduler.create () in
@@ -71,6 +68,7 @@ let compile out config =
             {cunit_file_name = Some file_name;
             channel_classes = all_channel_classes; type_defs = all_type_defs;
             session_defs = all_session_defs; pools = all_pool_defs; procs = [proc]; imports = []; _extern_procs = [];
+            session_refs = [];
             func_defs = all_func_defs;
             macro_defs = all_macro_defs} in
           let graph_collection =
@@ -109,7 +107,7 @@ let compile out config =
     let visited_extern_files = ref Utils.StringSet.empty in
     let open Lang in
     List.iter (fun (file_name, cunit) ->
-      List.iter (fun {is_extern; file_name = imp_file_name} ->
+      List.iter (fun {is_extern; file_name = imp_file_name; _} ->
         if is_extern then
           let imp_file_name_canonical = canonicalise_file_name file_name imp_file_name in
           if Utils.StringSet.mem imp_file_name_canonical !visited_extern_files |> not then (
@@ -118,7 +116,7 @@ let compile out config =
             with Sys_error msg -> raise_compile_error (Some file_name) [Except.Text msg]
           )
       ) cunit.imports
-    ) !cunits;
+    ) cunits;
     (* generate the code from event graphs *)
     let all_collections = Queue.to_seq graph_collection_queue |> List.of_seq in
     let all_event_graphs = List.concat_map (fun collection -> let open EventGraph in collection.event_graphs) all_collections in
@@ -137,4 +135,13 @@ let compile out config =
           ) all_collections 
   end
 
+let compile out config =
+  let open Config in
+  CliOutput.verbose := config.verbose || config.verbose_max;
+  Option.iter (fun dir -> DebugLog.enable dir; at_exit DebugLog.report) config.log_dir;
+  if config.debug_mode then(
+    CliOutput.status "Debug mode enabled";
+    debug_types out config
   )
+  else
+    parse config |> compile_units out config

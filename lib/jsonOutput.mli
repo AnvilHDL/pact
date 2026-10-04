@@ -27,6 +27,7 @@ type json_output = {
   success: bool;
   errors: json_error list;
   output: string option;
+  ast: Yojson.Basic.t option; (** omitted from the JSON when [None] *)
 }
 
 (** Convert error message to JSON errors *)
@@ -40,3 +41,6 @@ val success_output : string -> json_output
 
 (** Create failed JSON output *)
 val failure_output : json_error list -> json_output
+
+(** Create JSON output with an AST, successful if there are no errors *)
+val ast_output : Yojson.Basic.t option -> json_error list -> json_output

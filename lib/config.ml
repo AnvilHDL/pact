@@ -16,6 +16,7 @@ type compile_config = {
   just_check : bool;
   two_round_graph: bool;
   json_output: bool;
+  ast_output: bool;
   input_filenames: string list;
 }
 
@@ -33,6 +34,7 @@ let parse_args () : compile_config =
   let stdin = ref false in
   let two_round_graph = ref false in
   let json_output = ref false in
+  let ast_output = ref false in
   let input_filenames = ref []
   and log_dir = ref None
   and output_filename = ref None
@@ -58,6 +60,7 @@ let parse_args () : compile_config =
       ("-just-check", Arg.Set just_check, "Only typecheck and validate the input files");
       ("-two-round", Arg.Set two_round_graph, "Enable codegen of logic for two rounds");
       ("-json", Arg.Set json_output, "Output compilation results in JSON format");
+      ("-ast", Arg.Set ast_output, "With -json, check the input and include its AST instead of generating code");
       ("-verbose-max", Arg.Set verbose_max, "Enable verbose output with maximum detail");
     ]
     add_input_filename
@@ -77,6 +80,7 @@ let parse_args () : compile_config =
     merge_reg_writes = !merge_reg_writes;
     two_round_graph = !two_round_graph;
     json_output = !json_output;
+    ast_output = !ast_output;
     input_filenames = !input_filenames;
     output_filename = !output_filename;
     log_dir =

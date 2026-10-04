@@ -199,6 +199,12 @@ let rec lvalue_info_of graph (ci:cunit_info) ctx span lval =
 
 and construct_graphIR (graph : event_graph) (ci : cunit_info)
                     (ctx : build_context) (e : expr_node) : node_data =
+  let td = construct_graphIR_untraced graph ci ctx e in
+  SessionTrace.record e.span ctx.current td.ld.lt.live;
+  td
+
+and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
+                    (ctx : build_context) (e : expr_node) : node_data =
   let binop_td_const = binop_td_const graph ci ctx
   and _binop_td_td = binop_td_td graph ci ctx in
   let wildcard_msg_spec = {endpoint = "*"; msg = "*"} in
@@ -1337,9 +1343,9 @@ and construct_graphIR (graph : event_graph) (ci : cunit_info)
       match TypedefMap.data_type_name_resolve ci.typedefs @@ `Named (record_ty_name, []) with
       | Some (`Record record_fields) ->
         (
-          match Utils.list_match_reorder (List.map fst record_fields) field_exprs with
+          match Utils.list_match_reorder (List.map (fun f -> fst f.d) record_fields) field_exprs with
           | Some expr_reordered ->
-            let tds = List.map2 (fun (field_name, expected_dtype) e' ->
+            let tds = List.map2 (fun {d = (field_name, expected_dtype); _} e' ->
               let td = construct_graphIR graph ci ctx e' in
               let err_string = DTypeCheck.fmt_record_field field_name expected_dtype td.ld.dtype in
               check_dtype err_string (Some expected_dtype) td.ld.dtype e'.span ci.file_name ci.weak_typecasts ci.typedefs ci.macro_defs;

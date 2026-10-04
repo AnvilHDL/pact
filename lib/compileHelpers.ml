@@ -1,13 +1,17 @@
 exception CompileError of Except.error_message
 
-let raise_compile_error file_name msg =
+(** Attributes the code spans of an error message that lack a file to [file_name]. *)
+let with_file_name file_name msg =
   let open Except in
+  List.map (fun frag ->
+    match frag with
+    | Codespan (None, codespan) -> Codespan (Some file_name, codespan)
+    | _ -> frag
+  ) msg
+
+let raise_compile_error file_name msg =
   let msg = match file_name with
-  | Some file_name -> List.map (fun frag ->
-      match frag with
-      | Codespan (None, codespan) -> Codespan (Some file_name, codespan)
-      | _ -> frag
-    ) msg
+  | Some file_name -> with_file_name file_name msg
   | None -> msg
   in
   raise (CompileError msg)
@@ -18,7 +22,8 @@ let canonicalise_file_name file_origin file_name =
   else
     file_name
 
-let rec parse_recursive cunits parsed_files (config : Config.compile_config) filename =
+(** Parses [filename] and its imports; [recover] receives well-formedness and import errors instead of raising. *)
+let rec parse_recursive ?recover cunits parsed_files (config : Config.compile_config) filename =
   if Utils.StringSet.mem filename !parsed_files |> not then (
     parsed_files := Utils.StringSet.add filename !parsed_files;
     let cunit =
@@ -33,6 +38,7 @@ let rec parse_recursive cunits parsed_files (config : Config.compile_config) fil
           (fun in_data ->
             let lexbuf = Lexing.from_string (Bytes.to_string (in_data.buffer)) in
             lexbuf.Lexing.lex_curr_p <- {lexbuf.Lexing.lex_curr_p with Lexing.pos_fname = filename};
+            ignore (ParserHelper.take_session_refs ());
             try Parser.cunit Lexer.read lexbuf
             with
               | Lexer.SyntaxError msg ->
@@ -58,14 +64,24 @@ let rec parse_recursive cunits parsed_files (config : Config.compile_config) fil
       try
         WellFormedCheck.syntax_tree_precheck config cunit
       with
-        | Except.TypeError msg -> raise_compile_error (Some filename) msg
+        | Except.TypeError msg ->
+          match recover with
+          | Some report -> report (with_file_name filename msg)
+          | None -> raise_compile_error (Some filename) msg
     );
     cunits := (filename, cunit)::!cunits;
     List.iter (fun imp ->
       let open Lang in
       if not imp.is_extern then
-        canonicalise_file_name filename imp.file_name
-          |> parse_recursive cunits parsed_files config
+        let imported = canonicalise_file_name filename imp.file_name in
+        match recover with
+        | None -> parse_recursive cunits parsed_files config imported
+        | Some report ->
+          try parse_recursive ~recover:report cunits parsed_files config imported
+          with CompileError msg ->
+            (* report a file that cannot be imported at its import directive *)
+            report (Except.Text (Printf.sprintf "Cannot import \"%s\":" imp.file_name)
+                    :: Except.Codespan (Some filename, imp.span) :: msg)
     ) cunit.imports
   )
 

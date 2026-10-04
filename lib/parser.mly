@@ -127,7 +127,7 @@
 
 cunit:
 | EOF
-  { Lang.cunit_empty }
+  { {Lang.cunit_empty with session_refs = ParserHelper.take_session_refs ()} }
 | p = proc_def; c = cunit
   { Lang.cunit_add_proc c p }
 | macro  = macro_def;c = cunit
@@ -149,11 +149,11 @@ cunit:
 import_directive:
 | KEYWORD_IMPORT; file_name = STR_LITERAL
   {
-    let open Lang in {file_name; is_extern = false}
+    let open Lang in {file_name; is_extern = false; span = {st = $startpos; ed = $endpos}}
   }
 | KEYWORD_EXTERN; KEYWORD_IMPORT; file_name = STR_LITERAL
   {
-    let open Lang in {file_name; is_extern = true}
+    let open Lang in {file_name; is_extern = true; span = {st = $startpos; ed = $endpos}}
   }
 ;
 
@@ -168,7 +168,8 @@ proc_def:
       interface = [];
       args = args;
       params = [];
-      body = let open Lang in Native body
+      body = Lang.Native body;
+      span = Lang.{st = $startpos; ed = $endpos}
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
@@ -180,7 +181,8 @@ proc_def:
       interface = [];
       args = args;
       params = params;
-      body = let open Lang in Native body
+      body = Lang.Native body;
+      span = Lang.{st = $startpos; ed = $endpos}
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT;
@@ -193,7 +195,8 @@ proc_def:
       interface = [];
       args = args;
       params = [];
-      body = let open Lang in Extern (mod_name, body)
+      body = Lang.Extern (mod_name, body);
+      span = Lang.{st = $startpos; ed = $endpos}
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT; LEFT_ABRACK; params = separated_list(COMMA, param_def); RIGHT_ABRACK;
@@ -205,7 +208,8 @@ proc_def:
       interface = intf;
       args = [];
       params = params;
-      body = let open Lang in Native body
+      body = Lang.Native body;
+      span = Lang.{st = $startpos; ed = $endpos}
     } : Lang.proc_def
   }
 | KEYWORD_PROC; ident = IDENT;
@@ -217,7 +221,8 @@ proc_def:
       interface = intf;
       args = [];
       params = [];
-      body = let open Lang in Native body
+      body = Lang.Native body;
+      span = Lang.{st = $startpos; ed = $endpos}
     } : Lang.proc_def
   }
 
@@ -313,22 +318,22 @@ type_def:
 | KEYWORD_TYPE; name = IDENT; params = param_list?;
   EQUAL; dtype = data_type; SEMICOLON
   {
-    { name = name; body = dtype; params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = dtype; params = Option.value ~default:[] params; span = Lang.{st = $startpos; ed = $endpos} } : Lang.type_def
   }
 | KEYWORD_ENUM; name = IDENT; params = param_list?;
-  LEFT_BRACE; variants = separated_nonempty_list(COMMA, variant_def); RIGHT_BRACE
+  LEFT_BRACE; variants = separated_nonempty_list(COMMA, node(variant_def)); RIGHT_BRACE
   {
-    { name = name; body = `Variant (None,variants); params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = `Variant (None,variants); params = Option.value ~default:[] params; span = Lang.{st = $startpos; ed = $endpos} } : Lang.type_def
   }
 | KEYWORD_ENUM; name = IDENT; dtype = data_type; params = param_list?;
-  LEFT_BRACE; variants = separated_nonempty_list(COMMA, variant_def); RIGHT_BRACE
+  LEFT_BRACE; variants = separated_nonempty_list(COMMA, node(variant_def)); RIGHT_BRACE
   {
-    { name = name; body = `Variant (Some dtype, variants); params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = `Variant (Some dtype, variants); params = Option.value ~default:[] params; span = Lang.{st = $startpos; ed = $endpos} } : Lang.type_def
   }
 | KEYWORD_STRUCT; name = IDENT; params = param_list?;
-  LEFT_BRACE; fields = separated_nonempty_list(COMMA, field_def); RIGHT_BRACE
+  LEFT_BRACE; fields = separated_nonempty_list(COMMA, node(field_def)); RIGHT_BRACE
   {
-    { name = name; body = `Record (List.rev fields); params = Option.value ~default:[] params } : Lang.type_def
+    { name = name; body = `Record (List.rev fields); params = Option.value ~default:[] params; span = Lang.{st = $startpos; ed = $endpos} } : Lang.type_def
   }
 ;
 
@@ -380,11 +385,14 @@ local_session_type:
 | SHARP; n = INT
   { Lang.StyAtom (Lang.AtomDelay n) }
 | KEYWORD_LET; id = IDENT; EQUAL; ex = local_session_type; KEYWORD_IN; body = local_session_type
-  { Lang.StyLet (id, ex, body) }
+  { ParserHelper.record_session_ref (Lang.SessionBinderRef (id, {Lang.st = $startpos(id); Lang.ed = $endpos(id)}, {Lang.st = $startpos(body); Lang.ed = $endpos(body)}));
+    Lang.StyLet (id, ex, body) }
 | rec_sym; id = IDENT; PERIOD; body = local_session_type
-  { Lang.StyRec (id, body) }
+  { ParserHelper.record_session_ref (Lang.SessionBinderRef (id, {Lang.st = $startpos(id); Lang.ed = $endpos(id)}, {Lang.st = $startpos(body); Lang.ed = $endpos(body)}));
+    Lang.StyRec (id, body) }
 | id = IDENT
-  { Lang.StyVar id }
+  { ParserHelper.record_session_ref (Lang.SessionVarRef (id, {Lang.st = $startpos(id); Lang.ed = $endpos(id)}));
+    Lang.StyVar id }
 | act = atomic_action
   { Lang.StyAtom (Lang.AtomicAct act) }
 | act1 = local_session_type ;SEMICOLON; act2 = local_session_type
@@ -510,18 +518,24 @@ offering_arm:
   { { Lang.trigger = Lang.AtomConjunction trig_list; Lang.continuation = None } : Lang.offering_session_type }
 // A case of an offer match, keyed by exactly the arms taken.
 offer_match_case:
-| m = message_specifier; COLON; body = local_session_type
+| m = session_message_specifier; COLON; body = local_session_type
   { { Lang.match_on = Some [m]; Lang.match_body = body } }
-| LEFT_BRACE; ms = separated_nonempty_list(COMMA, message_specifier); RIGHT_BRACE; COLON; body = local_session_type
+| LEFT_BRACE; ms = separated_nonempty_list(COMMA, session_message_specifier); RIGHT_BRACE; COLON; body = local_session_type
   { { Lang.match_on = Some ms; Lang.match_body = body } }
 | ASTERISK; COLON; body = local_session_type
   { { Lang.match_on = None; Lang.match_body = body } }
 
 atomic_action:
-| id = message_specifier
+| id = session_message_specifier
   { Lang.AtomBMsg id }
-| SHARP;id = message_specifier
+| SHARP;id = session_message_specifier
   { Lang.AtomNBMsg id }
+
+// A message specifier inside a session type, recorded with its span.
+session_message_specifier:
+| m = message_specifier
+  { ParserHelper.record_session_ref (Lang.SessionMsgRef (m, {Lang.st = $startpos(m); Lang.ed = $endpos(m)}));
+    m }
 
 
 
@@ -935,6 +949,7 @@ send_pack:
   {
     fun handshake -> {
       Lang.send_msg_spec = msg_specifier;
+      Lang.send_msg_span = {Lang.st = $startpos(msg_specifier); Lang.ed = $endpos(msg_specifier)};
       Lang.send_data = data;
       Lang.send_handshake = handshake;
     }
@@ -946,6 +961,7 @@ recv_pack:
   {
     fun handshake -> {
       Lang.recv_msg_spec = msg_specifier;
+      Lang.recv_msg_span = {Lang.st = $startpos(msg_specifier); Lang.ed = $endpos(msg_specifier)};
       Lang.recv_handshake = handshake;
     }
   }
@@ -1322,23 +1338,23 @@ shared_var_def:
 macro_def:
   | KEYWORD_CONST; id = IDENT; EQUAL; value = INT; SEMICOLON
     {
-      { id = id; value = value } : Lang.macro_def
+      { id = id; value = value; span = Lang.{st = $startpos; ed = $endpos} } : Lang.macro_def
     }
 ;
 
 function_def:
   | KEYWORD_FUNCTION; name = IDENT; LEFT_PAREN; args = separated_list(COMMA, typed_arg); RIGHT_PAREN; LEFT_BRACE; body = node(expr); RIGHT_BRACE
     {
-      { name = name; args = args; body = body } : Lang.func_def
+      { name = name; args = args; body = body; span = Lang.{st = $startpos; ed = $endpos} } : Lang.func_def
     }
 ;
 
 typed_arg:
   | name = IDENT; COLON; dtype = data_type
     {
-      { arg_name = name; arg_type = Some dtype } : Lang.typed_arg
+      { arg_name = name; arg_type = Some dtype; span = Lang.{st = $startpos; ed = $endpos} } : Lang.typed_arg
     }
   | name = IDENT
     {
-      { arg_name = name; arg_type = None } : Lang.typed_arg
+      { arg_name = name; arg_type = None; span = Lang.{st = $startpos; ed = $endpos} } : Lang.typed_arg
     }

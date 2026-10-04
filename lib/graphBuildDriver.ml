@@ -47,6 +47,7 @@ let build_thread config ci shared_vars_info construct_graphIR (graph : event_gra
     graph.last_event_id <- (EventGraphOps.find_last_event graph).id;
     if not config.Config.disable_session_checks && Option.is_some graph.interface_protocol then begin
         SessionCheck.check_generalized_session config graph module_name;
+        SessionTrace.mark_checked graph;
         CliOutput.status "Session check passed for process %s thread %d" module_name graph.thread_id
     end;
     graph.is_general_recursive <- graph.last_event_id <> td.ld.lt.live.id;
@@ -79,6 +80,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
           {
             id = p.param_name;
             value = v;
+            span = code_span_dummy;
           } :: acc
         | _ -> acc
       ) ci'.macro_defs proc.params param_values 

@@ -27,6 +27,7 @@ type json_output = {
   success: bool;
   errors: json_error list;
   output: string option;
+  ast: Yojson.Basic.t option;
 }
 
 (** Convert error message to JSON errors *)
@@ -43,8 +44,8 @@ let error_message_to_json_errors (error_type : string) (msg : Except.error_messa
         in
         let trace = {
           path = resolved_path;
-          start_pos = { line = span.st.pos_lnum; col = span.st.pos_cnum - span.st.pos_bol };
-          end_pos = { line = span.ed.pos_lnum; col = span.ed.pos_cnum - span.ed.pos_bol };
+          start_pos = { line = span.st.pos_lnum; col = SourceColumn.utf16_column span.st };
+          end_pos = { line = span.ed.pos_lnum; col = SourceColumn.utf16_column span.ed };
         } in
         let str = SpanPrinter.string_of_code_span span in
         { kind = "codespan"; text = str; trace = Some trace }
@@ -95,19 +96,25 @@ let json_error_to_yojson (err : json_error) =
   ]
 
 let json_output_to_yojson (json_out : json_output) =
-  `Assoc [
+  `Assoc ([
     ("success", `Bool json_out.success);
     ("errors", `List (List.map json_error_to_yojson json_out.errors));
     ("output", match json_out.output with None -> `Null | Some s -> `String s)
   ]
+  @ match json_out.ast with None -> [] | Some ast -> [("ast", ast)]
+  )
 
 let json_output_to_string (json_out : json_output) : string =
   Y.to_string (json_output_to_yojson json_out)
 
 (** Create successful JSON output *)
 let success_output output_str =
-  { success = true; errors = []; output = Some output_str }
+  { success = true; errors = []; output = Some output_str; ast = None }
 
 (** Create failed JSON output *)
 let failure_output errors =
-  { success = false; errors; output = None }
+  { success = false; errors; output = None; ast = None }
+
+(** Create JSON output with an AST, successful if there are no errors *)
+let ast_output ast errors =
+  { success = errors = []; errors; output = None; ast }

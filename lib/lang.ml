@@ -231,8 +231,8 @@ let dtype_of_literal (lit : literal) =
 type data_type = [
   | `Logic
   | `Array of data_type * int maybe_param
-  | `Variant of (data_type option)*(identifier * (data_type option)*(literal option)) list (** ADT sum type *)
-  | `Record of (identifier * data_type) list (** ADT product type *)
+  | `Variant of (data_type option)*((identifier * (data_type option)*(literal option)) ast_node list) (** ADT sum type *)
+  | `Record of (identifier * data_type) ast_node list (** ADT product type *)
   | `Tuple of data_type list
   | `Opaque of identifier (** type reserved for internal purposes *)
   | `Named of identifier * param_value list (** named type which can be concretised
@@ -282,6 +282,7 @@ type endpoint_def = {
 type macro_def = {
   id: identifier;
   value : int;
+  span: code_span;
 }
 
 (** A type definition ([type name = body])*)
@@ -289,6 +290,7 @@ and type_def = {
   name: identifier;
   body: data_type;
   params: param list; (** list of parameters *)
+  span: code_span;
 }
 
 (** A session type definition ([session name = body])*)
@@ -303,22 +305,22 @@ and session_def = {
 let unit_dtype = `Tuple []
 
 (** Number of bits required to hold the tag for a variant type. *)
-let variant_tag_size (v: [>`Variant of (data_type option)*((identifier * (data_type option)*(literal option)) list)]) : int =
+let variant_tag_size (v: [>`Variant of (data_type option)*((identifier * (data_type option)*(literal option)) ast_node list)]) : int =
   match v with
   | `Variant (_, vlist) -> List.length vlist |> Utils.int_log2
 
 (** Data type a variant type constructor. *)
-let variant_lookup_dtype (v: [> `Variant of (data_type option)*((identifier * (data_type option) * (literal option)) list)]) (cstr: identifier) : data_type option =
+let variant_lookup_dtype (v: [> `Variant of (data_type option)*((identifier * (data_type option) * (literal option)) ast_node list)]) (cstr: identifier) : data_type option =
     match v with
     | `Variant (_, vlist) ->
-      List.find_opt (fun (x,_dt,_vl) -> x = cstr) vlist |> Option.map (fun (_,dt,_) -> dt) |> Option.join
+      List.find_opt (fun {d = (x,_,_); _} -> x = cstr) vlist |> Option.map (fun {d = (_,dt,_); _} -> dt) |> Option.join
 
 (** Index of a variant type constructor. *)
-let variant_lookup_index (v: [> `Variant of (data_type option)*((identifier * (data_type option) * (literal option)) list)]) (cstr: identifier) : int option =
+let variant_lookup_index (v: [> `Variant of (data_type option)*((identifier * (data_type option) * (literal option)) ast_node list)]) (cstr: identifier) : int option =
   let res : int option ref = ref None in
   match v with
   | `Variant (_,vlist) ->
-      List.iteri (fun i (x,_,v) ->
+      List.iteri (fun i {d = (x,_,v); _} ->
         if Option.is_none !res then begin
           if x = cstr then
             if Option.is_none v then
@@ -487,6 +489,7 @@ type 'a singleton_or_list = [
 (** Information specified in a message send operation. *)
 type send_pack = {
   send_msg_spec: message_specifier;
+  send_msg_span: code_span; (** code span of the message specifier *)
   send_data: expr_node;
   send_handshake: handshake_kind; (** [Blocking] for [send], [Instant] for [isend] *)
 }
@@ -494,6 +497,7 @@ type send_pack = {
 (** Information specified in a message receive operation. *)
 and recv_pack = {
   recv_msg_spec: message_specifier;
+  recv_msg_span: code_span; (** code span of the message specifier *)
   recv_handshake: handshake_kind; (** [Blocking] for [recv], [Instant] for [irecv] *)
 }
 and constructor_spec = {
@@ -657,6 +661,7 @@ type proc_def = {
   mutable args: endpoint_def ast_node list; (** endpoints passed from outside *)
   body: proc_def_body_maybe_extern; (** process body *)
   params: param list; (** compile-time parameters *)
+  span: code_span; (** code span of the process definition *)
 }
 
 (** An import directive for importing code from other files. *)
@@ -664,18 +669,28 @@ type import_directive = {
   file_name : string;
   is_extern : bool; (** is this import external?
       Currently an external import means importing SystemVerilog code *)
+  span: code_span;
 }
 type typed_arg = {
   arg_name: identifier;
   arg_type: data_type option; (** type of the argument, if any *)
+  span: code_span;
 }
 
 type func_def =  {
   name: identifier;
   args: typed_arg list;
   body: expr_node;
+  span: code_span;
 }
 (** A channel class definition, which is a set of message types. *)
+
+(** A name in a session type with its span, recorded by the parser for tooling. *)
+type session_ref =
+  | SessionMsgRef of message_specifier * code_span (** a message action [ep.m] or [#ep.m] *)
+  | SessionVarRef of identifier * code_span (** a use of a [rec] or [let] variable *)
+  | SessionBinderRef of identifier * code_span * code_span
+    (** a [rec] or [let] variable binding: the name's span and the span of its scope *)
 
 (** A compilation unit, corresponding to a source file. *)
 type compilation_unit = {
@@ -689,11 +704,13 @@ type compilation_unit = {
   procs: proc_def list;
   imports : import_directive list;
   _extern_procs : proc_def list; (** processes that are external, usable but not built *)
+  session_refs : session_ref list; (** names referenced in this unit's session types, in source order *)
 }
 
 let cunit_empty : compilation_unit =
   {cunit_file_name = None; channel_classes = []; type_defs = [];
-  session_defs = []; procs = []; imports = []; _extern_procs = []; macro_defs = []; func_defs = []; pools = []}
+  session_defs = []; procs = []; imports = []; _extern_procs = []; macro_defs = []; func_defs = []; pools = [];
+  session_refs = []}
 
 let cunit_add_channel_class
   (c : compilation_unit) (cc : channel_class_def) : compilation_unit =
@@ -874,14 +891,14 @@ and string_of_data_type (dtype : data_type) : string =
     in
     "Array[" ^ n' ^ "] (" ^ string_of_data_type d ^ ")"
   | `Variant (_, (id_opt_list)) ->
-      "Variant (" ^ String.concat ", " (List.map (fun (id, dt_opt, val_opt) ->
+      "Variant (" ^ String.concat ", " (List.map (fun {d = (id, dt_opt, val_opt); _} ->
         match (dt_opt, val_opt) with
         | (Some dt, None) -> id ^ ": " ^ string_of_data_type dt
         | (None, Some lit) -> id ^ ": " ^ string_of_literal lit
         | (Some dt, Some lit) -> id ^ ": " ^ string_of_data_type dt ^ " = " ^ string_of_literal lit
         | (None, None) -> id) id_opt_list) ^ ")"
   | `Record fields ->
-      "Record (" ^ String.concat ", " (List.map (fun (field_name, field_type) ->
+      "Record (" ^ String.concat ", " (List.map (fun {d = (field_name, field_type); _} ->
         field_name ^ ": " ^ string_of_data_type field_type) fields) ^ ")"
   | `Tuple dt_list ->
     (
@@ -970,11 +987,11 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | Assign (lv, e) ->
       let new_lv = substitute_lvalue id value idx lv in
       Assign (new_lv, subst e)
-  | Send {send_msg_spec; send_data; send_handshake} ->
+  | Send ({send_msg_spec; send_data; _} as sp) ->
       Send {
+        sp with
         send_msg_spec = sub_ep_index send_msg_spec idx id;
         send_data = subst send_data;
-        send_handshake
       }
   | Debug (DebugPrint (msg, exprs)) ->
       Debug (DebugPrint (msg, List.map subst exprs))

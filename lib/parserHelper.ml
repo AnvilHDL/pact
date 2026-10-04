@@ -75,3 +75,15 @@ let warn_deprecated_wildcard_arm (span : code_span) =
   SpanPrinter.warn
     "The '#' wildcard arm is deprecated; use an 'else { ... }' block instead."
     span ""
+
+
+(* Spans of names in session types, collected while parsing a unit. *)
+let session_refs : session_ref list ref = ref []
+
+let record_session_ref (r : session_ref) = session_refs := r :: !session_refs
+
+(** Returns the references recorded so far in source order, and clears them. *)
+let take_session_refs () : session_ref list =
+  let refs = List.rev !session_refs in
+  session_refs := [];
+  refs
