@@ -83,16 +83,16 @@ pool p15 { // false
     ep_le -- ep_ri : ch;
     in151 : ep.m1;⋀(ep.m2,ep.m3);#1,
     in152 : ep.m1;#1,
-    in153 : ⨁(ep.m2,*);#1,
-    in154 : ⨁(ep.m3,*);#1
+    in153 : ⨁(#ep.m2,*);#1,
+    in154 : ⨁(#ep.m3,*);#1
 }
 
 pool p16{
     ep_le -- ep_ri : ch;
     ip161 : ep.m1;⨁(ep.m2,ep.m3);#1,
-    ip162 : ⨁(ep.m1,*);#2,
-    ip163 : ⨁(ep.m2,*);#3,
-    ip164 : ⨁(ep.m3,*);#4
+    ip162 : ⨁(#ep.m1,*);#2,
+    ip163 : ⨁(#ep.m2,*);#3,
+    ip164 : ⨁(#ep.m3,*);#4
 
 }
 
@@ -104,7 +104,7 @@ pool p17 { // true
 
 pool p19 { // true
     ep_le -- ep_ri : ch;
-    ip191 : ⋀(ep.m1, ep.m2,*);#1,
+    ip191 : ⋀(#ep.m1, #ep.m2,*);#1,
     ip192 : #2;ep.m1;#1
 }
 pool p20{

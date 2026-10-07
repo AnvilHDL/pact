@@ -27,7 +27,7 @@ interface t11 (ep : left ch) = ⨁( #ep.req, #ep.ack, *)
 
 interface t12 (ep : left ch) = ⋀(ep.req, ep.ack) 
 
-interface t13 (ep : left ch) = ⋀( ep.req, ep.ack, *) 
+interface t13 (ep : left ch) = ⋀( #ep.req, #ep.ack, *) 
 
 
 interface t14 (ep : left ch) = μ X .  ⨁( #ep.req, * : X) 
@@ -46,7 +46,7 @@ interface  t20(ep : left ch) = #ep.m1 || #ep.m2
 
 interface t21(ep : left ch) = ⋀(#ep.m1, #ep.m2)
 interface t22(ep : left ch) = ⋀( ep.m1, ep.m2)
-interface t23(ep : left ch) = ⋀( ep.m1 : ep.m2, * : ep.m3)
+interface t23(ep : left ch) = ⋀( #ep.m1 : ep.m2, * : ep.m3)
 interface t23b(ep : left ch) = ⨁( #ep.m1 : ep.m2, *)
-interface t24(ep : left ch) = ⋀( ep.m1, ep.m2, *)
+interface t24(ep : left ch) = ⋀( #ep.m1, #ep.m2, *)
 interface t25(ep : left ch) = ⋀( #ep.m1 : #ep.m2, #ep.m3 : #ep.m4, * : #ep.m5)
