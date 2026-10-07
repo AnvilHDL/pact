@@ -366,8 +366,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
     | StyChoice (left, right) | StyFairChoice (left, right) ->
         mark_nonfinal ();
         TypeAutomaton.make_adversary auto current;
-        let fair = match sty with StyFairChoice _ -> true | _ -> infer_fair_choice left right in
-        if fair then TypeAutomaton.make_fair auto current;
+        (* Only a declared fair choice (++) is fair. *)
+        (match sty with StyFairChoice _ -> TypeAutomaton.make_fair auto current | _ -> ());
         let left_start = TypeAutomaton.new_state auto false in
         let right_start = TypeAutomaton.new_state auto false in
         TypeAutomaton.add_transition auto current left_start epsilon
@@ -377,11 +377,11 @@ let rec build_automaton (name : identifier option) (st : session_type)
         build left left_start rec_env let_env
         @ build right right_start rec_env let_env
     | StyFuture body ->
-        (* F tau is mu X . (tau + #;X). *)
+        (* F tau is mu X . (tau ++ #;X). *)
         let rec_var = fresh_future_rec_var () in
         let expansion =
           StyRec (rec_var,
-            StyChoice (body, StySeq (StyAtom (AtomDelay 1), StyVar rec_var)))
+            StyFairChoice (body, StySeq (StyAtom (AtomDelay 1), StyVar rec_var)))
         in
         build expansion current rec_env let_env
     | StyXOffer offerings ->

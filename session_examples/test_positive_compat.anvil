@@ -114,7 +114,7 @@ pool p20{
 } 
 pool p21 {
     ep_le -- ep_ri : ch;
-    in211 : (ep1.m1 + ep2.m2);#1,
+    in211 : (ep1.m1 ++ ep2.m2);#1,
     in212 : ep1.m1;#1,
     in213 : ep2.m2;#1
 }

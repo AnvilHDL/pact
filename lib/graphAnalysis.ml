@@ -584,7 +584,7 @@ let events_max_dist events lookup_message ev =
         | Static _ | Dependent _ -> 0
         | _ -> event_distance_max
       )
-    | `Choice (msg_groups, _) ->
+    | `Choice (msg_groups, _, _) ->
       List.fold_left (fun mx m ->
         let wild_card = {msg="*"; endpoint = "*"  } in
         if m = wild_card then
@@ -922,8 +922,8 @@ let rec unfold_leaves ~is_leaf ~shadows expr_full_node expr_node =
       Join (unfold e1, unfold e2)
     | Wait (e1, e2) ->
       Wait (unfold e1, unfold e2)
-    | IfExpr (e1, e2, e3) ->
-      IfExpr (unfold e1, unfold e2, unfold e3)
+    | IfExpr (e1, e2, e3, fair) ->
+      IfExpr (unfold e1, unfold e2, unfold e3, fair)
     | TrySend (sp, e1, e2) ->
       let sp = {sp with send_data = unfold sp.send_data} in
       TrySend (sp, unfold e1, unfold e2)
@@ -956,12 +956,13 @@ let rec unfold_leaves ~is_leaf ~shadows expr_full_node expr_node =
       SharedAssign (ident, unfold e')
     | List es ->
       List (List.map unfold es)
-    | XOffer (arms, selector) ->
+    | XOffer (arms, selector, fair) ->
       XOffer (
         List.map (fun (arm_type, e_body) ->
           (arm_type, unfold e_body)
         ) arms,
-        selector
+        selector,
+        fair
       )
     | Offer arms ->
       Offer (

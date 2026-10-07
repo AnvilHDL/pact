@@ -43,7 +43,7 @@ let describe_atomic_delay = function
   | `Recv (msg, kind) ->
     Printf.sprintf "%s %s" (match kind with Lang.Instant -> "irecv" | Lang.Blocking -> "recv")
       (Lang.string_of_msg_spec msg)
-  | `Choice (msg_groups, _) ->
+  | `Choice (msg_groups, _, _) ->
     Printf.sprintf "choice among %s"
       (msg_groups |> List.map format_msg_group |> String.concat " | ")
   | `Sync shared_ident -> Printf.sprintf "sync on %s" shared_ident
@@ -224,7 +224,7 @@ let collect_reg_states config g =
       | `Send _ | `Recv _| `Sync _ ->
         let sn = EventStateFormatter.format_syncstate g.thread_id e.id in
         [("logic", sn)]
-      |  `Choice (msg_list, kind) ->
+      |  `Choice (msg_list, kind, _) ->
         (* An instantaneous choice never waits, so it needs no syncstate. *)
         if kind = Lang.Instant || is_wildcard_present msg_list then
           []
@@ -426,7 +426,7 @@ let codegen_next config printer (graphs : EventGraph.event_graph_collection)
               | None ->
                   Printf.sprintf "assign %s = %s || %s_q %s ;" cn cn' sn trigger |> print_line;
                   Printf.sprintf "assign %s_n = 1'b0;" sn |> print_line)
-            | `Choice (msg_groups, choice_kind) ->
+            | `Choice (msg_groups, choice_kind, _) ->
               let msg_list = flatten_choice_msg_groups msg_groups in
               let is_wildcard_present = is_wildcard_present msg_groups in
               (*For this we want to wait till or of the valid/ready port becomes 1 *)
@@ -1127,7 +1127,7 @@ let codegen_sustained_actions (config : Config.compile_config) printer (graphs :
     (* Handle Choice events: assert signals while waiting for handshake *)
     (* A retried choice is wrapped in a recursion; it is still the same choice. *)
     let rec choice_source = function
-      | `Seq (p, `Choice (groups, kind)) -> Some (p, groups, kind)
+      | `Seq (p, `Choice (groups, kind, _)) -> Some (p, groups, kind)
       | `Recurse (src, _) -> choice_source src
       | _ -> None
     in

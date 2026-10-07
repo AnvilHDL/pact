@@ -523,7 +523,7 @@ and expr =
   | Wait of expr_node * expr_node (** [a => b] *)
   | Cycle of int
   | Sync of identifier (** synchronise on a shared value *)
-  | IfExpr of expr_node * expr_node * expr_node
+  | IfExpr of expr_node * expr_node * expr_node * bool (** [fair if] when the flag is set: both outcomes recur *)
   | TryRecv of identifier * recv_pack * expr_node * expr_node (** try recv *)
   | TrySend of send_pack * expr_node * expr_node (** try send *)
   | Construct of constructor_spec * expr_node option (** construct a variant type value with a constructor *)
@@ -535,8 +535,8 @@ and expr =
   | Ready of message_specifier (** [ready(a, b)] *)
   | Probe of message_specifier (** [probe(a, b)] *)
   | Match of expr_node * ((expr_node * expr_node option) list)
-  | XOffer of ((offer_arm_type * expr_node) list) * ((identifier * xoffer_order) option)
-    (** exclusive offer with an optional selector wire and the order it imposes *)
+  | XOffer of ((offer_arm_type * expr_node) list) * ((identifier * xoffer_order) option) * bool
+    (** exclusive offer with an optional selector wire and the order it imposes; [fair xoffer] when the flag is set *)
   | Offer of ((offer_arm_type * expr_node) list)
   | OfferMatch of ((offer_arm_type * expr_node) list) * offer_match_arm list
     (** offer continued by the arm for exactly the offer arms taken *)
@@ -777,8 +777,8 @@ let rec string_of_expr (e : expr) : string =
   | Wait (e1, e2) -> "Wait (" ^ string_of_expr e1.d ^ " => " ^ string_of_expr e2.d ^ ")"
   | Cycle n -> "Cycle " ^ string_of_int n
   | Sync id -> "Sync " ^ id
-  | IfExpr (cond, then_e, else_e) ->
-      "If (" ^ string_of_expr cond.d ^ ") { " ^ string_of_expr then_e.d ^ " } else { " ^ string_of_expr else_e.d ^ " }"
+  | IfExpr (cond, then_e, else_e, fair) ->
+      (if fair then "Fair" else "") ^ "If (" ^ string_of_expr cond.d ^ ") { " ^ string_of_expr then_e.d ^ " } else { " ^ string_of_expr else_e.d ^ " }"
   | TryRecv (id, rp, ok_e, fail_e) ->
       "TryRecv " ^ id ^ " <- " ^ string_of_msg_spec rp.recv_msg_spec ^
       " { ok: " ^ string_of_expr ok_e.d ^ ", fail: " ^ string_of_expr fail_e.d ^ " }"
@@ -828,7 +828,7 @@ let rec string_of_expr (e : expr) : string =
            "Debug:print(\"" ^ fmt ^ "\"" ^
            (if args = [] then "" else ", " ^ String.concat ", " (List.map (fun a -> string_of_expr a.d) args)) ^ ")"
        | DebugFinish -> "Debug:finish")
-  | XOffer (arms, sel_opt) ->
+  | XOffer (arms, sel_opt, fair) ->
       let arm_str (arm_ty, body) =
         string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
       in
@@ -836,7 +836,7 @@ let rec string_of_expr (e : expr) : string =
         | Some (s, OrderRotate) -> " sel=" ^ s
         | Some (s, OrderTree) -> " tree sel=" ^ s
         | None -> "" in
-      "XOffer" ^ sel_str ^ " { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
+      (if fair then "FairXOffer" else "XOffer") ^ sel_str ^ " { " ^ String.concat " | " (List.map arm_str arms) ^ " }"
   | Offer arms ->
       let arm_str (arm_ty, body) =
         string_of_offer_arm arm_ty ^ " -> " ^ string_of_expr body.d
@@ -998,11 +998,12 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
   | Debug (DebugPrint (msg, exprs)) ->
       Debug (DebugPrint (msg, List.map subst exprs))
   | Debug other_debug -> Debug other_debug
-  | IfExpr (cond, then_expr, else_expr) ->
+  | IfExpr (cond, then_expr, else_expr, fair) ->
       IfExpr (
         subst cond,
         subst then_expr,
-        subst else_expr
+        subst else_expr,
+        fair
       )
   | Indirect (e, field) ->
       Indirect (subst e, field)
@@ -1037,12 +1038,13 @@ let rec substitute_expr_identifier (id: identifier) (value: expr_node) (idx : in
       ident,
       subst e
     )
-  | XOffer (arms, selector) ->
+  | XOffer (arms, selector, fair) ->
     XOffer (
       List.map (fun (arm_type, e_body) ->
         (arm_type, subst e_body)
       ) arms,
-      selector
+      selector,
+      fair
     )
   | Offer arms ->
     Offer (

@@ -71,7 +71,7 @@ let expr_parts (e : expr) : string * (string option * expr_node) list =
   | Wait (a, b) -> (">>", [(Some "first", a); (Some "then", b)])
   | Cycle n -> (Printf.sprintf "cycle %d" n, [])
   | Sync i -> ("sync " ^ i, [])
-  | IfExpr (c, t, f) -> ("if", [(Some "cond", c); (Some "then", t); (Some "else", f)])
+  | IfExpr (c, t, f, fair) -> ((if fair then "fair if" else "if"), [(Some "cond", c); (Some "then", t); (Some "else", f)])
   | TryRecv (id, rp, ok, fail) ->
     (Printf.sprintf "try %s = %s %s" id (recv_kw rp) (string_of_msg_spec rp.recv_msg_spec),
      [(Some "ok", ok); (Some "else", fail)])
@@ -94,8 +94,8 @@ let expr_parts (e : expr) : string * (string option * expr_node) list =
      (Some "subject", subject)
      :: List.concat_map (fun (pat, body) ->
           (Some "case", pat) :: List.map (fun b -> (Some "=>", b)) (Option.to_list body)) cases)
-  | XOffer (list, sel) ->
-    arms ("xoffer" ^ (match sel with
+  | XOffer (list, sel, fair) ->
+    arms ((if fair then "fair xoffer" else "xoffer") ^ (match sel with
       | Some (s, OrderRotate) -> " " ^ s
       | Some (s, OrderTree) -> " tree " ^ s
       | None -> "")) list

@@ -32,8 +32,8 @@ type atomic_delay = [
     (** sending of a message; [Instant] sends complete in the same cycle *)
   | `Recv of Lang.message_specifier * Lang.handshake_kind
     (** receiving of a message; [Instant] receives complete in the same cycle *)
-  | `Choice of Lang.message_specifier list list * Lang.handshake_kind
-    (** making a choice among message groups; an [Instant] choice does not wait *)
+  | `Choice of Lang.message_specifier list list * Lang.handshake_kind * bool
+    (** making a choice among message groups; an [Instant] choice does not wait; the flag marks a [fair xoffer] *)
   | `Sync of Lang.identifier (** synchronising on a local shared value *)
 ]
 
@@ -148,6 +148,8 @@ and branch_info = {
   branch_cond_v : lowering_data; (** the value used to decide branch *)
   mutable branch_cond : branch_cond; (** conditions *)
   branch_count : int;
+  branch_fair : bool; (** a [fair if] *)
+  branch_comm : bool; (** an if or xoffer whose branches communicate, so its fairness must match the type *)
   mutable branches_to : event list;
   mutable branches_val : event list;
 }

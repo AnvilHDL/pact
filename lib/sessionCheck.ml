@@ -21,6 +21,7 @@ type head_continuation_pair = {
   cont : session_type option;
   mutable visited : bool;
   is_choice : bool;
+  is_fair : bool; (** an exclusive offer declared fair (^^) *)
   is_parallel : bool;
   recvar_map : (identifier * session_type) list;
 }
@@ -29,6 +30,7 @@ let default_head_continuation_pair = {
   cont = None;
   visited = false;
   is_choice = false;
+  is_fair = false;
   is_parallel = false;
   recvar_map = [];
 }
@@ -154,12 +156,14 @@ let offering_body_session (offering : offering_session_type) =
   | Lang.AtomDelay _ | Lang.AtomTerminal _ ->
       continuation_or_true offering.continuation
 
-let rec build_choice_from_xofferings offerings =
+let rec build_choice_from_xofferings ?(fair = false) offerings =
   match offerings with
   | [] -> StySkip
   | [only] -> offering_body_session only
   | first :: rest ->
-      StyChoice (offering_body_session first, build_choice_from_xofferings rest)
+      let rest = build_choice_from_xofferings ~fair rest in
+      if fair then StyFairChoice (offering_body_session first, rest)
+      else StyChoice (offering_body_session first, rest)
 
 let offering_session_after_msg ?kind (offering : offering_session_type) msg =
   let act_matches act =
@@ -243,6 +247,7 @@ let normalize_for_match (recvar_map : (identifier * session_type) list) sty =
         | left'', StySkip -> left''
         | _ -> StyParallel (left', right'))
     | StyChoice (left, right) -> StyChoice (aux left, aux right)
+    | StyFairChoice (left, right) -> StyFairChoice (aux left, aux right)
     | _ -> st'
   in
   aux sty
@@ -323,7 +328,7 @@ let residual_of_head_cont hc =
     match hc.head with
     | Atom act -> Some (StyAtom act)
     | Offers offerings -> Some (StyOffer offerings)
-    | XOffers offerings -> Some (StyXOffer offerings)
+    | XOffers offerings -> Some (if hc.is_fair then StyFairXOffer offerings else StyXOffer offerings)
     | OfferMatchPending cases -> Some (StyOfferMatch ([], cases))
     | Terminal ParallelDone -> Some StySkip
     | Terminal RecurseJump -> None
@@ -388,7 +393,7 @@ let choice_residual_for_head ?kind msg_list hc =
       Some (residual_with_head (StyOffer (nonblocking_offerings offerings)) hc.cont)
   | XOffers offerings when match_offerings_with_msgs ?kind offerings msg_list ->
       Some (seq_of_sty_opt
-              (Some (build_choice_from_xofferings (nonblocking_offerings offerings)))
+              (Some (build_choice_from_xofferings ~fair:hc.is_fair (nonblocking_offerings offerings)))
               hc.cont)
   | _ -> None
 
@@ -400,7 +405,7 @@ let head_matches_offer_choice ?kind msg_list hc =
 let choice_msg_lists_of_children child_events =
   List.filter_map (fun child_ev ->
     match child_ev.source with
-    | `Seq (_, `Choice (msg_list, _)) -> Some msg_list
+    | `Seq (_, `Choice (msg_list, _, _)) -> Some msg_list
     | _ -> None
   ) child_events
 
@@ -435,6 +440,10 @@ let rec normalize_residual_for_match recvar_map sty =
       let left = normalize_residual_for_match recvar_map left in
       let right = normalize_residual_for_match recvar_map right in
       if left = right then left else StyChoice (left, right)
+  | StyFairChoice (left, right) ->
+      let left = normalize_residual_for_match recvar_map left in
+      let right = normalize_residual_for_match recvar_map right in
+      if left = right then left else StyFairChoice (left, right)
   | _ -> sty'
 
 
@@ -478,7 +487,7 @@ let residual_matches recvar_map lhs rhs init_ty =
    e.g. leaving [rec B . (() + (X ; B))] without doing X. *)
 let rec residual_after_skip_choice = function
   | StySkip -> Some None
-  | StyChoice (a, b) ->
+  | StyChoice (a, b) | StyFairChoice (a, b) ->
       (match residual_after_skip_choice a with
       | Some r -> Some r
       | None -> residual_after_skip_choice b)
@@ -557,7 +566,7 @@ let rec get_head_continuation_pair
       head_conts_transform_1 @ head_conts_transform_2
     )
   )
-  | StyChoice (s1, s2) -> (
+  | StyChoice (s1, s2) | StyFairChoice (s1, s2) -> (
       let head_conts1 = get_head_continuation_pair ~inside_parallel s1 sp rec_var_context in
       let head_conts2 = get_head_continuation_pair ~inside_parallel s2 sp rec_var_context in
       List.map (fun hc -> {hc with is_choice = true}) (head_conts1 @ head_conts2)
@@ -567,8 +576,9 @@ let rec get_head_continuation_pair
     let possible_delay = {default_head_continuation_pair with head = Atom (AtomDelay 1); cont = Some (StyFuture s); is_choice = true; is_parallel = inside_parallel; recvar_map = rec_var_context} in
     let head_conts_transform = List.map (fun hc -> {hc with is_choice = true}) head_conts in
     possible_delay :: head_conts_transform
-  | StyXOffer offerings ->
-      [{default_head_continuation_pair with head = XOffers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
+  | StyXOffer offerings | StyFairXOffer offerings ->
+      let is_fair = (match sty_node with StyFairXOffer _ -> true | _ -> false) in
+      [{default_head_continuation_pair with head = XOffers (expand_blocking_offer sty_node offerings); cont = None; is_fair; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOffer offerings ->
       [{default_head_continuation_pair with head = Offers (expand_blocking_offer sty_node offerings); cont = None; is_parallel = inside_parallel; recvar_map = default_head_continuation_pair.recvar_map @ rec_var_context}]
   | StyOfferMatch ([], cases) ->
@@ -646,9 +656,9 @@ let create_cont del bound cont =
   | None, None -> cont
   | _ -> raise (Except.TypeError [Text "Invalid delay comparison in continuation creation"])
 
-let choice_of_sty_opt sty_opt cont_opt =
+let choice_of_sty_opt ?(fair = false) sty_opt cont_opt =
   match sty_opt, cont_opt with
-  | Some sty, Some cont -> Some (StyChoice (sty, cont))
+  | Some sty, Some cont -> Some (if fair then StyFairChoice (sty, cont) else StyChoice (sty, cont))
   | Some sty, None -> Some sty
   | None, Some cont -> Some cont
   | None, None -> None
@@ -674,17 +684,18 @@ let extract_delay_continuation init n' hc =
       | None, Some c2 -> (add_delay del1 del2, Some c2)
       | Some c1, Some c2 -> (get_max del1 del2, Some (StyParallel(c1, c2)))
     )
-    | StyChoice(s1,s2) -> (
+    | StyChoice(s1,s2) | StyFairChoice(s1,s2) -> (
+      let fair = (match st with StyFairChoice _ -> true | _ -> false) in
       let del1, cont1 = extract_delay (Some s1) acc in
       let del2, cont2 = extract_delay (Some s2) acc in
       let max_del = get_min del1 del2 in
       let cont1' = if gt del1 max_del then create_cont max_del del1 cont1 else cont1 in
       let cont2' = if gt del2 max_del then create_cont max_del del2 cont2 else cont2 in
-      (max_del, (choice_of_sty_opt cont1' cont2')) 
+      (max_del, (choice_of_sty_opt ~fair cont1' cont2')) 
     )
     | StyFuture _ ->
         (None, st')
-    | StyXOffer _ ->
+    | StyXOffer _ | StyFairXOffer _ ->
         (acc, st')
     | StyOffer _ ->
         (acc, st')
@@ -747,14 +758,14 @@ let delay_continuation_after_terminal_closure n sp head_conts init =
   search [] head_conts
 
 (* Generalized session type checking : traverse event graph and assign types to node for successors based on edges *)
-let check_generalized_session 
-    (_config : Config.compile_config) 
-    (g : event_graph) 
+let check_generalized_session
+    (_config : Config.compile_config)
+    (g : event_graph)
     module_name =
-  
+
   if Option.is_none g.interface_protocol then
       CliOutput.warning "No interface protocol specified for thread %d in module %s, skipping check" (g.thread_id+1) module_name
-  
+
   else
     let protocol_node = Option.get g.interface_protocol in
     GraphAnalysis.events_prepare_outs g.events;
@@ -1092,11 +1103,21 @@ let check_generalized_session
                        mark_structural_propagation ();
                        assign_child_residual ~from_structural:true child_ev structural_recvars structural_residual)
 
-              | `Seq (_, `Choice (msg_list, kind)) ->
+              | `Seq (_, `Choice (msg_list, kind, choice_fair)) ->
                   let matched = ref false in
                   List.iter (fun hc ->
                     match choice_residual_for_head ~kind msg_list hc with
                     | Some residual ->
+                      (* A fair exclusive offer (^^) needs [fair xoffer], and a plain one a plain xoffer. *)
+                      (match hc.head with
+                       | XOffers _ when hc.is_fair <> choice_fair ->
+                           error_handler g
+                             (Printf.sprintf "Fairness mismatch at event %d: the type has %s here, so the process needs %s"
+                                child_ev.id
+                                (if hc.is_fair then "a fair exclusive offer (^^)" else "a plain exclusive offer (^)")
+                                (if hc.is_fair then "fair xoffer" else "a plain xoffer"))
+                             g.thread_codespan module_name
+                       | _ -> ());
                       matched := true;
                       hc.visited <- true;
                       assign_child_residual child_ev hc.recvar_map residual
@@ -1135,6 +1156,23 @@ let check_generalized_session
                       ) continuations)
 
               | `Root Some (_, branches) ->
+                  (* When the type starts with a choice, ++ needs [fair if] and + a plain if. *)
+                  let rec leading_choice = function
+                    | StyChoice _ -> Some false
+                    | StyFairChoice _ -> Some true
+                    | StySeq (a, _) | StyRec (_, a) -> leading_choice a
+                    | _ -> None
+                  in
+                  (match Option.bind current_residual leading_choice with
+                   | Some type_fair when branches.owner_branch.branch_comm
+                                         && type_fair <> branches.owner_branch.branch_fair ->
+                       error_handler g
+                         (Printf.sprintf "Fairness mismatch at event %d: the type has %s here, so the branch needs %s"
+                            child_ev.id
+                            (if type_fair then "a fair choice (++)" else "a plain choice (+)")
+                            (if type_fair then "fair if (or fair xoffer)" else "a plain if"))
+                         g.thread_codespan module_name
+                   | _ -> ());
                   let has_immediate_actions =
                     List.filter (fun a ->
                       match a.d with
@@ -1383,7 +1421,7 @@ let check_generalized_session
               let recvars = get_event_recvars r @ get_event_recvars t in
               let entering =
                 match src with
-                | `Seq (_, `Choice (msg_list, kind)) ->
+                | `Seq (_, `Choice (msg_list, kind, _)) ->
                   get_head_continuation_pair rr g.thread_codespan recvars
                   |> List.find_map (choice_residual_for_head ~kind msg_list)
                 | _ -> Some (Some rr)
@@ -1450,7 +1488,7 @@ let check_generalized_session
     (* A residual that may still choose to end lets the iteration end. *)
     let rec can_end = function
       | StySkip -> true
-      | StyChoice (a, b) -> can_end a || can_end b
+      | StyChoice (a, b) | StyFairChoice (a, b) -> can_end a || can_end b
       | StySeq (a, b) | StyParallel (a, b) -> can_end a && can_end b
       | _ -> false
     in

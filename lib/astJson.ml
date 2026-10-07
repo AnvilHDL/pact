@@ -373,12 +373,12 @@ let rec session_text ?(prec = 0) (s : session_type) : string =
   | StySeq (a, b) -> paren 0 (session_text ~prec:1 a ^ " ; " ^ session_text b)
   | StyParallel (a, b) -> paren 1 (session_text ~prec:1 a ^ " || " ^ session_text ~prec:2 b)
   | StyChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " + " ^ session_text ~prec:3 b)
-  | StyFairChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " +ᶠ " ^ session_text ~prec:3 b)
+  | StyFairChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " ++ " ^ session_text ~prec:3 b)
   | StyFuture s -> paren 3 ("F " ^ session_text ~prec:3 s)
   | StyAtom a -> action_text a
   | StyOffer arms -> "&(" ^ offerings_text arms ^ ")"
   | StyXOffer arms -> "^(" ^ offerings_text arms ^ ")"
-  | StyFairXOffer arms -> "^ᶠ(" ^ offerings_text arms ^ ")"
+  | StyFairXOffer arms -> "^^(" ^ offerings_text arms ^ ")"
   | StyOfferMatch (arms, cases) ->
     "&(" ^ offerings_text arms ^ ").(" ^ String.concat ", " (List.map (fun (c : offer_match_case) ->
       let on = match c.match_on with
@@ -513,7 +513,7 @@ and expr sc (e : expr_node) : Lang.code_span list * json =
     ([], ex ty [("lhs", x a); ("rhs", expr_node sc' b)])
   | Cycle n -> ([], ex "cycle" [("cycles", int n)])
   | Sync id -> (SM.find_opt id sc.shared |> Option.to_list, ex "sync" [("id", str id)])
-  | IfExpr (c, t, f) -> ([], ex "if_expr" [("cond", x c); ("then", x t); ("else", x f)])
+  | IfExpr (c, t, f, fair) -> ([], ex "if_expr" [("cond", x c); ("then", x t); ("else", x f); ("fair", bool fair)])
   | TryRecv (id, rp, t, f) ->
     let sc' = bind sc id e.span (message_dtype sc rp.recv_msg_spec) in
     ([], ex "try_recv" [("id", str id); ("recv_pack", recv_pack sc rp); ("then", expr_node sc' t); ("else", x f)])
@@ -556,8 +556,9 @@ and expr sc (e : expr_node) : Lang.code_span list * json =
        ("expr", x v);
        ("branches", list (fun (pat, br) ->
           kind "branch" [("pattern", x pat); ("branch", opt x br)]) branches)])
-  | XOffer (arms, selector) ->
+  | XOffer (arms, selector, fair) ->
     ([], ex "xoffer" [
+       ("fair", bool fair);
        ("arms", list (offer_arm sc) arms);
        ("selector", opt (fun (id, order) ->
           `Assoc [("id", str id); ("order", str (match order with OrderRotate -> "rotate" | OrderTree -> "tree"))])

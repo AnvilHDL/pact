@@ -24,6 +24,9 @@
 %token SHR                  (* shr *)
 %token KEYWORD_CONST        (* const *)
 %token KEYWORD_XOFFER       (* xoffer *)
+%token KEYWORD_FAIR         (* fair *)
+%token FAIR_PLUS            (* ++ or +ᶠ, fair choice *)
+%token FAIR_XOR             (* ^^, ⊕ᶠ or ⨁ᶠ, fair exclusive offer *)
 %token KEYWORD_READY        (* ready *)
 %token KEYWORD_VOID         (* void *)
 %token KEYWORD_PROBE        (* probe *)
@@ -112,7 +115,7 @@
 %right KEYWORD_LET KEYWORD_SET KEYWORD_PUT
 %left DOUBLE_AND DOUBLE_OR
 %left EXCL_EQ DOUBLE_EQ
-%left XOR AND OR PLUS MINUS
+%left XOR AND OR PLUS FAIR_PLUS MINUS
 %left SHL SHR
 %left PERIOD
 %left ASTERISK
@@ -399,6 +402,8 @@ local_session_type:
   { Lang.StySeq (act1, act2) }
 | act1 = local_session_type ;PLUS; act2 = local_session_type
   { Lang.StyChoice (act1, act2) }
+| act1 = local_session_type; FAIR_PLUS; act2 = local_session_type
+  { Lang.StyFairChoice (act1, act2) }
 | and_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyOffer offering_list }
 | and_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN;
@@ -406,6 +411,8 @@ local_session_type:
   { Lang.StyOfferMatch (offering_list, cases) }
 | xor_sym; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
   { Lang.StyXOffer offering_list }
+| FAIR_XOR; LEFT_PAREN offering_list = separated_list(COMMA, offering_arm); RIGHT_PAREN
+  { Lang.StyFairXOffer offering_list }
 | act1 = local_session_type; DOUBLE_OR; act2 = local_session_type
   { Lang.StyParallel (act1, act2) }
 | LEFT_PAREN; sty = local_session_type; RIGHT_PAREN
@@ -877,19 +884,19 @@ expr:
   { Lang.Debug Lang.DebugFinish }
 | LEFT_BRACKET; li = separated_list(COMMA, node(expr)); RIGHT_BRACKET
   { Lang.List li }
-| KEYWORD_XOFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+| fair = boption(KEYWORD_FAIR); KEYWORD_XOFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
-  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, None) }
-| KEYWORD_XOFFER; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, None, fair) }
+| fair = boption(KEYWORD_FAIR); KEYWORD_XOFFER; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
-  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some (selector, Lang.OrderRotate)) }
-| KEYWORD_XOFFER; order = IDENT; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
+  { Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some (selector, Lang.OrderRotate), fair) }
+| fair = boption(KEYWORD_FAIR); KEYWORD_XOFFER; order = IDENT; selector = IDENT; LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
   { let order = match order with
       | "rotate" -> Lang.OrderRotate
       | "tree" -> Lang.OrderTree
       | _ -> raise (Except.TypeError [Except.Text ("Unknown xoffer order " ^ order ^ "; use rotate or tree")]) in
-    Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some (selector, order)) }
+    Lang.XOffer (ParserHelper.add_offer_else offer_arms else_v, Some (selector, order), fair) }
 | KEYWORD_OFFER;  LEFT_BRACE; offer_arms = separated_list(COMMA, offer_arm); RIGHT_BRACE;
   else_v = offer_else_branch?
   { Lang.Offer (ParserHelper.add_offer_else offer_arms else_v) }
@@ -902,9 +909,9 @@ expr_in_parenthese:
 ;
 
 if_branch:
-| KEYWORD_IF; cond = node(expr); LEFT_BRACE; then_v = node(expr); RIGHT_BRACE;
+| fair = boption(KEYWORD_FAIR); KEYWORD_IF; cond = node(expr); LEFT_BRACE; then_v = node(expr); RIGHT_BRACE;
   else_v = node(else_branch)?
-  { Lang.IfExpr (cond, then_v, Option.value ~default:Lang.dummy_unit_node else_v) }
+  { Lang.IfExpr (cond, then_v, Option.value ~default:Lang.dummy_unit_node else_v, fair) }
 // | KEYWORD_TRY; ident = IDENT; EQUAL; KEYWORD_RECV; recv_pack = recv_pack
 //   { Lang.TryRecv (ident, recv_pack, Lang.dummy_unit_node, Lang.dummy_unit_node) }
 | KEYWORD_TRY; ident = IDENT; EQUAL; KEYWORD_IRECV; recv_pack = recv_pack;

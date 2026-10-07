@@ -57,18 +57,19 @@ let rec abs (funcs : func_def list) (e : expr_node) : session_type =
   | Join (a, b) -> par (abs a) (abs b)
   | Wait (a, b) -> seq (abs a) (abs b)
   | Cycle n -> if n <= 0 then StySkip else StyAtom (AtomDelay n)
-  (* For now every inferred choice is fair. *)
-  | IfExpr (c, t, f) -> seq (abs c) (StyFairChoice (abs t, abs f))
+  (* Only [fair if] and [fair xoffer] give fair choices. *)
+  | IfExpr (c, t, f, fair) ->
+      seq (abs c) (if fair then StyFairChoice (abs t, abs f) else StyChoice (abs t, abs f))
   | Match (v, arms) ->
       let bodies = List.map (fun (_, body) -> match body with Some b -> abs b | None -> StySkip) arms in
       (match List.rev bodies with
        | [] -> abs v
-       | last :: rest -> seq (abs v) (List.fold_left (fun acc b -> StyFairChoice (b, acc)) last rest))
+       | last :: rest -> seq (abs v) (List.fold_left (fun acc b -> StyChoice (b, acc)) last rest))
   | Send sp -> seq (abs sp.send_data) (StyAtom (AtomicAct (send_atom sp)))
   | Recv rp -> StyAtom (AtomicAct (recv_atom rp))
   | TrySend (sp, t, f) -> seq (abs sp.send_data) (attempt (send_atom sp) t f)
   | TryRecv (_, rp, t, f) -> attempt (recv_atom rp) t f
-  | XOffer (arms, _) -> StyFairXOffer (List.map arm arms)
+  | XOffer (arms, _, fair) -> if fair then StyFairXOffer (List.map arm arms) else StyXOffer (List.map arm arms)
   | Offer arms -> StyOffer (List.map arm arms)
   | OfferMatch (arms, cases) ->
       StyOfferMatch (List.map arm arms,
@@ -76,6 +77,16 @@ let rec abs (funcs : func_def list) (e : expr_node) : session_type =
   | Recursion (id, body) -> StyRec (id, abs body)
   | Recursor id -> StyVar id
   | Recurse -> unsupported e "an anonymous recurse"
+
+(* Whether an expression sends or receives anything (unknown calls count as yes). *)
+let communicates funcs e =
+  let rec has_msg sty = match sty with
+    | StyAtom (AtomicAct _ | AtomConjunction _) | StyOffer _ | StyXOffer _ | StyFairXOffer _ | StyOfferMatch _ -> true
+    | StySeq (a, b) | StyChoice (a, b) | StyFairChoice (a, b) | StyParallel (a, b) | StyLet (_, a, b) -> has_msg a || has_msg b
+    | StyFuture a | StyRec (_, a) | StyForall (_, _, _, a, _) | StyAtom (AtomTerminal a) -> has_msg a
+    | StyAtom (AtomDelay _) | StySkip | StyEnd _ | StyVar _ -> false
+  in
+  try has_msg (abs funcs e) with _ -> true
 
 (* The type of one loop iteration; the loop body ends in recurse, which repetition restores. *)
 let infer_thread funcs (thread : expr_node) =

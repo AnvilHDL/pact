@@ -41,6 +41,11 @@ rule read =
   | "∑"      { SUM_SYMBOL }
   | "∏"      { PROD_SYMBOL }
   | "⨁"      { XOR_SYMBOL } 
+  | "^^"      { FAIR_XOR }
+  | "⊕ᶠ"     { FAIR_XOR }
+  | "⨁ᶠ"     { FAIR_XOR }
+  | "++"      { FAIR_PLUS }
+  | "+ᶠ"      { FAIR_PLUS }
   | "⊕"      { XOR_SYMBOL }
   | "⋀"      { AND_SYMBOL } 
   | "∧"      { AND_SYMBOL }
@@ -88,6 +93,7 @@ rule read =
   | "shr"     { SHR }
   | "let"     { KEYWORD_LET }
   | "if"      { KEYWORD_IF }
+  | "fair"    { KEYWORD_FAIR }
   | "else"    { KEYWORD_ELSE }
   | "send"    { KEYWORD_SEND }
   | "recv"    { KEYWORD_RECV }

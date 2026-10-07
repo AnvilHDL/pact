@@ -575,6 +575,8 @@ module CombSimplPass = struct
             branch_cond_v = replace_lowering_data br_info.branch_cond_v;
             branch_cond = replace_branch_cond br_info.branch_cond;
             branch_count = br_info.branch_count;
+            branch_fair = br_info.branch_fair;
+            branch_comm = br_info.branch_comm;
             branches_to = List.map replace_event br_info.branches_to;
             branches_val = List.map replace_event br_info.branches_val;
           }

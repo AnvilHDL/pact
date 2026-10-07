@@ -97,9 +97,9 @@ module Typing = struct
     let ev = event_create g (`Later (current, td.lt.live)) in
     {ld = {td with lt = {td.lt with live = ev}}}
 
-  let offer_condition g (ctx : build_context) (m_list : message_specifier list list)
+  let offer_condition ?(fair = false) g (ctx : build_context) (m_list : message_specifier list list)
       (kind : handshake_kind) : node_data =
-  let live_event = event_create g (`Seq (ctx.current, `Choice (m_list, kind))) in
+  let live_event = event_create g (`Seq (ctx.current, `Choice (m_list, kind, fair))) in
     {ld = {w = None; lt = {live = live_event; dead = [(live_event, `Eternal)]}; reg_borrows = []; dtype = unit_dtype}}
   let immediate_data _g (w : wire option) dtype (current : event) = {ld = {w; lt = lifetime_immediate current; reg_borrows = []; dtype}}
   let const_data _g (w : wire option) dtype (current : event) = {ld = {w; lt = lifetime_const current; reg_borrows = []; dtype}}

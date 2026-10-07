@@ -358,6 +358,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
       branch_cond = (let pats = List.map (fun td -> td.ld) patterns in
         if default = [] then MatchCasesNoDefault pats else MatchCases pats);
       branch_count = List.length ordered;
+      branch_fair = false;
+      branch_comm = false;
       branches_to = [];
       branches_val = [];
     } in
@@ -593,7 +595,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
     graph.wires <- wires;
     Typing.immediate_data graph (Some msg_ack_port) `Logic ctx.current
   | Cycle n -> Typing.cycles_data graph n ctx.current
-  | IfExpr (e1, e2, e3) ->
+  (* Fairness only shapes the inferred type; the hardware is the same. *)
+  | IfExpr (e1, e2, e3, if_fair) ->
     let td1 = construct_graphIR graph ci ctx e1 in
     (* TODO: type checking *)
     let w1 = unwrap_or_err "Invalid condition" e1.span td1.ld.w in
@@ -602,6 +605,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
       branch_cond_v = td1.ld;
       branch_cond = TrueFalse;
       branch_count = 2; (* for if-else *)
+      branch_fair = if_fair;
+      branch_comm = SessionInfer.communicates [] e2 || SessionInfer.communicates [] e3;
       branches_to = [];
       branches_val = [];
     } in
@@ -668,6 +673,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
       branch_cond_v = td_cond;
       branch_cond = TrueFalse;
       branch_count = 2;
+      branch_fair = false;
+      branch_comm = false;
       branches_to = [];
       branches_val = [];
     } in
@@ -718,6 +725,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
       branch_cond_v = td_cond;
       branch_cond = TrueFalse;
       branch_count = 2;
+      branch_fair = false;
+      branch_comm = false;
       branches_to = [];
       branches_val = [];
     } in
@@ -774,6 +783,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
       branch_cond_v = td_v.ld;
       branch_cond = MatchCases [];
       branch_count = List.length match_arms;
+      branch_fair = false;
+      branch_comm = false;
       branches_to = [];
       branches_val = [];
     } in
@@ -1076,7 +1087,7 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
         lower_offer_match ctx offer_td merged_event arm_groups cases
     )
     
-  | XOffer (offer_arms, state_selector) ->
+  | XOffer (offer_arms, state_selector, xoffer_fair) ->
     check_offer_arm_kinds "xoffer" offer_arms
       (List.exists (fun (arm, _) -> is_wildcard_arm arm) offer_arms) e.span;
     (* A single-branch xoffer asserts its own signal unconditionally, so it
@@ -1107,7 +1118,7 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
     in
     do_sanity_check_offer (List.flatten non_wildcard_msg_defs) e.span;
 
-    let cond_td = Typing.offer_condition graph ctx offer_msg_groups (offer_construct_kind offer_arms) in
+    let cond_td = Typing.offer_condition ~fair:xoffer_fair graph ctx offer_msg_groups (offer_construct_kind offer_arms) in
     let ctx = BuildContext.wait graph ctx cond_td.ld.lt.live in
     (* The retry re-enters the choice itself, not anything before it. *)
     let ctx = match retry_var with
@@ -1226,6 +1237,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
            MatchCases cases
          else MatchCasesNoDefault cases);
       branch_count = branch_count;
+      branch_fair = xoffer_fair;
+      branch_comm = true;
       branches_to = [];
       branches_val = [];
     } in

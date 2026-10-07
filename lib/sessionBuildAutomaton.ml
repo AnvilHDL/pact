@@ -121,12 +121,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
     | Lang.StyChoice (st1, st2) | Lang.StyFairChoice (st1, st2) -> (* Internal choice m1 + m2 *)
       (Hashtbl.find auto.states current).accepting <- false;
       
-      if (match s_type with Lang.StyFairChoice _ -> true | _ -> false) then
-        TypeAutomaton.make_fair auto current
-      else if (infer_fair_choice st1 st2) then (
-         TypeAutomaton.make_fair auto current;
-          CliOutput.warning "Inferring fair choice for %s vs %s" (string_of_protocol st1) (string_of_protocol st2);
-      );
+      (* Only a declared fair choice (++) is fair. *)
+      (match s_type with Lang.StyFairChoice _ -> TypeAutomaton.make_fair auto current | _ -> ());
       let left_root = TypeAutomaton.new_state auto false in
       TypeAutomaton.add_transition auto current left_root (LabelSet.singleton (Theta st1)) false true false false;
       let right_root = TypeAutomaton.new_state auto false in
@@ -145,7 +141,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       current
     | Lang.StyXOffer offerings | Lang.StyFairXOffer offerings ->
       (
-        TypeAutomaton.make_fair auto current;
+        (* Only a declared fair exclusive offer (^^) is fair. *)
+        (match s_type with Lang.StyFairXOffer _ -> TypeAutomaton.make_fair auto current | _ -> ());
         let is_wildcard_present = List.exists (fun (o : offering_session_type) ->
           match o.Lang.trigger with
           | Lang.AtomDelay _ -> true
@@ -227,7 +224,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           TypeAutomaton.add_transition auto current new_wildcard_state (LabelSet.singleton (Negation all_msg_groups)) false false false true;
 
           match wildcard_offer.Lang.continuation with
-          | Some cont ->
+          | Some cont when cont <> Lang.StySkip ->
             (
             let branch_end = build cont new_wildcard_state var_map in
             (* TypeAutomaton.append_offers auto current (Hashtbl.find auto.states new_wildcard_state).offers; *)
@@ -235,7 +232,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
             true
             )
 
-          | None ->
+          (* An else that just ends ([* : ()]) is the bare [*]; it must keep its edge. *)
+          | _ ->
             (
             TypeAutomaton.reroute_transitions auto new_wildcard_state end_state var_map;
             false
