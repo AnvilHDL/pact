@@ -9,7 +9,7 @@ proc foo(ep : left ch){
         set cyc := *cyc + 8'd1 >>
         rec X {
             let r = recv ep.req >>
-            try x = recv ep.ack{
+            try x = irecv ep.ack{
                 dprint "[Cycle %d]Received ack: %d" (*cyc,x) >> 
                 cycle 1
             }else{

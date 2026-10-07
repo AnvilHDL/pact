@@ -6,7 +6,7 @@ chan reg_itfc {
 
 proc reggg(e : right reg_itfc) {
     loop {
-        try a = recv e.req {
+        try a = irecv e.req {
             dprint "Received %d" (a);
             cycle 1
         } else {

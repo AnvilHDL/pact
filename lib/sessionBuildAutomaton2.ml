@@ -102,13 +102,13 @@ let repeat_with_progress member_id body =
         variables (StringSet.add id acc) body
     | StyLet (id, definition, body) ->
         variables (variables (StringSet.add id acc) definition) body
-    | StySeq (a, b) | StyChoice (a, b) | StyParallel (a, b) ->
+    | StySeq (a, b) | StyChoice (a, b) | StyFairChoice (a, b) | StyParallel (a, b) ->
         variables (variables acc a) b
     | StyFuture body | StyAtom (AtomTerminal body) -> variables acc body
     | StyOfferMatch (offerings, cases) ->
         List.fold_left (fun acc c -> variables acc c.match_body)
           (variables acc (StyOffer offerings)) cases
-    | StyOffer offerings | StyXOffer offerings ->
+    | StyOffer offerings | StyXOffer offerings | StyFairXOffer offerings ->
         List.fold_left (fun acc off ->
           let acc = match off.trigger with
             | AtomTerminal body -> variables acc body
@@ -149,9 +149,10 @@ let infer_fair_choice left right =
     | StyAtom (AtomConjunction acts) -> List.map msg_of_action acts
     | StyAtom (AtomTerminal nested) -> first_messages nested
     | StySeq (prefix, _) -> first_messages prefix
-    | StyChoice (a, b) | StyParallel (a, b) ->
+    | StyChoice (a, b) | StyFairChoice (a, b) | StyParallel (a, b) ->
         first_messages a @ first_messages b
-    | StyOffer offerings | StyXOffer offerings | StyOfferMatch (offerings, _) ->
+    | StyOffer offerings | StyXOffer offerings | StyFairXOffer offerings
+    | StyOfferMatch (offerings, _) ->
         List.concat_map
           (fun off ->
             match trigger_actions off.trigger with
@@ -236,8 +237,8 @@ let rec messages_of_session_type sty =
       | None -> MsgSet.empty)
   in
   match sty with
-  | StySeq (a, b) | StyChoice (a, b) | StyParallel (a, b) | StyLet (_, a, b)
-    ->
+  | StySeq (a, b) | StyChoice (a, b) | StyFairChoice (a, b) | StyParallel (a, b)
+  | StyLet (_, a, b) ->
       MsgSet.union (messages_of_session_type a) (messages_of_session_type b)
   | StyFuture body | StyRec (_, body) -> messages_of_session_type body
   | StyAtom (AtomicAct act) -> from_action act
@@ -247,7 +248,7 @@ let rec messages_of_session_type sty =
         MsgSet.empty acts
   | StyAtom (AtomTerminal sty) -> messages_of_session_type sty
   | StyAtom (AtomDelay _) | StySkip | StyEnd _ | StyVar _ -> MsgSet.empty
-  | StyOffer offerings | StyXOffer offerings ->
+  | StyOffer offerings | StyXOffer offerings | StyFairXOffer offerings ->
       List.fold_left
         (fun acc off -> MsgSet.union acc (from_offering off))
         MsgSet.empty offerings
@@ -362,11 +363,11 @@ let rec build_automaton (name : identifier option) (st : session_type)
             TypeAutomaton.set_accepting auto final false;
             build right final rec_env let_env)
           left_finals
-    | StyChoice (left, right) ->
+    | StyChoice (left, right) | StyFairChoice (left, right) ->
         mark_nonfinal ();
         TypeAutomaton.make_adversary auto current;
-        if infer_fair_choice left right then
-          TypeAutomaton.make_fair auto current;
+        let fair = match sty with StyFairChoice _ -> true | _ -> infer_fair_choice left right in
+        if fair then TypeAutomaton.make_fair auto current;
         let left_start = TypeAutomaton.new_state auto false in
         let right_start = TypeAutomaton.new_state auto false in
         TypeAutomaton.add_transition auto current left_start epsilon
@@ -385,6 +386,8 @@ let rec build_automaton (name : identifier option) (st : session_type)
         build expansion current rec_env let_env
     | StyXOffer offerings ->
         build_xoffer offerings current rec_env let_env
+    | StyFairXOffer offerings ->
+        build_xoffer ~fair:true offerings current rec_env let_env
     | StyOffer offerings ->
         build_offer offerings current rec_env let_env
     | StyOfferMatch (offerings, cases) ->
@@ -452,15 +455,16 @@ let rec build_automaton (name : identifier option) (st : session_type)
                codespan_local default_span;
              ])
 
-  and build_xoffer offerings current rec_env let_env =
+  and build_xoffer ?(fair = false) offerings current rec_env let_env =
     if offer_is_blocking_without_else offerings then
       build (blocking_offer_expansion (fresh_blocking_rec_var ()) offerings
-               (fun offs -> StyXOffer offs))
+               (fun offs -> if fair then StyFairXOffer offs else StyXOffer offs))
         current rec_env let_env
     else
     (* Exclusive offer commits only after all branch heads are resolved. *)
     (TypeAutomaton.set_accepting auto current false;
     TypeAutomaton.make_adversary auto current;
+    if fair then TypeAutomaton.make_fair auto current;
     let msg_branches =
       validate_offerings default_span offerings "exclusive offer"
       |> List.filter_map (fun (off, _) ->

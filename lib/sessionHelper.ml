@@ -11,11 +11,11 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
     | StyAtom (AtomicAct (AtomNBMsg m)) -> [m.endpoint]
     | StyAtom (AtomicAct (AtomBMsg m)) -> [m.endpoint]
     | StyAtom (AtomDelay _) -> []
-    | StySeq (s1, s2) | StyParallel (s1, s2) | StyChoice (s1, s2) -> (match highest_level_endpoint s1 with
+    | StySeq (s1, s2) | StyParallel (s1, s2) | StyChoice (s1, s2) | StyFairChoice (s1, s2) -> (match highest_level_endpoint s1 with
         | [] -> highest_level_endpoint s2
         | eps1 -> eps1 @ highest_level_endpoint s2
     )
-    | StyOffer ps | StyXOffer ps ->
+    | StyOffer ps | StyXOffer ps | StyFairXOffer ps ->
         (
         let endpoints = List.flatten (List.map (fun oty ->
             match oty.trigger with
@@ -131,6 +131,9 @@ let rec substitute_quantified_var (var_name : identifier) (value : int) (sty : s
   | StyChoice (s1, s2) -> 
       StyChoice (substitute_quantified_var var_name value s1, 
                  substitute_quantified_var var_name value s2)
+  | StyFairChoice (s1, s2) ->
+      StyFairChoice (substitute_quantified_var var_name value s1,
+                     substitute_quantified_var var_name value s2)
   | StyParallel (s1, s2) -> 
       StyParallel (substitute_quantified_var var_name value s1, 
                    substitute_quantified_var var_name value s2)
@@ -146,6 +149,10 @@ let rec substitute_quantified_var (var_name : identifier) (value : int) (sty : s
         }
       in
       StyXOffer (List.map subst_offering offerings)
+  | StyFairXOffer offerings ->
+      (match substitute_quantified_var var_name value (StyXOffer offerings) with
+       | StyXOffer offerings -> StyFairXOffer offerings
+       | other -> other)
   | StyOffer offerings ->
       let subst_offering (off : offering_session_type) : offering_session_type =
         {
@@ -343,6 +350,8 @@ let rec expand_quantifiers (sty : session_type) : session_type =
       StySeq (expand_quantifiers s1, expand_quantifiers s2)
   | StyChoice (s1, s2) -> 
       StyChoice (expand_quantifiers s1, expand_quantifiers s2)
+  | StyFairChoice (s1, s2) ->
+      StyFairChoice (expand_quantifiers s1, expand_quantifiers s2)
   | StyParallel (s1, s2) -> 
       StyParallel (expand_quantifiers s1, expand_quantifiers s2)
   | StyFuture s -> 
@@ -357,6 +366,10 @@ let rec expand_quantifiers (sty : session_type) : session_type =
         }
       in
       StyXOffer (List.map expand_offering offerings)
+  | StyFairXOffer offerings ->
+      (match expand_quantifiers (StyXOffer offerings) with
+       | StyXOffer offerings -> StyFairXOffer offerings
+       | other -> other)
   | StyOffer offerings ->
       let expand_offering (off : offering_session_type) : offering_session_type =
         {
@@ -416,6 +429,7 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
     match sty with
     | Lang.StySeq (s1, s2) -> Lang.StySeq (preprocess_sty s1, preprocess_sty s2)
     | Lang.StyChoice (s1, s2) -> Lang.StyChoice (preprocess_sty s1, preprocess_sty s2)
+    | Lang.StyFairChoice (s1, s2) -> Lang.StyFairChoice (preprocess_sty s1, preprocess_sty s2)
     | Lang.StyParallel (s1, s2) -> Lang.StyParallel (preprocess_sty s1, preprocess_sty s2)
     | Lang.StyFuture s -> Lang.StyFuture (preprocess_sty s)
     | Lang.StyAtom action -> Lang.StyAtom (replace_in_action_with_gap action)
@@ -427,6 +441,10 @@ let preprocess_session_type endpoint_mapping (sty : Lang.session_type) : Lang.se
           }
         in
         Lang.StyXOffer (List.map process_offering offerings)
+    | Lang.StyFairXOffer offerings ->
+        (match preprocess_sty (Lang.StyXOffer offerings) with
+         | Lang.StyXOffer offerings -> Lang.StyFairXOffer offerings
+         | other -> other)
     | Lang.StyOffer offerings ->
         let process_offering (off : Lang.offering_session_type) : Lang.offering_session_type =
           {
@@ -518,7 +536,7 @@ let build_endpoint_mapping
   | None -> Utils.StringMap.empty
 
 
-let preprocess_pool_for_compatibility 
+let preprocess_pool_for_compatibility ?(override = fun _ -> None)
     (pool_def : interface_pool_def ast_node)
     (session_defs : session_def ast_node list)
     : ((session_type ast_node) * identifier) list =
@@ -530,7 +548,8 @@ let preprocess_pool_for_compatibility
     match intf_member.d.interface_def with
     | Some session_ty ->
         let endpoint_mapping = build_endpoint_mapping intf_member pool_channels session_defs in
-    
+        (* A member may be given another type, e.g. one inferred from its process. *)
+        let session_ty = Option.value ~default:session_ty (override intf_member.d.inf_mem_id) in
         let preprocessed_sty = preprocess_session_type endpoint_mapping session_ty in
         
         Some ({d = preprocessed_sty; span = intf_member.span}, intf_member.d.inf_mem_id)
@@ -542,7 +561,8 @@ let preprocess_pool_for_compatibility
             | Some interface_def ->
                 let endpoint_mapping = build_endpoint_mapping intf_member pool_channels session_defs in
                 
-                let session_ty = interface_def.d.body.d in
+                let session_ty =
+                  Option.value ~default:interface_def.d.body.d (override intf_member.d.inf_mem_id) in
                 
 
                 let preprocessed_sty = preprocess_session_type endpoint_mapping session_ty in

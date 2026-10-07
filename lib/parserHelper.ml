@@ -77,6 +77,12 @@ let warn_deprecated_wildcard_arm (span : code_span) =
     span ""
 
 
+(* A try decides within the cycle, so it takes only isend and irecv. *)
+let reject_blocking_try (kw : string) (span : code_span) =
+  raise (Except.TypeError [
+    Except.Text (Printf.sprintf "'try %s' is not allowed; use 'try i%s', since a try decides in the current cycle" kw kw);
+    Except.codespan_local span])
+
 (* Spans of names in session types, collected while parsing a unit. *)
 let session_refs : session_ref list ref = ref []
 

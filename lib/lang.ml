@@ -108,6 +108,8 @@ and session_type =
   | StySeq of session_type * session_type (** sequence *)
   | StyChoice of session_type * session_type (** internal choice (+ operator) *)
   | StyXOffer of offering_session_type list (** dual choice (XOR operator) *)
+  | StyFairChoice of session_type * session_type (** fair internal choice *)
+  | StyFairXOffer of offering_session_type list (** fair exclusive offer *)
   | StyAtom of atomic_action_with_gap (** single atomic action *)
   | StyParallel of session_type * session_type (** parallel composition of session types *)
   | StyFuture of session_type (** future operator (F) **)
@@ -1171,6 +1173,10 @@ let rec aux p =
       "( " ^ String.concat "\n&\n " (List.map aux2 ps) ^ " )"
   | StyXOffer ps ->
       "( " ^ String.concat " \n^\n " (List.map aux2 ps) ^ " )"
+  | StyFairChoice (p1, p2) ->
+      "( " ^ aux p1 ^ "\n+ᶠ\n" ^ aux p2 ^ " )"
+  | StyFairXOffer ps ->
+      "ᶠ( " ^ String.concat " \n^\n " (List.map aux2 ps) ^ " )"
   | StyOfferMatch (ps, cases) ->
       "( " ^ String.concat "\n&\n " (List.map aux2 ps) ^ " ).{ "
       ^ String.concat ",\n " (List.map (fun c -> string_of_match_on c.match_on ^ " : " ^ aux c.match_body) cases)
@@ -1242,6 +1248,10 @@ let rec aux p =
       "(" ^ String.concat "∧" (List.map aux2 ps) ^ ")"
   | StyXOffer ps ->
         "(" ^ String.concat " ⊕ "   (List.map aux2 ps) ^ ")"
+  | StyFairChoice (p1, p2) ->
+      "(" ^ aux p1 ^ "+ᶠ" ^ aux p2 ^ ")"
+  | StyFairXOffer ps ->
+      "(" ^ String.concat " ⊕ᶠ " (List.map aux2 ps) ^ ")"
   | StyOfferMatch (ps, cases) ->
       "(" ^ String.concat "∧" (List.map aux2 ps) ^ ").{"
       ^ String.concat ", " (List.map (fun c -> string_of_match_on c.match_on ^ " : " ^ aux c.match_body) cases)

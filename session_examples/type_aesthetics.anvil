@@ -8,7 +8,7 @@ interface i4 (ep : left ch) = ∀ (i ∈ [1..5] ̸ (2,4)) ∏ { ep[i].data; #1 }
 interface i5 (ep : left ch) = ∀ (i ∈ [1..2]) ∏ { ∀ (j ∈ [1..2]) ∏ { ep[i][0].msg; #1 } }
 
 interface i5 (ep : left ch) = ∀ (i ∈ [1..2]) ∏ { ∀ (j ∈ [1..2]) ∏ { ep[i][j].msg; #1 } }
-interface i6 (ep : left ch) = ∀ (i ∈ [1..3]) ⨁ { ep[i].req : #1, ep[i].cancel : #2, * : #3 }
+interface i6 (ep : left ch) = ∀ (i ∈ [1..3]) ⨁ { #ep[i].req : #1, #ep[i].cancel : #2, * : #3 }
 
 interface parallelRequests (ep : left ch) = ∀ (i ∈ [1..3]) ∏ {  ep[i].req; #1 }
 

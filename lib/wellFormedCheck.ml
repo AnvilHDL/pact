@@ -1,5 +1,29 @@
 open Lang
 
+(* A blocking arm waits across cycles, so an offer with an else arm takes only instant arms. *)
+let check_blocking_else span (sty : session_type) =
+  let is_else (o : offering_session_type) = match o.trigger with AtomDelay _ -> true | _ -> false in
+  let is_blocking (o : offering_session_type) = match o.trigger with
+    | AtomicAct (AtomBMsg _) -> true
+    | AtomConjunction acts -> List.exists (function AtomBMsg _ -> true | AtomNBMsg _ -> false) acts
+    | _ -> false
+  in
+  let rec go sty = match sty with
+    | StyOffer offs | StyXOffer offs | StyFairXOffer offs | StyOfferMatch (offs, _) ->
+        if List.exists is_else offs && List.exists is_blocking offs then
+          raise (Except.TypeError [
+            Text ("A blocking arm cannot sit beside an else arm; use #m for an arm decided this cycle: "
+                  ^ string_of_protocol sty);
+            Except.codespan_local span]);
+        List.iter (fun (o : offering_session_type) ->
+          (match o.trigger with AtomTerminal t -> go t | _ -> ());
+          Option.iter go o.continuation) offs;
+        (match sty with StyOfferMatch (_, cases) -> List.iter (fun c -> go c.match_body) cases | _ -> ())
+    | StySeq (a, b) | StyChoice (a, b) | StyFairChoice (a, b) | StyParallel (a, b) | StyLet (_, a, b) -> go a; go b
+    | StyFuture a | StyRec (_, a) | StyForall (_, _, _, a, _) | StyAtom (AtomTerminal a) -> go a
+    | StyAtom _ | StySkip | StyEnd _ | StyVar _ -> ()
+  in
+  go sty
 
 (** Check AST for well-formedness *)
 let syntax_tree_precheck (_config : Config.compile_config) cunit =
@@ -44,3 +68,7 @@ let syntax_tree_precheck (_config : Config.compile_config) cunit =
       | _ -> ()
     ) cc.messages
   ) cunit.channel_classes;
+  List.iter (fun (sd : session_def ast_node) -> check_blocking_else sd.d.body.span sd.d.body.d) cunit.session_defs;
+  List.iter (fun (pool : interface_pool_def ast_node) ->
+    List.iter (fun (m : interface_mem_def ast_node) ->
+      Option.iter (check_blocking_else m.span) m.d.interface_def) pool.d.interface_members) cunit.pools

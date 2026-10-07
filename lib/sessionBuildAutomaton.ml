@@ -118,10 +118,12 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       let mid = build st1 current var_map in
       (Hashtbl.find auto.states mid).accepting <- false;
       build st2 mid var_map
-    | Lang.StyChoice (st1, st2) -> (* Internal choice m1 + m2 *)
+    | Lang.StyChoice (st1, st2) | Lang.StyFairChoice (st1, st2) -> (* Internal choice m1 + m2 *)
       (Hashtbl.find auto.states current).accepting <- false;
       
-      if (infer_fair_choice st1 st2) then (
+      if (match s_type with Lang.StyFairChoice _ -> true | _ -> false) then
+        TypeAutomaton.make_fair auto current
+      else if (infer_fair_choice st1 st2) then (
          TypeAutomaton.make_fair auto current;
           CliOutput.warning "Inferring fair choice for %s vs %s" (string_of_protocol st1) (string_of_protocol st2);
       );
@@ -141,7 +143,7 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       (* StySkip represents successful termination - just return current state as accepting *)
       (Hashtbl.find auto.states current).accepting <- true;
       current
-    | Lang.StyXOffer offerings ->
+    | Lang.StyXOffer offerings | Lang.StyFairXOffer offerings ->
       (
         TypeAutomaton.make_fair auto current;
         let is_wildcard_present = List.exists (fun (o : offering_session_type) ->

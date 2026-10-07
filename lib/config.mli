@@ -10,6 +10,7 @@ type compile_config = {
   stdin : bool; (** read from standard input *)
   disable_lt_checks : bool; (** disable all lifetime and borrow related checks *)
   disable_session_checks : bool; (** disable all session type related checks *)
+  infer : bool; (** check compatibility with types inferred from processes *)
   disable_compat_checks : bool; (** disable all compatibility checks *)
   weak_typecasts : bool; (** allow weak typecasts
                              between data types of different widths *)

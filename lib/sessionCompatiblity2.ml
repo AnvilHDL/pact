@@ -71,8 +71,8 @@ let interface_argument_message_set channel_classes
     MsgSet.empty intf_inst.params
 
 
-let prepare_pool channel_classes session_defs pool =
-  let session_ids = SessionHelper.preprocess_pool_for_compatibility pool session_defs in
+let prepare_pool ?override channel_classes session_defs pool =
+  let session_ids = SessionHelper.preprocess_pool_for_compatibility ?override pool session_defs in
   let message_sets = List.map (fun (member : interface_mem_def ast_node) ->
     let messages = match member.d.interface_def, member.d.interface_class_id with
       | None, Some instance ->

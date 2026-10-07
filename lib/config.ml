@@ -7,6 +7,7 @@ type compile_config = {
   stdin: bool;
   disable_lt_checks : bool;
   disable_session_checks : bool;
+  infer : bool;
   disable_compat_checks : bool;
   weak_typecasts : bool;
   opt_level : int;
@@ -27,6 +28,7 @@ let parse_args () : compile_config =
   let disable_compat_checks = ref false in
   let disable_lt_checks = ref false in
   let disable_session_checks = ref false in
+  let infer = ref false in
   let strong_typecasts = ref false in
   let opt_level = ref 2 in
   let merge_reg_writes = ref false in
@@ -52,8 +54,9 @@ let parse_args () : compile_config =
       ("-disable-lt-checks", Arg.Set disable_lt_checks, "Disable lifetime/borrow-related checks");
       ("-strict-dtc", Arg.Set strong_typecasts, "Restrict Abstract Typecasts");
       ("-disable-session-checks", Arg.Set disable_session_checks, "Disable session type related checks");
+      ("-infer", Arg.Set infer, "Check compatibility with the types inferred from the spawned processes");
       ("-disable-compat-checks", Arg.Set disable_compat_checks, "Disable compatibility checks");
-      ("-debug-choice", Arg.Set_int debug_choice, "Debug mode: 0/2 fast compatibility, 1 profiling, 3 simultaneous compatibility, 4 sequential compatibility");
+      ("-debug-choice", Arg.Set_int debug_choice, "Debug mode: 0/2 fast compatibility, 1 profiling, 3 simultaneous compatibility, 4 sequential compatibility, 5/6/7 as 2/3/4 with types inferred from processes");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default), 3");
       ("-merge-reg-writes", Arg.Set merge_reg_writes, "Merge multi-writer registers into one always_comb next-state signal instead of one guarded non-blocking assign per writer event (behaviour-preserving; off by default, see Config.mli)");
       ("-o", Arg.String (fun s -> output_filename := Some s), "Set output filename");
@@ -74,6 +77,7 @@ let parse_args () : compile_config =
     stdin = !stdin;
     disable_lt_checks = !disable_lt_checks;
     disable_session_checks = !disable_session_checks;
+    infer = !infer;
     disable_compat_checks = !disable_compat_checks;
     weak_typecasts = not !strong_typecasts;
     opt_level = !opt_level;

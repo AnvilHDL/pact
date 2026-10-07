@@ -1,7 +1,18 @@
 open CompileHelpers
 
 
-let generalized_type_debug _out config =
+(* With [inferred], a pool member spawned by a process takes the type inferred from its thread. *)
+let inferred_override inferred cunits =
+  let types =
+    if inferred then
+      SessionInfer.pool_member_types
+        (List.concat_map (fun (_, (cunit : Lang.compilation_unit)) -> cunit.procs) cunits)
+        (List.concat_map (fun (_, (cunit : Lang.compilation_unit)) -> cunit.func_defs) cunits)
+    else Hashtbl.create 0
+  in
+  fun (pool : Lang.interface_pool_def Lang.ast_node) member -> Hashtbl.find_opt types (pool.d.pool_id, member)
+
+let generalized_type_debug ?(inferred = false) _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
@@ -40,12 +51,13 @@ let generalized_type_debug _out config =
 
   (* check compatibility *)
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
+  let override = inferred_override inferred !cunits in
   if config.verbose then CliOutput.section "Fast compatibility";
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
     let open SessionFastCompat in
     
     (* Preprocess the pool to get session_ids with unified endpoints *)
-    let session_ids = SessionHelper.preprocess_pool_for_compatibility 
+    let session_ids = SessionHelper.preprocess_pool_for_compatibility ~override:(override pool)
         pool session_type_defs in
     if config.verbose then
       CliOutput.info "Checking pool %s (%d members together)"
@@ -95,7 +107,7 @@ let sequential_compatibility ~silent members pool_id verbose =
   | first :: second :: rest ->
       next_stage 1 first first.messages second rest
 
-let generalized_type_v2_debug ?(sequential = false) _out config =
+let generalized_type_v2_debug ?(sequential = false) ?(inferred = false) _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
@@ -135,13 +147,14 @@ let generalized_type_v2_debug ?(sequential = false) _out config =
     List.concat_map (fun (_, cunit) -> let open Lang in cunit.channel_classes) !cunits
   in
   let pool_defs = List.concat_map (fun (_, cunit) -> let open Lang in cunit.pools) !cunits in
+  let override = inferred_override inferred !cunits in
   let mode = if sequential then "Sequential" else "Simultaneous" in
   if config.verbose then CliOutput.section (mode ^ " compatibility");
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
     let result, err =
       try
         let session_ids, message_sets =
-          SessionCompatiblity2.prepare_pool channel_classes session_type_defs pool
+          SessionCompatiblity2.prepare_pool ~override:(override pool) channel_classes session_type_defs pool
         in
         if config.verbose then
           CliOutput.info "Checking pool %s (%d members, %s)"
@@ -289,9 +302,12 @@ let profile_compatibility_checks _out config =
 let debug_types_custom out config =
 let open Config in
 match config.debug_choice with
-| 0 -> generalized_type_debug out config
+| 0 -> generalized_type_debug ~inferred:config.infer out config
 | 1 -> profile_compatibility_checks out config
-| 2 -> generalized_type_debug out config
-| 3 -> generalized_type_v2_debug out config
-| 4 -> generalized_type_v2_debug ~sequential:true out config
+| 2 -> generalized_type_debug ~inferred:config.infer out config
+| 3 -> generalized_type_v2_debug ~inferred:config.infer out config
+| 4 -> generalized_type_v2_debug ~sequential:true ~inferred:config.infer out config
+| 5 -> generalized_type_debug ~inferred:true out config
+| 6 -> generalized_type_v2_debug ~inferred:true out config
+| 7 -> generalized_type_v2_debug ~sequential:true ~inferred:true out config
 | _ -> raise (Failure "Unknown debug choice")

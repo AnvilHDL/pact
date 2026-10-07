@@ -48,6 +48,8 @@ let rec parse_recursive ?recover cunits parsed_files (config : Config.compile_co
                   (Text msg);
                   (Codespan (Some filename, {st = Lexing.lexeme_start_p lexbuf; ed = Lexing.lexeme_end_p lexbuf}))
                 ] |> raise_compile_error (Some filename)
+              (* Errors raised by grammar actions keep their own message. *)
+              | Except.TypeError msg -> raise_compile_error (Some filename) msg
               | _ ->
                 let open Except in
                 [

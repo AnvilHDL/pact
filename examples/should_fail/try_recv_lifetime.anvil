@@ -5,7 +5,7 @@ chan ch {
 proc main(ep1 : left ch, ep2 : left ch) {
     loop {
         let r1 = recv ep1.req >>
-        try r2 = recv ep2.req { // this should be immediate
+        try r2 = irecv ep2.req { // this should be immediate
             dprint "r1 and r2 are both live %d, %d" (r1, r2);
             cycle 1
         } >>

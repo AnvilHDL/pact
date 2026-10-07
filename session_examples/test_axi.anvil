@@ -22,7 +22,7 @@ interface mux_ar_main (
     mst_req_ep : left ar_mast_ch <ar_pack_t>,
     fifo_ep : right fifo_ch<select_t>
 ) =⨁(
-        fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
+        #fifo_ep.empty : mst_req_ep.rdy ; ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push,
         * : mst_req_ep.rdy;ar_req_ep.spill ; mst_req_ep.data ; #fifo_ep.push
     ) ; #1 
 interface mux_r_main (
@@ -31,7 +31,7 @@ interface mux_r_main (
     slv_ep1 : right slv_r_ch<r_pack_t>,
     slv_ep2 : right slv_r_ch<r_pack_t>
 ) =⨁(
-        fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (⨁(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data )),
+        #fifo_ep.full : r_sr_ep.spill ; #fifo_ep.pop ; (⨁(slv_ep1.res : slv_ep1.err + slv_ep1.data , slv_ep2.res : slv_ep2.err + slv_ep2.data )),
         * : r_sr_ep.spill ; #fifo_ep.pop ; ⨁(slv_ep1.res : (slv_ep1.err + slv_ep1.data) , slv_ep2.res : (slv_ep2.err + slv_ep2.data) )
 ); #1
 

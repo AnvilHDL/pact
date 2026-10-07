@@ -277,7 +277,16 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
         p.channels <- p.channels @ channels ;
 
           let pool_def = lookup_pool_inst_from_pools ps.d.p_ty cunit.pools ps.span in
-          let session_with_ids = SessionHelper.preprocess_pool_for_compatibility pool_def cunit.session_defs in
+          (* With -infer, members spawned here take the types inferred from their processes. *)
+          let override =
+            if config.infer then
+              let inferred = SessionInfer.spawned_member_types cunit.procs cunit.func_defs p
+                |> List.filter_map (fun (pool_inst, member, _, sty) ->
+                     if pool_inst = ps.d.p_id then Some (member, sty) else None) in
+              fun member -> List.assoc_opt member inferred
+            else fun _ -> None
+          in
+          let session_with_ids = SessionHelper.preprocess_pool_for_compatibility ~override pool_def cunit.session_defs in
 
           if not config.disable_compat_checks then
           (

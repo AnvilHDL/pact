@@ -319,12 +319,14 @@ let rec session_type (s : session_type) : json =
   | StyEnd id -> sty "end" [("id", str id)]
   | StySeq (a, b) -> sty "seq" [("first", session_type a); ("then", session_type b)]
   | StyChoice (a, b) -> sty "choice" [("left", session_type a); ("right", session_type b)]
+  | StyFairChoice (a, b) -> sty "fair_choice" [("left", session_type a); ("right", session_type b)]
   | StyParallel (a, b) -> sty "parallel" [("left", session_type a); ("right", session_type b)]
   | StyAtom a -> sty "atom" [("action", session_action a)]
   | StyFuture s -> sty "future" [("body", session_type s)]
   | StySkip -> sty "skip" []
   | StyOffer arms -> sty "offer" [("arms", list offering arms)]
   | StyXOffer arms -> sty "xoffer" [("arms", list offering arms)]
+  | StyFairXOffer arms -> sty "fair_xoffer" [("arms", list offering arms)]
   | StyOfferMatch (arms, cases) ->
     sty "offer_match" [
       ("arms", list offering arms);
@@ -371,10 +373,12 @@ let rec session_text ?(prec = 0) (s : session_type) : string =
   | StySeq (a, b) -> paren 0 (session_text ~prec:1 a ^ " ; " ^ session_text b)
   | StyParallel (a, b) -> paren 1 (session_text ~prec:1 a ^ " || " ^ session_text ~prec:2 b)
   | StyChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " + " ^ session_text ~prec:3 b)
+  | StyFairChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " +ᶠ " ^ session_text ~prec:3 b)
   | StyFuture s -> paren 3 ("F " ^ session_text ~prec:3 s)
   | StyAtom a -> action_text a
   | StyOffer arms -> "&(" ^ offerings_text arms ^ ")"
   | StyXOffer arms -> "^(" ^ offerings_text arms ^ ")"
+  | StyFairXOffer arms -> "^ᶠ(" ^ offerings_text arms ^ ")"
   | StyOfferMatch (arms, cases) ->
     "&(" ^ offerings_text arms ^ ").(" ^ String.concat ", " (List.map (fun (c : offer_match_case) ->
       let on = match c.match_on with

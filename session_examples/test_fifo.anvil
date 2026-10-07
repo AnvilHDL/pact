@@ -1,14 +1,14 @@
 interface fifo_itfc(push_ep : right fifo_insert_ch<select_t>, pop_ep : right fifo_dequeue_ch<select_t>) =  
                                                 (
-                                                    μ X . ⨁( pop_ep.pop : ⨁(push_ep.full, *);#1,
-                                                       * :  ⨁(push_ep.full, *);#1;X
+                                                    μ X . ⨁( #pop_ep.pop : ⨁(#push_ep.full, *);#1,
+                                                       * :  ⨁(#push_ep.full, *);#1;X
                                                      )
                                                   )
                                                                     + 
                                                   (
                                                     μ Y . ⨁(
-                                                        push_ep.push : ⨁(pop_ep.empty, *);#1,
-                                                        * : ⨁(pop_ep.empty, *);#1;Y
+                                                        #push_ep.push : ⨁(#pop_ep.empty, *);#1,
+                                                        * : ⨁(#pop_ep.empty, *);#1;Y
                                                     )
                                                   )
                                                      
@@ -18,9 +18,9 @@ interface fifo_itfc(push_ep : right fifo_insert_ch<select_t>, pop_ep : right fif
                                                     )
 
 
-interface master_itfc(fifo_ep : left fifo_insert_ch<select_t>) = F μ X .⨁(fifo_ep.full : #1;X, * : #fifo_ep.push) ; #1
+interface master_itfc(fifo_ep : left fifo_insert_ch<select_t>) = F μ X .⨁(#fifo_ep.full : #1;X, * : #fifo_ep.push) ; #1
 
-interface slave_itfc(fifo_ep : left fifo_dequeue_ch<select_t>) = F μ X .⨁(fifo_ep.empty : #1;X, * : #fifo_ep.pop) ; #1
+interface slave_itfc(fifo_ep : left fifo_dequeue_ch<select_t>) = F μ X .⨁(#fifo_ep.empty : #1;X, * : #fifo_ep.pop) ; #1
 
 pool fifo_pool {
     fifo_push_ep -- fifo_push_ep2 : fifo_insert_ch<select_t>,
