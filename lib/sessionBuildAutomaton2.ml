@@ -479,8 +479,6 @@ let rec build_automaton (name : identifier option) (st : session_type)
       | _ -> MsgSet.empty
     in
     let pending_heads = MsgSet.diff head_set singleton_head in
-    let branch_groups = List.map (fun (_, g) -> MsgSet.elements g) msg_branches in
-    let branch_groups = List.concat branch_groups in
     let finals = ref [] in
     List.iter
       (fun (off, group) ->
@@ -493,36 +491,70 @@ let rec build_automaton (name : identifier option) (st : session_type)
             require_now = group;
           }
           group;
-        finals := build (continuation_or_true off) target rec_env let_env @ !finals)
+        finals := build (continuation_or_true off) target rec_env let_env @ !finals;
+        (* Take the part of a conjunctive arm present now; the rest must follow this cycle. *)
+        if MsgSet.cardinal group > 1 then
+          List.iter
+            (fun taken ->
+              let rest = MsgSet.diff group taken in
+              if not (MsgSet.is_empty taken) && not (MsgSet.is_empty rest) then begin
+                let partial = TypeAutomaton.new_state auto false in
+                TypeAutomaton.add_transition auto current partial (message_actions taken)
+                  {
+                    any_guard with
+                    future_disjoint = MsgSet.diff head_set group;
+                    future_members = rest;
+                    forbid_clock = false;
+                    require_now = taken;
+                  }
+                  taken;
+                let rest_trigger =
+                  match MsgSet.elements rest with
+                  | [ m ] -> AtomicAct (AtomNBMsg m)
+                  | ms -> AtomConjunction (List.map (fun m -> AtomNBMsg m) ms)
+                in
+                let remainder =
+                  StyXOffer [ { trigger = rest_trigger; continuation = Some (continuation_or_true off) } ]
+                in
+                finals := build remainder partial rec_env let_env @ !finals
+              end)
+            (powerset group))
       msg_branches;
-    (* One alternative per head expresses F intersect heads <> empty. *)
-    MsgSet.iter
-      (fun head ->
+    (* Wait while a whole arm can still arrive this cycle. *)
+    List.iter
+      (fun (_, group) ->
         TypeAutomaton.add_transition auto current current epsilon
           { any_guard with
             forbid_now = singleton_head;
             forbid_clock = true;
-            future_members = MsgSet.singleton head }
+            future_members = group }
           singleton_head
           ~offers_pending:pending_heads)
-      head_set;
+      (List.sort_uniq (fun (_, a) (_, b) -> MsgSet.compare a b) msg_branches);
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
+        (* Else once every arm is missing a message that will not come this cycle. *)
         let else_target = TypeAutomaton.new_state auto false in
-        TypeAutomaton.add_transition auto current else_target epsilon
-          (xoffer_else_guard (MsgSet.of_list branch_groups) head_set)
-          singleton_head;
+        let missing_choices =
+          List.fold_left
+            (fun acc (_, group) ->
+              List.concat_map
+                (fun chosen -> List.map (fun m -> MsgSet.add m chosen) (MsgSet.elements group))
+                acc)
+            [ MsgSet.empty ] msg_branches
+          |> List.sort_uniq MsgSet.compare
+        in
+        List.iter
+          (fun missing ->
+            TypeAutomaton.add_transition auto current else_target epsilon
+              (xoffer_else_guard missing missing)
+              singleton_head)
+          missing_choices;
         finals := build else_ty else_target rec_env let_env @ !finals
     | None ->
         ());
     !finals)
 
-  (* An offer match is a conjunctive offer that also records the arms taken.
-     As in a conjunctive offer, an arm is taken as soon as its message is
-     immediate, and each remaining arm resolves like an exclusive offer of its
-     own. Once none can be taken this cycle, the case for exactly the arms
-     taken follows their bodies. Bodies must start with a delay, so running
-     them after that point loses no same-cycle behaviour. *)
   and build_offer_match offerings cases current rec_env let_env =
     if offer_is_blocking_without_else offerings then
       build (blocking_offer_expansion (fresh_blocking_rec_var ()) offerings
