@@ -5,6 +5,28 @@ let debug_types out config =
 
       
 
+(* A process name defined twice (in one file or across imports) would silently resolve to one of them. *)
+let check_duplicate_procs ?recover cunits =
+  let same_file a b =
+    a = b || (try Unix.realpath a = Unix.realpath b with Unix.Unix_error _ -> false) in
+  let seen = Hashtbl.create 32 in
+  List.iter (fun (file_name, (cunit : Lang.compilation_unit)) ->
+    List.iter (fun (proc : Lang.proc_def) ->
+      match Hashtbl.find_opt seen proc.name with
+      | None -> Hashtbl.add seen proc.name (file_name, proc.span)
+      | Some (first_file, first_span) when same_file first_file file_name && first_span = proc.span -> ()
+      | Some (first_file, first_span) ->
+          let msg = Except.[
+            Text (Printf.sprintf "Process '%s' is defined more than once:" proc.name);
+            codespan_in first_file first_span;
+            codespan_in file_name proc.span;
+          ] in
+          match recover with
+          | Some report -> report msg
+          | None -> raise_compile_error None msg
+    ) cunit.procs
+  ) (List.rev cunits)
+
 let parse ?recover config =
   let open Config in
   let toplevel_filename = List.hd config.input_filenames in
@@ -16,6 +38,7 @@ let parse ?recover config =
         (Except.Text "Type error:")::msg
           |> raise_compile_error None
   );
+  check_duplicate_procs ?recover !cunits;
   List.iter (fun (file_name, cunit) ->
     DebugLog.file "ast" (Filename.basename file_name ^ ".dot") (AstDump.print cunit)
   ) !cunits;

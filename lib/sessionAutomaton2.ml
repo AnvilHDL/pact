@@ -37,7 +37,7 @@ let string_of_msgset set =
 type observation =
   | Message of message_specifier
   | Progress of identifier
-  | FairBranch of identifier * int (*Will use it later, when type spec is allowed*)
+  | FairBranch of identifier * int (* arm k of the fair choice with this identifier *)
 
 
 (* msgs > Prog > fairbranch *)
@@ -58,7 +58,7 @@ module OrderedObs = struct
   let string_of_observation = function
     | Message m -> string_of_msg_spec m
     | Progress id -> "$" ^ id
-    | FairBranch (id, branch) -> id ^ (if branch = 0 then "_false" else "_true")
+    | FairBranch (id, branch) -> id ^ "_" ^ string_of_int branch
 end
 
 module ObservationSet = Set.Make (OrderedObs)

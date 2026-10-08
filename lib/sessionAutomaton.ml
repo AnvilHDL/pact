@@ -25,6 +25,7 @@ type label_kind =
   | Theta of session_type
   | Recurse of identifier
   | Terminal of int
+  | Fair of identifier * int (* arm k of the fair choice with this identifier *)
 
 module LabelKindOrd = struct
   type t = label_kind
@@ -57,6 +58,7 @@ let string_of_label_set (ls: LabelSet.t) : string =
     | Theta st -> Printf.sprintf "Theta(%s)" (Lang.string_of_protocol st)
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
     | Recurse var -> Printf.sprintf "$"^var
+    | Fair (id, k) -> Printf.sprintf "%s_%d" id k
     | OptionDelay msg_groups ->
       let ms_str = String.concat "|" (List.map (fun group -> String.concat "&" (List.map Lang.string_of_msg_spec group)) msg_groups) in
       Printf.sprintf "(#Questionable[%s])" ms_str
@@ -316,6 +318,7 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
             Printf.sprintf "(#¬[%s])" ms_str
           (* Explicitly handle Recurse if needed, or fallback *)
           | Recurse id -> Printf.sprintf "$%s" id
+          | Fair (id, k) -> Printf.sprintf "%s_%d" id k
           (* | _-> string_of_label_set t.label *)
         ))
     in

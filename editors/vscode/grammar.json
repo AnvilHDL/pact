@@ -374,7 +374,15 @@
 					"include": "#delay"
 				},
 				{
-					"match": "[&^](?=\\s*\\()|[⋀⨁]",
+					"match": "\\^\\^|[⨁⊕]ᶠ",
+					"name": "keyword.operator.offer.fair.anvil"
+				},
+				{
+					"match": "\\+\\+|\\+ᶠ",
+					"name": "keyword.operator.composition.fair.anvil"
+				},
+				{
+					"match": "[&^](?=\\s*\\()|[⋀∧⨁⊕]",
 					"name": "keyword.operator.offer.anvil"
 				},
 				{
@@ -1287,6 +1295,10 @@
 							"name": "keyword.control.anvil"
 						}
 					}
+				},
+				{
+					"match": "\\b(fair)\\b(?=\\s*(?:if|xoffer)\\b)",
+					"name": "storage.modifier.fair.anvil"
 				},
 				{
 					"match": "\\b(i?send|i?recv|ready|probe)\\b",

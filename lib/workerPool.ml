@@ -50,8 +50,8 @@ let shutdown p =
   List.iter Domain.join p.domains;
   p.domains <- []
 
-let with_pool f =
-  let p = create !jobs in
+let with_pool ?(size = !jobs) f =
+  let p = create size in
   Fun.protect ~finally:(fun () -> shutdown p) (fun () -> f p)
 
 (* Run [run] on every worker and on the caller; return when all have finished. *)

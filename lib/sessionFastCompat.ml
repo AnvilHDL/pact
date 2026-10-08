@@ -289,7 +289,20 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
               )
               |> List.sort_uniq compare_msg_spec
             in
-            (ns, combined_actions)
+            (* Fair-arm labels of the members' taken transitions. *)
+            let fair =
+              List.concat (List.init automata_count (fun i ->
+                let _, off = selected.(i) in
+                if not active.(i) || off = [] then []
+                else
+                  List.nth sync_transitions i
+                  |> List.filter (fun t ->
+                       t.from_state = current_states_arr.(i)
+                       && get_ordered_transition_specifiers t = off)
+                  |> List.concat_map (fun t ->
+                       List.filter (function Fair _ -> true | _ -> false) (LabelSet.elements t.label))))
+            in
+            (ns, combined_actions, fair)
           in
 
           let action_set_of_list actions =
@@ -299,9 +312,9 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
           let normalized_candidates =
             possible_next_states
             |> List.filter_map (fun combo ->
-              let ns, combined_actions = normalize_transition_combo combo in
+              let ns, combined_actions, fair = normalize_transition_combo combo in
               if ns <> current_states && combined_actions <> [] then
-                Some (ns, List.sort_uniq compare_msg_spec combined_actions)
+                Some (ns, List.sort_uniq compare_msg_spec combined_actions, fair)
               else
                 None
             )
@@ -309,10 +322,10 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
           in
 
           let pruned_candidates =
-            List.filter (fun (ns, actions) ->
+            List.filter (fun (ns, actions, _) ->
               let actions_set = action_set_of_list actions in
               not (
-                List.exists (fun (ns_other, actions_other) ->
+                List.exists (fun (ns_other, actions_other, _) ->
                   (ns_other <> ns || actions_other <> actions)
                   && MsgSpecSet.subset actions_set (action_set_of_list actions_other)
                   && not (MsgSpecSet.equal actions_set (action_set_of_list actions_other))
@@ -321,11 +334,11 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
             ) normalized_candidates
           in
 
-          List.iter (fun (ns, combined_actions) ->
+          List.iter (fun (ns, combined_actions, fair) ->
             if ns <> current_states && combined_actions <> [] then begin
               found := true;
               incr ticks;
-              let combined_label = List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
+              let combined_label = List.fold_left (fun acc a -> LabelSet.add (Action a) acc) (LabelSet.of_list fair) combined_actions in
               emit ns (combined_label, false, false, false, false)
             end
           ) pruned_candidates;

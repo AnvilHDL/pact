@@ -2,6 +2,10 @@ open Lang
 open Except
 open SessionAutomaton
 
+(* Each fair choice gets its own identifier; its arms are labelled with it. *)
+let fair_counter = Atomic.make 0
+let fresh_fair_id () = Printf.sprintf "f%d" (Atomic.fetch_and_add fair_counter 1)
+
 let rec build_automaton (name : identifier option) (st: Lang.session_type) (default_span : Lang.code_span)  : TypeAutomaton.t =
   let auto = TypeAutomaton.create () in
 
@@ -122,11 +126,16 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       (Hashtbl.find auto.states current).accepting <- false;
       
       (* Only a declared fair choice (++) is fair. *)
-      (match s_type with Lang.StyFairChoice _ -> TypeAutomaton.make_fair auto current | _ -> ());
+      let arm = match s_type with
+        | Lang.StyFairChoice _ ->
+            TypeAutomaton.make_fair auto current;
+            let id = fresh_fair_id () in
+            fun k label -> LabelSet.add (Fair (id, k)) label
+        | _ -> fun _ label -> label in
       let left_root = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current left_root (LabelSet.singleton (Theta st1)) false true false false;
+      TypeAutomaton.add_transition auto current left_root (arm 0 (LabelSet.singleton (Theta st1))) false true false false;
       let right_root = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current right_root (LabelSet.singleton (Theta st2)) false true false false;
+      TypeAutomaton.add_transition auto current right_root (arm 1 (LabelSet.singleton (Theta st2))) false true false false;
       let left_end = build st1 left_root var_map in
       let right_end = build st2 right_root var_map in
       (Hashtbl.find auto.states left_end).accepting <- false;
@@ -142,7 +151,9 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
     | Lang.StyXOffer offerings | Lang.StyFairXOffer offerings ->
       (
         (* Only a declared fair exclusive offer (^^) is fair. *)
-        (match s_type with Lang.StyFairXOffer _ -> TypeAutomaton.make_fair auto current | _ -> ());
+        let fair_id = match s_type with
+          | Lang.StyFairXOffer _ -> TypeAutomaton.make_fair auto current; Some (fresh_fair_id ())
+          | _ -> None in
         let is_wildcard_present = List.exists (fun (o : offering_session_type) ->
           match o.Lang.trigger with
           | Lang.AtomDelay _ -> true
@@ -180,10 +191,19 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           | None -> TypeAutomaton.reroute_transitions auto new_wildcard_state end_state var_map ;
         end;
 
-        List.iter (fun o_ms ->
+        List.iteri (fun k o_ms ->
           let st = branch_type_for_offering o_ms in
-
+          (* The arm's head edges are the ones it adds from the offer state; compared by
+             value, since rerouting inside the arm rebuilds every transition record. *)
+          let key t = (t.to_state, t.label, t.is_epsilon, t.is_theta, t.is_conditional) in
+          let before = List.filter_map (fun t -> if t.from_state = current then Some (key t) else None)
+              auto.transitions in
           let branch_end = build st current var_map in
+          Option.iter (fun id ->
+            auto.transitions <- List.map (fun t ->
+              if t.from_state = current && not (List.mem (key t) before)
+              then { t with label = LabelSet.add (Fair (id, k)) t.label } else t) auto.transitions)
+            fair_id;
           if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state var_map
         ) all_msg_branches;
         if all_blocking && not is_wildcard_present then
@@ -360,11 +380,13 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       (Hashtbl.find auto.states current).accepting <- false;
       TypeAutomaton.make_fair auto current;
       TypeAutomaton.make_adversary auto current;
+      (* F tau is mu X . (tau ++ #;X): arm 0 proceeds, arm 1 waits a cycle. *)
+      let id = fresh_fair_id () in
       let new_pseudo = TypeAutomaton.new_state auto false in
-      TypeAutomaton.add_transition auto current new_pseudo (LabelSet.singleton (Theta (StyAtom (AtomDelay 1)))) false true false false;
+      TypeAutomaton.add_transition auto current new_pseudo (LabelSet.of_list [Theta (StyAtom (AtomDelay 1)); Fair (id, 1)]) false true false false;
       TypeAutomaton.add_transition auto new_pseudo current (LabelSet.singleton Delay) false false false false;
       let cont_state = TypeAutomaton.new_state auto true in
-      TypeAutomaton.add_transition auto current cont_state LabelSet.empty false true false false;
+      TypeAutomaton.add_transition auto current cont_state (LabelSet.singleton (Fair (id, 0))) false true false false;
       let end_state = build st cont_state var_map in
       end_state
     | Lang.StyVar var ->

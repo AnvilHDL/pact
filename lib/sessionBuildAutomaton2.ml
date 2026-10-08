@@ -94,6 +94,15 @@ let fresh_future_rec_var () =
   incr future_rec_counter;
   Printf.sprintf "__future_%d" !future_rec_counter
 
+(* Each fair choice gets its own identifier; its arms are labelled with it. *)
+let fair_counter = Atomic.make 0
+let fresh_fair_id () = Printf.sprintf "f%d" (Atomic.fetch_and_add fair_counter 1)
+
+let with_fair_arm arm action =
+  match arm, action with
+  | Some (id, k), Observations obs -> Observations (ObservationSet.add (FairBranch (id, k)) obs)
+  | _ -> action
+
 (* Wrap a top-level type once: mu X . ((body; $member_id); X). *)
 let repeat_with_progress member_id body =
   let rec variables acc = function
@@ -375,12 +384,15 @@ let rec build_automaton (name : identifier option) (st : session_type)
         mark_nonfinal ();
         TypeAutomaton.make_adversary auto current;
         (* Only a declared fair choice (++) is fair. *)
-        (match sty with StyFairChoice _ -> TypeAutomaton.make_fair auto current | _ -> ());
+        let fair = match sty with
+          | StyFairChoice _ -> TypeAutomaton.make_fair auto current; Some (fresh_fair_id ())
+          | _ -> None in
+        let arm k = Option.map (fun id -> (id, k)) fair in
         let left_start = TypeAutomaton.new_state auto false in
         let right_start = TypeAutomaton.new_state auto false in
-        TypeAutomaton.add_transition auto current left_start epsilon
+        TypeAutomaton.add_transition auto current left_start (with_fair_arm (arm 0) epsilon)
           { any_guard with forbid_clock = true } MsgSet.empty;
-        TypeAutomaton.add_transition auto current right_start epsilon
+        TypeAutomaton.add_transition auto current right_start (with_fair_arm (arm 1) epsilon)
           { any_guard with forbid_clock = true } MsgSet.empty;
         build left left_start rec_env let_env
         @ build right right_start rec_env let_env
@@ -473,6 +485,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
     (TypeAutomaton.set_accepting auto current false;
     TypeAutomaton.make_adversary auto current;
     if fair then TypeAutomaton.make_fair auto current;
+    let fair_id = if fair then Some (fresh_fair_id ()) else None in
     let msg_branches =
       validate_offerings default_span offerings "exclusive offer"
       |> List.filter_map (fun (off, _) ->
@@ -492,10 +505,11 @@ let rec build_automaton (name : identifier option) (st : session_type)
     in
     let pending_heads = MsgSet.diff head_set singleton_head in
     let finals = ref [] in
-    List.iter
-      (fun (off, group) ->
+    List.iteri
+      (fun k (off, group) ->
+        let arm = Option.map (fun id -> (id, k)) fair_id in
         let target = TypeAutomaton.new_state auto false in
-        TypeAutomaton.add_transition auto current target (message_actions group)
+        TypeAutomaton.add_transition auto current target (with_fair_arm arm (message_actions group))
           {
             any_guard with
             future_disjoint = head_set;
@@ -511,7 +525,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
               let rest = MsgSet.diff group taken in
               if not (MsgSet.is_empty taken) && not (MsgSet.is_empty rest) then begin
                 let partial = TypeAutomaton.new_state auto false in
-                TypeAutomaton.add_transition auto current partial (message_actions taken)
+                TypeAutomaton.add_transition auto current partial (with_fair_arm arm (message_actions taken))
                   {
                     any_guard with
                     future_disjoint = MsgSet.diff head_set group;

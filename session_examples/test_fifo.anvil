@@ -4,7 +4,7 @@ interface fifo_itfc(push_ep : right fifo_insert_ch<select_t>, pop_ep : right fif
                                                        * :  ⨁(#push_ep.full, *);#1;X
                                                      )
                                                   )
-                                                                    + 
+                                                                    ++ 
                                                   (
                                                     μ Y . ⨁(
                                                         #push_ep.push : ⨁(#pop_ep.empty, *);#1,
@@ -12,7 +12,7 @@ interface fifo_itfc(push_ep : right fifo_insert_ch<select_t>, pop_ep : right fif
                                                     )
                                                   )
                                                      
-                                                                    + 
+                                                                    ++ 
                                                     (
                                                         ⋀(push_ep.push , pop_ep.pop) ; #1
                                                     )

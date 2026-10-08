@@ -310,6 +310,7 @@ let play_game ?(silent = false) (auto : TypeAutomaton.t) (ids : string list) : (
         match label with
         | Action message -> A.ObservationSet.add (A.Message message) observations
         | Recurse id -> A.ObservationSet.add (A.Progress id) observations
+        | Fair (id, k) -> A.ObservationSet.add (A.FairBranch (id, k)) observations
         | _ -> observations) transition.label A.ObservationSet.empty)
     in
     A.TypeAutomaton.add_transition product transition.from_state transition.to_state

@@ -109,6 +109,14 @@ let edge_progress_ids edge =
   | Some act -> progress_ids_of_action act
   | _ -> StringSet.empty
 
+(* The fair arms (choice identifier, arm) an edge takes. *)
+let edge_arms edge =
+  match edge.arena_edge_action with
+  | Some (Observations obs) ->
+      ObservationSet.fold (fun o acc ->
+        match o with FairBranch (id, k) -> (id, k) :: acc | _ -> acc) obs []
+  | _ -> []
+
 (* ---- Compatibility game ---- *)
 
 type game_result = {
@@ -176,20 +184,27 @@ let compute_reach_attractor ?(is_fair = fun (node : arena_node) -> node.arena_is
         StringSet.mem edge.arena_edge_to valid_region
         && (is_good edge || StringSet.mem edge.arena_edge_to !attractor)
       in
-      let existential =
-        match node.arena_node_kind with
-        | ArenaPlayer -> true
-        | ArenaAdversary -> is_fair node
-        | ArenaFail -> false
+      let universal edges =
+        edges <> []
+        && List.for_all
+             (fun edge -> StringSet.mem edge.arena_edge_to valid_region)
+             edges
+        && List.for_all edge_good edges
+      in
+      (* At a fair node every move stays inside and all moves of some fair arm lead on. *)
+      let fair_arm edges =
+        universal edges
+        || edges <> []
+           && List.for_all (fun edge -> StringSet.mem edge.arena_edge_to valid_region) edges
+           && List.exists (fun arm ->
+                List.for_all edge_good (List.filter (fun e -> List.mem arm (edge_arms e)) edges))
+              (List.sort_uniq compare (List.concat_map edge_arms edges))
       in
       let progresses =
-        if existential then List.exists edge_good edges
-        else
-          edges <> []
-          && List.for_all
-               (fun edge -> StringSet.mem edge.arena_edge_to valid_region)
-               edges
-          && List.for_all edge_good edges
+        match node.arena_node_kind with
+        | ArenaPlayer -> List.exists edge_good edges
+        | ArenaAdversary when is_fair node -> fair_arm edges
+        | ArenaAdversary | ArenaFail -> universal edges
       in
       if progresses then (
         (* Record a move before adding this node, so an idle self-loop cannot win. *)
@@ -553,13 +568,16 @@ let with_clock_strategy node_by_id outgoing all_nodes =
     Hashtbl.add restricted node_id edges) region;
   restricted
 
+(* A fair cycle takes, from each of its adversary nodes, every arm that node enables. *)
 let cycle_respects_fairness node_by_id outgoing cycle =
   List.for_all (fun edge ->
     let node = Hashtbl.find node_by_id edge.arena_edge_from in
     match node.arena_node_kind with
-    | ArenaAdversary when node.arena_is_fair ->
-        List.for_all (fun branch -> List.mem branch cycle)
-          (arena_outgoing outgoing node.arena_node_id)
+    | ArenaAdversary ->
+        let id = node.arena_node_id in
+        List.for_all (fun arm ->
+          List.exists (fun e -> e.arena_edge_from = id && List.mem arm (edge_arms e)) cycle)
+          (List.sort_uniq compare (List.concat_map edge_arms (arena_outgoing outgoing id)))
     | _ -> true) cycle
 
 let print_node_context buffer node_by_id winning node_id =
@@ -639,14 +657,19 @@ type int_graph = {
   ig_dst : int array;
 }
 
-(* Node kinds, fairness and per-edge clock/progress for an arena with integer nodes. *)
+(* Node kinds, per-edge clock/progress, and the fair arms each edge takes. *)
 type int_arena = {
   ia_ids : string array;
   ia_kind : arena_node_kind array;
-  ia_fair : bool array;
   ia_graph : int_graph;
   ia_clock : bool array;
   ia_progress : int array; (* bit k set: the edge carries required id k *)
+  ia_arm_start : int array; (* edge e's arm entries: arm_start.(e) .. arm_start.(e+1)-1 *)
+  ia_arm : int array; (* entry: arm id *)
+  ia_arm_slot : int array; (* entry: slot of (source node, arm) *)
+  ia_slot_start : int array; (* node v's slots: slot_start.(v) .. slot_start.(v+1)-1 *)
+  ia_slot_arm : int array; (* slot: arm id *)
+  ia_arm_count : int;
 }
 
 let int_arena_of arena req_ids =
@@ -666,6 +689,11 @@ let int_arena_of arena req_ids =
       for v = 0 to n - 1 do start.(v + 1) <- start.(v + 1) + start.(v) done;
       let m = Array.length edges in
       let dst = Array.make m 0 and clock = Array.make m false and progress = Array.make m 0 in
+      let arms_of = Array.make m [] in
+      let arm_ids = Hashtbl.create 16 in
+      let arm_id a = match Hashtbl.find_opt arm_ids a with
+        | Some i -> i
+        | None -> let i = Hashtbl.length arm_ids in Hashtbl.replace arm_ids a i; i in
       let fill = Array.sub start 0 n in
       let bits = Hashtbl.create 16 in
       List.iteri (fun k id ->
@@ -679,14 +707,38 @@ let int_arena_of arena req_ids =
         clock.(slot) <- edge_is_clock e;
         progress.(slot) <- StringSet.fold (fun id acc ->
           match Hashtbl.find_opt bits id with Some mask -> acc lor mask | None -> acc)
-          (edge_progress_ids e) 0) edges;
+          (edge_progress_ids e) 0;
+        arms_of.(slot) <- List.sort_uniq compare (List.map arm_id (edge_arms e))) edges;
+      (* A node's slots are the distinct arms among its edges. *)
+      let node_arms = Array.init n (fun v ->
+        let acc = ref [] in
+        for e = start.(v) to start.(v + 1) - 1 do acc := arms_of.(e) @ !acc done;
+        Array.of_list (List.sort_uniq compare !acc)) in
+      let slot_start = Array.make (n + 1) 0 in
+      for v = 0 to n - 1 do slot_start.(v + 1) <- slot_start.(v) + Array.length node_arms.(v) done;
+      let arm_start = Array.make (m + 1) 0 in
+      for e = 0 to m - 1 do arm_start.(e + 1) <- arm_start.(e) + List.length arms_of.(e) done;
+      let arm = Array.make arm_start.(m) 0 and arm_slot = Array.make arm_start.(m) 0 in
+      for v = 0 to n - 1 do
+        for e = start.(v) to start.(v + 1) - 1 do
+          List.iteri (fun i a ->
+            let rec find j = if node_arms.(v).(j) = a then j else find (j + 1) in
+            arm.(arm_start.(e) + i) <- a;
+            arm_slot.(arm_start.(e) + i) <- slot_start.(v) + find 0) arms_of.(e)
+        done
+      done;
       Some {
         ia_ids = Array.map (fun node -> node.arena_node_id) nodes;
         ia_kind = Array.map (fun node -> node.arena_node_kind) nodes;
-        ia_fair = Array.map (fun node -> node.arena_is_fair) nodes;
         ia_graph = { ig_n = n; ig_start = start; ig_dst = dst };
         ia_clock = clock;
         ia_progress = progress;
+        ia_arm_start = arm_start;
+        ia_arm = arm;
+        ia_arm_slot = arm_slot;
+        ia_slot_start = slot_start;
+        ia_slot_arm = Array.concat (Array.to_list node_arms);
+        ia_arm_count = Hashtbl.length arm_ids;
       }
     end
 
@@ -707,43 +759,71 @@ let int_predecessors g =
   done;
   (count, src, edge)
 
-(* compute_reach_attractor with counters: linear in the edges inside [valid]. *)
-let int_reach_attractor g (pstart, psrc, pedge) ~existential ~good ~valid =
+(* compute_reach_attractor with counters. Node modes: 0 all edges, 1 any edge,
+   2 fair: every edge stays inside and all edges of some arm lead on. *)
+let int_reach_attractor ia (pstart, psrc, pedge) ~mode ~good ~valid =
+  let g = ia.ia_graph in
   let n = g.ig_n in
   let attr = Array.make n false in
   let need = Array.make n 0 in
+  let slot_need = Array.make (Array.length ia.ia_slot_arm) 0 in
   let queue = Queue.create () in
   let attract v = attr.(v) <- true; Queue.add v queue in
+  let effective_mode v =
+    if mode v = 2 && ia.ia_slot_start.(v + 1) = ia.ia_slot_start.(v) then 0 else mode v in
   for v = 0 to n - 1 do
     if valid.(v) then begin
       let lo = g.ig_start.(v) and hi = g.ig_start.(v + 1) in
-      if existential v then begin
-        let found = ref false in
-        for e = lo to hi - 1 do
-          if valid.(g.ig_dst.(e)) && good e then found := true
-        done;
-        if !found then attract v
-      end else begin
-        let inside = ref (hi > lo) and pending = ref 0 in
-        for e = lo to hi - 1 do
-          if not valid.(g.ig_dst.(e)) then inside := false
-          else if not (good e) then incr pending
-        done;
-        (* A universal node with an edge leaving [valid] can never be attracted. *)
-        need.(v) <- (if !inside then !pending else -1);
-        if !inside && !pending = 0 then attract v
-      end
+      match effective_mode v with
+      | 1 ->
+          let found = ref false in
+          for e = lo to hi - 1 do
+            if valid.(g.ig_dst.(e)) && good e then found := true
+          done;
+          if !found then attract v
+      | m ->
+          let inside = ref (hi > lo) and pending = ref 0 in
+          for e = lo to hi - 1 do
+            if not valid.(g.ig_dst.(e)) then inside := false
+            else if not (good e) then begin
+              incr pending;
+              if m = 2 then
+                for i = ia.ia_arm_start.(e) to ia.ia_arm_start.(e + 1) - 1 do
+                  let s = ia.ia_arm_slot.(i) in
+                  slot_need.(s) <- slot_need.(s) + 1
+                done
+            end
+          done;
+          (* A node with an edge leaving [valid] can never be attracted. *)
+          need.(v) <- (if !inside then !pending else -1);
+          let arm_done = ref false in
+          if m = 2 then
+            for s = ia.ia_slot_start.(v) to ia.ia_slot_start.(v + 1) - 1 do
+              if slot_need.(s) = 0 then arm_done := true
+            done;
+          if !inside && (!pending = 0 || !arm_done) then attract v
     end
   done;
   while not (Queue.is_empty queue) do
     let u = Queue.take queue in
     for i = pstart.(u) to pstart.(u + 1) - 1 do
       let v = psrc.(i) in
-      if valid.(v) && not attr.(v) && not (good pedge.(i)) then
-        if existential v then attract v
-        else if need.(v) > 0 then (
-          need.(v) <- need.(v) - 1;
-          if need.(v) = 0 then attract v)
+      let e = pedge.(i) in
+      if valid.(v) && not attr.(v) && not (good e) then
+        match effective_mode v with
+        | 1 -> attract v
+        | m ->
+            if need.(v) > 0 then begin
+              need.(v) <- need.(v) - 1;
+              let hit = ref (need.(v) = 0) in
+              if m = 2 then
+                for j = ia.ia_arm_start.(e) to ia.ia_arm_start.(e + 1) - 1 do
+                  let s = ia.ia_arm_slot.(j) in
+                  slot_need.(s) <- slot_need.(s) - 1;
+                  if slot_need.(s) = 0 then hit := true
+                done;
+              if !hit then attract v
+            end
     done
   done;
   attr
@@ -751,13 +831,13 @@ let int_reach_attractor g (pstart, psrc, pedge) ~existential ~good ~valid =
 let int_count a = Array.fold_left (fun acc b -> if b then acc + 1 else acc) 0 a
 
 (* compute_recurrence_region: shrink until every node can force a good edge back into the region. *)
-let int_recurrence g preds ~existential ~good valid =
+let int_recurrence ia preds ~mode ~good valid =
   let region = ref valid in
   let changed = ref true in
   while !changed do
     let current = !region in
-    let next = int_reach_attractor g preds ~existential
-        ~good:(fun e -> good e && current.(g.ig_dst.(e))) ~valid:current in
+    let next = int_reach_attractor ia preds ~mode
+        ~good:(fun e -> good e && current.(ia.ia_graph.ig_dst.(e))) ~valid:current in
     if int_count next = int_count current then changed := false else region := next
   done;
   !region
@@ -786,75 +866,196 @@ let int_forced_fail ia =
   done;
   forced
 
-(* solve_region on integer nodes; the monitor keeps one copy of each node per required id. *)
-let int_solve_region ia safe req_count =
-  let g = ia.ia_graph in
-  (* Clock recurrence ignores fairness: only the player chooses. *)
-  let player_only v = ia.ia_kind.(v) = ArenaPlayer in
-  if req_count = 0 then
-    int_recurrence g (int_predecessors g) ~existential:player_only ~good:(fun e -> ia.ia_clock.(e)) safe
-  else begin
-    let r = req_count in
-    let mn = g.ig_n * r in
-    let mstart = Array.make (mn + 1) 0 in
-    for v = 0 to g.ig_n - 1 do
-      let deg = g.ig_start.(v + 1) - g.ig_start.(v) in
-      for k = 0 to r - 1 do mstart.(v * r + k + 1) <- deg done
-    done;
-    for m = 0 to mn - 1 do mstart.(m + 1) <- mstart.(m + 1) + mstart.(m) done;
-    let me = mstart.(mn) in
-    let mdst = Array.make me 0 and mclock = Array.make me false and madv = Array.make me false in
-    for v = 0 to g.ig_n - 1 do
-      for k = 0 to r - 1 do
-        let slot = ref mstart.(v * r + k) in
-        for e = g.ig_start.(v) to g.ig_start.(v + 1) - 1 do
-          let advances = ia.ia_progress.(e) land (1 lsl k) <> 0 in
-          let next_k = if advances then (k + 1) mod r else k in
-          mdst.(!slot) <- g.ig_dst.(e) * r + next_k;
-          mclock.(!slot) <- ia.ia_clock.(e);
-          madv.(!slot) <- advances;
-          incr slot
-        done
-      done
-    done;
-    let mg = { ig_n = mn; ig_start = mstart; ig_dst = mdst } in
-    let mpreds = int_predecessors mg in
-    let base m = m / r in
-    let clock_existential m = ia.ia_kind.(base m) = ArenaPlayer in
-    let progress_existential m =
-      match ia.ia_kind.(base m) with
-      | ArenaPlayer -> true
-      | ArenaAdversary -> ia.ia_fair.(base m)
-      | ArenaFail -> false
-    in
-    let region = ref (Array.init mn (fun m -> safe.(base m))) in
-    let changed = ref true in
+(* Generalized Büchi under per-node fairness: the clock recurs on every path; each
+   required id recurs on paths where a node visited infinitely often takes each of
+   its fair arms infinitely often. The components shrink one region together and run
+   in parallel. *)
+let int_fair_region ia preds safe req_count =
+  let clock_mode v = if ia.ia_kind.(v) = ArenaPlayer then 1 else 0 in
+  let progress_mode v =
+    match ia.ia_kind.(v) with ArenaPlayer -> 1 | ArenaAdversary -> 2 | ArenaFail -> 0 in
+  let component c region =
+    if c = 0 then int_recurrence ia preds ~mode:clock_mode ~good:(fun e -> ia.ia_clock.(e)) region
+    else
+      let bit = 1 lsl (c - 1) in
+      int_recurrence ia preds ~mode:progress_mode
+        ~good:(fun e -> ia.ia_progress.(e) land bit <> 0) region
+  in
+  let region = ref safe and changed = ref true in
+  WorkerPool.with_pool ~size:(min !WorkerPool.jobs (req_count + 1)) (fun pool ->
     while !changed do
       let current = !region in
-      let a = int_recurrence mg mpreds ~existential:clock_existential ~good:(fun e -> mclock.(e)) current in
-      let b = int_recurrence mg mpreds ~existential:progress_existential ~good:(fun e -> madv.(e)) current in
-      let next = Array.init mn (fun m -> a.(m) && b.(m)) in
+      let results = WorkerPool.map pool (fun c -> component c current)
+          (Array.init (req_count + 1) Fun.id) in
+      let next = Array.copy current in
+      Array.iter (function
+        | Ok r -> Array.iteri (fun v w -> if not w then next.(v) <- false) r
+        | Error e -> raise e) results;
       if int_count next = int_count current then changed := false else region := next
-    done;
-    let winning = !region in
-    Array.init g.ig_n (fun v ->
-      let rec all_phases k = k >= r || (winning.(v * r + k) && all_phases (k + 1)) in
-      all_phases 0)
-  end
+    done);
+  !region
 
-(* Winning arena node ids, or None when the arena cannot be indexed. *)
+(* A Rabin pair: every goal recurs with the clock, and arm [avoid] (if >= 0) is
+   eventually never taken. *)
+type goal = GClock | GProg of int | GArm of int
+type rabin_pair = { goals : goal list; avoid : int }
+
+(* Exact check under per-choice fairness: a fair arm enabled infinitely often is
+   taken infinitely often. The player wins when the clock recurs and either every
+   required id recurs or some arm is enabled infinitely often yet taken finitely
+   often. That is a generalized Rabin game, solved recursively on [region], which
+   must be closed under adversary moves. *)
+let int_exact ia (pstart, psrc, pedge) region req_count =
+  let g = ia.ia_graph in
+  let n = g.ig_n in
+  let mark = Array.make n 0 and amark = Array.make n 0 and tmark = Array.make n 0 in
+  let cnt = Array.make n 0 in
+  let stamp = ref 0 and calls = ref 0 in
+  let fresh () = incr stamp; !stamp in
+  let enabled v a =
+    let rec find s = s < ia.ia_slot_start.(v + 1) && (ia.ia_slot_arm.(s) = a || find (s + 1)) in
+    find ia.ia_slot_start.(v) in
+  let takes a e =
+    let rec find i = i < ia.ia_arm_start.(e + 1) && (ia.ia_arm.(i) = a || find (i + 1)) in
+    find ia.ia_arm_start.(e) in
+  let never _ = false in
+  let goal_vertex = function GArm a -> (fun v -> enabled v a) | _ -> never in
+  let goal_edge = function
+    | GClock -> (fun e -> ia.ia_clock.(e))
+    | GProg k -> (fun e -> ia.ia_progress.(e) land (1 lsl k) <> 0)
+    | GArm _ -> never in
+  let marked s = let t = fresh () in Array.iter (fun v -> tmark.(v) <- t) s; (fun v -> tmark.(v) = t) in
+  let diff s a =
+    let gone = marked a in
+    let out = Array.make (Array.length s) 0 and k = ref 0 in
+    Array.iter (fun v -> if not (gone v) then (out.(!k) <- v; incr k)) s;
+    Array.sub out 0 !k in
+  (* Attractor of the player (owner 0) or the adversary (owner 1) within subgame [s]. *)
+  let attr owner s ~vtarget ~etarget =
+    let sm = fresh () in
+    Array.iter (fun v -> mark.(v) <- sm) s;
+    let am = fresh () in
+    let out = ref [] and queue = Queue.create () in
+    let add v = amark.(v) <- am; out := v :: !out; Queue.add v queue in
+    let controls v = (ia.ia_kind.(v) = ArenaPlayer) = (owner = 0) in
+    Array.iter (fun v ->
+      if vtarget v then add v
+      else begin
+        let rest = ref 0 and hit = ref false in
+        for e = g.ig_start.(v) to g.ig_start.(v + 1) - 1 do
+          if mark.(g.ig_dst.(e)) = sm then (if etarget e then hit := true else incr rest)
+        done;
+        cnt.(v) <- !rest;
+        if (if controls v then !hit else !rest = 0) then add v
+      end) s;
+    while not (Queue.is_empty queue) do
+      let u = Queue.take queue in
+      for i = pstart.(u) to pstart.(u + 1) - 1 do
+        let v = psrc.(i) in
+        if mark.(v) = sm && amark.(v) <> am && not (etarget pedge.(i)) then
+          if controls v then add v
+          else (cnt.(v) <- cnt.(v) - 1; if cnt.(v) = 0 then add v)
+      done
+    done;
+    Array.of_list !out
+  in
+  let present s = function
+    | GArm a -> Array.exists (fun v -> enabled v a) s
+    | goal ->
+        let sm = fresh () in
+        Array.iter (fun v -> mark.(v) <- sm) s;
+        let good = goal_edge goal in
+        Array.exists (fun v ->
+          let rec scan e = e < g.ig_start.(v + 1) && ((good e && mark.(g.ig_dst.(e)) = sm) || scan (e + 1)) in
+          scan g.ig_start.(v)) s
+  in
+  let relevant s p = Array.length s > 0 && List.for_all (present s) p.goals in
+  (* Grow the player's region pair by pair: avoid the pair's arm, then meet its goals. *)
+  let rec rabin s pairs =
+    incr calls;
+    let pairs = List.filter (relevant s) pairs in
+    let won = ref [||] and again = ref (pairs <> []) in
+    while !again do
+      again := false;
+      List.iter (fun p ->
+        if not !again then begin
+          let s1 = diff s !won in
+          let t = if p.avoid < 0 then s1
+            else diff s1 (attr 1 s1 ~vtarget:never ~etarget:(takes p.avoid)) in
+          if relevant t p then begin
+            let wt = genbuchi t p.goals (List.filter (fun q -> q != p) pairs) in
+            if Array.length wt > 0 then begin
+              won := attr 0 s ~vtarget:(marked (Array.append !won wt)) ~etarget:never;
+              again := true
+            end
+          end
+        end) pairs
+    done;
+    !won
+  (* Every goal recurs, except where the adversary avoids one and the other pairs win. *)
+  and genbuchi t goals others =
+    let t = ref t and again = ref true in
+    while !again && Array.length !t > 0 do
+      again := false;
+      List.iter (fun goal ->
+        if not !again then begin
+          let rest = diff !t (attr 0 !t ~vtarget:(goal_vertex goal) ~etarget:(goal_edge goal)) in
+          if Array.length rest > 0 then begin
+            let lose = diff rest (rabin rest others) in
+            if Array.length lose > 0 then begin
+              t := diff !t (attr 1 !t ~vtarget:(marked lose) ~etarget:never);
+              again := true
+            end
+          end
+        end) goals
+    done;
+    !t
+  in
+  let vertices = Array.of_list (List.filter (fun v -> region.(v)) (List.init n Fun.id)) in
+  let arms = Array.make ia.ia_arm_count false in
+  Array.iter (fun v ->
+    for s = ia.ia_slot_start.(v) to ia.ia_slot_start.(v + 1) - 1 do arms.(ia.ia_slot_arm.(s)) <- true done)
+    vertices;
+  let live = { goals = GClock :: List.init req_count (fun k -> GProg k); avoid = -1 } in
+  let arm_pairs = List.filter_map (fun a ->
+    if arms.(a) then Some { goals = [ GClock; GArm a ]; avoid = a } else None)
+    (List.init ia.ia_arm_count Fun.id) in
+  let won = rabin vertices (live :: arm_pairs) in
+  let win = Array.make n false in
+  Array.iter (fun v -> win.(v) <- true) won;
+  (win, List.length arm_pairs, !calls)
+
+(* Winning arena node ids, or None when the arena cannot be indexed. The per-node
+   fixpoint over-approximates per-choice fairness and is closed under adversary
+   moves, so the exact check runs only inside it, and only when it accepts. *)
 let int_winning arena progress_ids =
   match int_arena_of arena progress_ids with
   | None -> None
   | Some ia ->
       let forced = int_forced_fail ia in
       let safe = Array.map not forced in
-      let win = int_solve_region ia safe (List.length progress_ids) in
+      let r = List.length progress_ids in
+      let preds = int_predecessors ia.ia_graph in
+      let t0 = Unix.gettimeofday () in
+      let fair = int_fair_region ia preds safe r in
+      let start = ref (-1) in
+      Array.iteri (fun v id -> if id = arena.arena_start then start := v) ia.ia_ids;
+      let node_fair = !start >= 0 && fair.(!start) in
+      let win =
+        if r = 0 || ia.ia_arm_count = 0 || not node_fair then fair
+        else begin
+          let t1 = Unix.gettimeofday () in
+          let exact, arms, calls = int_exact ia preds fair r in
+          CliOutput.status "Fairness: per-node %d nodes (%.1fs); per-choice %d nodes, %d arms, %d calls (%.1fs)"
+            (int_count fair) (t1 -. t0) (int_count exact) arms calls (Unix.gettimeofday () -. t1);
+          exact
+        end
+      in
       let ids = ref [] in
       Array.iteri (fun v w ->
         let fail_dropped = progress_ids <> [] && ia.ia_kind.(v) = ArenaFail in
         if w && not forced.(v) && not fail_dropped then ids := ia.ia_ids.(v) :: !ids) win;
-      Some (StringSet.of_list !ids)
+      Some (StringSet.of_list !ids, node_fair)
 
 let play_arena arena ~progress_ids =
   let node_by_id = node_table arena in
@@ -872,10 +1073,10 @@ let play_arena arena ~progress_ids =
     |> drop_fail_when_required node_by_id progress_ids
     |> fun w -> StringSet.diff w forced_fail
   in
-  let winning =
+  let winning, node_fair =
     match int_winning arena progress_ids with
-    | Some w -> w
-    | None -> string_winning ()
+    | Some (w, node_fair) -> (w, node_fair)
+    | None -> (string_winning (), false)
   in
   let compatible = StringSet.mem arena.arena_start winning in
   let selected_player_edges = select_player_edges arena outgoing winning in
@@ -891,6 +1092,12 @@ let play_arena arena ~progress_ids =
   in
   let counterexample_trace =
     if compatible then None
+    else if node_fair then
+      Some
+        (indent_block "  "
+           ("Per-node fairness accepts, but per-choice fairness rejects: the system can starve\n\
+             a member by tying a fair choice's outcome to the rest of the state.\n"
+            ^ losing_trace node_by_id outgoing winning arena.arena_start))
     else
       Some
         (indent_block "  "
@@ -1037,8 +1244,7 @@ let build_arena name product =
           | _ ->
               List.iter
                 (fun t ->
-                  add_edge ~action:t.action adv_id (entry t.to_state)
-                    (ActionLabel t.action))
+                  add_edge ~action:t.action adv_id (entry t.to_state) (ActionLabel t.action))
                 matching)
         moves)
     state_ids;
