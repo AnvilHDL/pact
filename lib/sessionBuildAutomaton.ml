@@ -199,11 +199,13 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
           let before = List.filter_map (fun t -> if t.from_state = current then Some (key t) else None)
               auto.transitions in
           let branch_end = build st current var_map in
-          Option.iter (fun id ->
-            auto.transitions <- List.map (fun t ->
-              if t.from_state = current && not (List.mem (key t) before)
-              then { t with label = LabelSet.add (Fair (id, k)) t.label } else t) auto.transitions)
-            fair_id;
+          (* Tag the arm's head edges with the offer's arms and, if fair, the arm. *)
+          let tag label =
+            let label = LabelSet.add (XArm all_msg_groups) label in
+            match fair_id with Some id -> LabelSet.add (Fair (id, k)) label | None -> label in
+          auto.transitions <- List.map (fun t ->
+            if t.from_state = current && not (List.mem (key t) before)
+            then { t with label = tag t.label } else t) auto.transitions;
           if not (branch_end=current) then TypeAutomaton.reroute_transitions auto branch_end end_state var_map
         ) all_msg_branches;
         if all_blocking && not is_wildcard_present then

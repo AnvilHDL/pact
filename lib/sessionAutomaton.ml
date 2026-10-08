@@ -26,6 +26,7 @@ type label_kind =
   | Recurse of identifier
   | Terminal of int
   | Fair of identifier * int (* arm k of the fair choice with this identifier *)
+  | XArm of message_specifier list list (* head of an exclusive-offer arm; the offer's arm triggers *)
 
 module LabelKindOrd = struct
   type t = label_kind
@@ -59,6 +60,7 @@ let string_of_label_set (ls: LabelSet.t) : string =
     | Terminal st -> Printf.sprintf "Terminal(%d)" st
     | Recurse var -> Printf.sprintf "$"^var
     | Fair (id, k) -> Printf.sprintf "%s_%d" id k
+    | XArm _ -> "arm"
     | OptionDelay msg_groups ->
       let ms_str = String.concat "|" (List.map (fun group -> String.concat "&" (List.map Lang.string_of_msg_spec group)) msg_groups) in
       Printf.sprintf "(#Questionable[%s])" ms_str
@@ -319,6 +321,7 @@ let print_automaton_dot (auto: TypeAutomaton.t) (out: out_channel) : unit =
           (* Explicitly handle Recurse if needed, or fallback *)
           | Recurse id -> Printf.sprintf "$%s" id
           | Fair (id, k) -> Printf.sprintf "%s_%d" id k
+          | XArm _ -> "arm"
           (* | _-> string_of_label_set t.label *)
         ))
     in

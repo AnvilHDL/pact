@@ -756,63 +756,152 @@ let unified_product verbose automata boundary_messages internal_messages =
     | None -> [| None |]
     | Some state_id -> Array.of_list (List.map Option.some
         (get_outgoing_from_index automata_outgoing_transitions.(i) state_id))) vector in
-  (* Check combinations [lo, hi) in mixed radix, last component fastest, as the nested loops did. *)
-  let eval_range (choices, lo, hi) =
-    let picked = Array.make num_automata None in
-    let found = ref [] in
-    for combo = lo to hi - 1 do
-      let r = ref combo in
-      for i = num_automata - 1 downto 0 do
-        let c = choices.(i) in
-        picked.(i) <- c.(!r mod Array.length c);
-        r := !r / Array.length c
-      done;
-      match get_satisfied_symbolic_transitions picked boundary_messages internal_messages with
-      | None -> ()
-      | Some symbolic ->
-          let next = Array.mapi (fun j -> function
-            | None -> None
-            | Some t -> active_state j t.to_state) picked in
-          found := (next, symbolic) :: !found
+  (* Internal messages a component can mention; a constraint on a message involves only these components. *)
+  let alpha = Array.map (fun auto ->
+    List.fold_left (fun acc t ->
+      let g = t.guard in
+      List.fold_left MsgSet.union acc
+        [ action_messages t.action; t.offers; t.offers_pending; t.maybe_offers;
+          g.require_now; g.forbid_now; g.future_disjoint; g.future_members ])
+      MsgSet.empty auto.transitions
+    |> MsgSet.inter internal_messages) automata_array in
+  let components = List.init num_automata Fun.id in
+  let neighbours = Array.init num_automata (fun i ->
+    List.filter (fun j -> j <> i && not (MsgSet.disjoint alpha.(i) alpha.(j))) components) in
+  (* Search order: each next component shares the most messages with those already placed. *)
+  let order =
+    let placed = Array.make num_automata false and seen = ref MsgSet.empty and acc = ref [] in
+    for _ = 1 to num_automata do
+      let best = ref (-1) and score = ref (-1) in
+      Array.iteri (fun i a ->
+        if not placed.(i) then
+          let sc = MsgSet.cardinal (MsgSet.inter a !seen) in
+          if sc > !score then (best := i; score := sc)) alpha;
+      placed.(!best) <- true;
+      seen := MsgSet.union !seen alpha.(!best);
+      acc := !best :: !acc
     done;
-    List.rev !found
+    Array.of_list (List.rev !acc) in
+  let pos = Array.make num_automata 0 in
+  Array.iteri (fun d i -> pos.(i) <- d) order;
+  let last_of = List.fold_left (fun acc j -> max acc pos.(j)) 0 in
+  (* At each depth: the components whose sync check is now decided, and the messages whose pairing is. *)
+  let check_at = Array.make (max 1 num_automata) [] and pair_at = Array.make (max 1 num_automata) [] in
+  List.iter (fun i -> let d = last_of (i :: neighbours.(i)) in check_at.(d) <- i :: check_at.(d)) components;
+  MsgSet.iter (fun m ->
+    let holders = List.filter (fun j -> MsgSet.mem m alpha.(j)) components in
+    if holders <> [] then
+      let d = last_of holders in pair_at.(d) <- (m, holders) :: pair_at.(d)) internal_messages;
+  (* Depth-first over components in [order], stopping a branch at the first decided check that fails.
+     These are the checks of transitions_satisfy_sync, restricted to the components they involve;
+     surviving combinations are checked in full as before. The first component is fixed to [first]. *)
+  let search (choices, first) =
+    let picked = Array.make num_automata None and idx = Array.make num_automata 0 in
+    let cur = Array.make num_automata MsgSet.empty and fut = Array.make num_automata MsgSet.empty in
+    let found = ref [] and active = ref 0 and clocks = ref 0 in
+    let synced i =
+      match picked.(i) with
+      | None -> true
+      | Some t ->
+          let now = ref MsgSet.empty and later = ref MsgSet.empty in
+          List.iter (fun j -> now := MsgSet.union !now cur.(j); later := MsgSet.union !later fut.(j))
+            neighbours.(i);
+          let imm = MsgSet.inter internal_messages !now in
+          let future = MsgSet.diff (MsgSet.inter internal_messages !later) imm in
+          (* A valid combination clocks all or none, so the clock is this transition's. *)
+          let env = { imm; future; clock = transition_is_clock t } in
+          MsgSet.equal (MsgSet.inter internal_messages (TypeAutomaton.effective_offers env t))
+            (MsgSet.inter internal_messages cur.(i))
+          && guard_satisfied env t.guard internal_messages
+    in
+    let paired (m, holders) =
+      1 <> List.fold_left (fun n j -> match picked.(j) with
+        | Some t when MsgSet.mem m (action_messages t.action) -> n + 1
+        | _ -> n) 0 holders
+    in
+    let rec go d =
+      if d = num_automata then found := Array.copy idx :: !found
+      else begin
+        let i = order.(d) in
+        let lo, hi = if d = 0 then (first, first + 1) else (0, Array.length choices.(i)) in
+        for k = lo to hi - 1 do
+          let c = choices.(i).(k) in
+          picked.(i) <- c;
+          idx.(i) <- k;
+          let clock = match c with Some t -> transition_is_clock t | None -> false in
+          if Option.is_some c then (incr active; if clock then incr clocks);
+          if !clocks = 0 || !clocks = !active then begin
+            (* The offer slices get_satisfied_symbolic_transitions tries for pending offers. *)
+            let slices = match c with
+              | None -> [ (MsgSet.empty, MsgSet.empty) ]
+              | Some t ->
+                  let pending = MsgSet.inter internal_messages t.offers_pending in
+                  if MsgSet.is_empty pending then [ (t.offers, t.maybe_offers) ]
+                  else List.map (fun slice ->
+                    (MsgSet.union t.offers slice,
+                     if clock then MsgSet.empty else MsgSet.diff t.maybe_offers slice)) (powerset pending)
+            in
+            List.iter (fun (o, f) ->
+              cur.(i) <- o;
+              fut.(i) <- f;
+              if List.for_all synced check_at.(d) && List.for_all paired pair_at.(d) then go (d + 1))
+              slices
+          end;
+          if Option.is_some c then (decr active; if clock then decr clocks)
+        done;
+        picked.(i) <- None;
+        cur.(i) <- MsgSet.empty;
+        fut.(i) <- MsgSet.empty
+      end
+    in
+    if num_automata > 0 then go 0 else found := [ [||] ];
+    (* Different offer slices can reach the same combination. *)
+    List.sort_uniq compare !found
+    |> List.filter_map (fun idx ->
+         let picked = Array.mapi (fun i k -> choices.(i).(k)) idx in
+         match get_satisfied_symbolic_transitions picked boundary_messages internal_messages with
+         | None -> None
+         | Some symbolic ->
+             let next = Array.mapi (fun j -> function
+               | None -> None
+               | Some t -> active_state j t.to_state) picked in
+             Some (idx, next, symbolic))
   in
-  let chunk = 256 in
   WorkerPool.with_pool (fun pool ->
   while not (Queue.is_empty worklist) do
-    (* One BFS level: check its combinations in parallel, then add them in order. *)
+    (* One BFS level: search each state's combinations in parallel, split by the first component's choice,
+       then add them in the order of the full enumeration (component 0 slowest). *)
     let level = Array.of_seq (Queue.to_seq worklist) in
     Queue.clear worklist;
     let tasks = ref [] in
     Array.iteri (fun li (vector, _) ->
       let choices = choices_of vector in
-      let total = Array.fold_left (fun acc c -> acc * Array.length c) 1 choices in
-      let lo = ref 0 in
-      while !lo < total do
-        let hi = min total (!lo + chunk) in
-        tasks := (li, (choices, !lo, hi)) :: !tasks;
-        lo := hi
-      done) level;
+      if num_automata = 0 then tasks := (li, (choices, 0)) :: !tasks
+      else
+        for k = 0 to Array.length choices.(order.(0)) - 1 do
+          tasks := (li, (choices, k)) :: !tasks
+        done) level;
     let tasks = Array.of_list (List.rev !tasks) in
-    let results = WorkerPool.map pool eval_range (Array.map snd tasks) in
+    let results = WorkerPool.map pool search (Array.map snd tasks) in
     let next_task = ref 0 in
     Array.iteri (fun li (_, from_state) ->
       let emitted = Hashtbl.create 16 in
+      let found = ref [] in
       while !next_task < Array.length tasks && fst tasks.(!next_task) = li do
         (match results.(!next_task) with
          | Error e -> raise e
-         | Ok successors ->
-             List.iter (fun (next, symbolic) ->
-               let to_state = intern next in
-               let key = (to_state, symbolic.action, symbolic.guard, symbolic.offers,
-                          symbolic.offers_pending, symbolic.maybe_offers) in
-               if not (Hashtbl.mem emitted key) then (
-                 Hashtbl.add emitted key ();
-                 product_automaton.transitions <-
-                   { symbolic with from_state; to_state } :: product_automaton.transitions))
-               successors);
+         | Ok successors -> found := List.rev_append successors !found);
         incr next_task
       done;
+      List.sort (fun (a, _, _) (b, _, _) -> compare a b) !found
+      |> List.iter (fun (_, next, symbolic) ->
+           let to_state = intern next in
+           let key = (to_state, symbolic.action, symbolic.guard, symbolic.offers,
+                      symbolic.offers_pending, symbolic.maybe_offers) in
+           if not (Hashtbl.mem emitted key) then (
+             Hashtbl.add emitted key ();
+             product_automaton.transitions <-
+               { symbolic with from_state; to_state } :: product_automaton.transitions));
       if Hashtbl.length emitted = 0 then
         DebugLog.line "product" "unified_product.log" "Product state %d has no synchronized successor" from_state)
       level

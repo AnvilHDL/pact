@@ -208,10 +208,54 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
           let create_message_specifier_set msg_list =
             List.fold_left (fun acc msg -> MsgSpecSet.add msg acc) MsgSpecSet.empty msg_list
           in
+          (* Messages the others may still offer later this cycle, but not now. Within the cycle a
+             member moves on only through exchanges that some other member can take part in. *)
+          let later_arr =
+            let actions t = List.filter_map (function Action m -> Some m | _ -> None) (LabelSet.elements t.label) in
+            let within_cycle t =
+              not (LabelSet.exists (function Delay | OptionDelay _ -> true | _ -> false) t.label) in
+            let add_actions acc ts =
+              List.fold_left (fun acc t -> List.fold_left (fun a m -> MsgSpecSet.add m a) acc (actions t)) acc ts in
+            let reached = Array.map IntSet.singleton current_states_arr in
+            let offered = Array.of_list (List.map (add_actions MsgSpecSet.empty) transitions_list) in
+            let others j =
+              let acc = ref MsgSpecSet.empty in
+              Array.iteri (fun k o -> if k <> j then acc := MsgSpecSet.union !acc o) offered;
+              !acc in
+            let changed = ref true in
+            while !changed do
+              changed := false;
+              for j = 0 to automata_count - 1 do
+                let avail = others j in
+                IntSet.iter (fun q ->
+                  List.iter (fun t ->
+                    if within_cycle t && not (IntSet.mem t.to_state reached.(j))
+                       && List.for_all (fun m -> MsgSpecSet.mem m avail) (actions t) then begin
+                      reached.(j) <- IntSet.add t.to_state reached.(j);
+                      offered.(j) <- add_actions offered.(j) (get_outgoing_transitions j t.to_state);
+                      changed := true
+                    end) (get_outgoing_transitions j q)) reached.(j)
+              done
+            done;
+            Array.init automata_count (fun i -> MsgSpecSet.diff (others i) offers_set_arr.(i))
+          in
+          (* An exclusive-offer arm resolves only once no other arm can still arrive this cycle. *)
+          let arm_resolved i c =
+            let taken = create_message_specifier_set c in
+            List.for_all (fun t ->
+              not (MsgSpecSet.equal (create_message_specifier_set (get_ordered_transition_specifiers t)) taken)
+              || LabelSet.for_all (function
+                   | XArm groups ->
+                       List.for_all (List.for_all (fun m ->
+                         MsgSpecSet.mem m taken || not (MsgSpecSet.mem m later_arr.(i)))) groups
+                   | _ -> true) t.label)
+              (List.nth transitions_list i)
+          in
           let satisfiable_offers_arr =
             Array.init automata_count (fun i ->
               List.filter_map (fun (c : message_specifier list)->
-                if MsgSpecSet.subset (create_message_specifier_set c) offers_set_arr.(i) then Some c else None
+                if MsgSpecSet.subset (create_message_specifier_set c) offers_set_arr.(i) && arm_resolved i c
+                then Some c else None
               ) current_state_offer_set_arr.(i)
             )
           in
