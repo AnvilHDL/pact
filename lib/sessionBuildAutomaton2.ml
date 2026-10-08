@@ -358,11 +358,19 @@ let rec build_automaton (name : identifier option) (st : session_type)
           not (IntSet.mem t.from_state final_states
                && t.from_state = t.to_state && t.action = epsilon))
           auto.transitions;
-        List.concat_map
-          (fun final ->
-            TypeAutomaton.set_accepting auto final false;
-            build right final rec_env let_env)
-          left_finals
+        (match IntSet.elements final_states with
+         | [] -> []
+         | [ final ] ->
+             TypeAutomaton.set_accepting auto final false;
+             build right final rec_env let_env
+         | finals ->
+             (* Branch ends join through a non-clock epsilon move, so the rest is built once. *)
+             let join = TypeAutomaton.new_state auto false in
+             List.iter (fun final ->
+               TypeAutomaton.set_accepting auto final false;
+               TypeAutomaton.add_transition auto final join epsilon
+                 { any_guard with forbid_clock = true } MsgSet.empty) finals;
+             build right join rec_env let_env)
     | StyChoice (left, right) | StyFairChoice (left, right) ->
         mark_nonfinal ();
         TypeAutomaton.make_adversary auto current;
