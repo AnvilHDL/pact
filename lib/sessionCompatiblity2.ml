@@ -150,10 +150,14 @@ let check_compatibility_multiparty ?(silent = false) inputs pool_id verbose =
   if inputs = [] then
     raise (TypeError [Text ("Pool " ^ pool_id ^ " has no interface members")]);
   let progress_ids = List.concat_map (fun input -> input.progress_ids) inputs in
+  let t0 = Unix.gettimeofday () in
   let product, internal_messages, boundary_messages = compose (verbose && not silent) pool_id inputs in
   if verbose && silent then print_automaton_counts product stderr;
+  let t1 = Unix.gettimeofday () in
   let arena = SessionGame2.build_arena pool_id product in
   let game = SessionGame2.play_arena arena ~progress_ids in
+  if verbose then
+    CliOutput.status "Time for %s: product %.1fs, game %.1fs" pool_id (t1 -. t0) (Unix.gettimeofday () -. t1);
   write_automaton_dot "product" (pool_id ^ "_product.dot") product;
   DebugLog.file "product" (pool_id ^ "_arena.dot") (SessionGame2.print_arena_dot arena);
   if verbose then

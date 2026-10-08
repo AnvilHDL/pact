@@ -731,35 +731,72 @@ let unified_product verbose automata boundary_messages internal_messages =
   Hashtbl.add product_state_map init_state_vector_opt product_automaton.start_state;
   initialize_state init_state_vector_opt product_automaton.start_state;
   Queue.add (init_state_vector_opt, product_automaton.start_state) worklist;
-  let picked = Array.make num_automata None in
+  (* Each component's transition choices; a finished component has the single choice None. *)
+  let choices_of vector = Array.mapi (fun i -> function
+    | None -> [| None |]
+    | Some state_id -> Array.of_list (List.map Option.some
+        (get_outgoing_from_index automata_outgoing_transitions.(i) state_id))) vector in
+  (* Check combinations [lo, hi) in mixed radix, last component fastest, as the nested loops did. *)
+  let eval_range (choices, lo, hi) =
+    let picked = Array.make num_automata None in
+    let found = ref [] in
+    for combo = lo to hi - 1 do
+      let r = ref combo in
+      for i = num_automata - 1 downto 0 do
+        let c = choices.(i) in
+        picked.(i) <- c.(!r mod Array.length c);
+        r := !r / Array.length c
+      done;
+      match get_satisfied_symbolic_transitions picked boundary_messages internal_messages with
+      | None -> ()
+      | Some symbolic ->
+          let next = Array.mapi (fun j -> function
+            | None -> None
+            | Some t -> active_state j t.to_state) picked in
+          found := (next, symbolic) :: !found
+    done;
+    List.rev !found
+  in
+  let chunk = 256 in
+  WorkerPool.with_pool (fun pool ->
   while not (Queue.is_empty worklist) do
-    let vector, from_state = Queue.take worklist in
-    let emitted = Hashtbl.create 16 in
-    let rec pick i =
-      if i = num_automata then (
-        match get_satisfied_symbolic_transitions picked boundary_messages internal_messages with
-        | None -> ()
-        | Some symbolic ->
-            let next = Array.mapi (fun j -> function
-              | None -> None
-              | Some t -> active_state j t.to_state) picked in
-            let to_state = intern next in
-            let key = (to_state, symbolic.action, symbolic.guard, symbolic.offers,
-                       symbolic.offers_pending, symbolic.maybe_offers) in
-            if not (Hashtbl.mem emitted key) then (
-              Hashtbl.add emitted key ();
-              product_automaton.transitions <-
-                { symbolic with from_state; to_state } :: product_automaton.transitions))
-      else match vector.(i) with
-      | None -> picked.(i) <- None; pick (i + 1)
-      | Some state_id ->
-          List.iter (fun t -> picked.(i) <- Some t; pick (i + 1))
-            (get_outgoing_from_index automata_outgoing_transitions.(i) state_id)
-    in
-    pick 0;
-    if Hashtbl.length emitted = 0 then
-      DebugLog.line "product" "unified_product.log" "Product state %d has no synchronized successor" from_state
-  done;
+    (* One BFS level: check its combinations in parallel, then add them in order. *)
+    let level = Array.of_seq (Queue.to_seq worklist) in
+    Queue.clear worklist;
+    let tasks = ref [] in
+    Array.iteri (fun li (vector, _) ->
+      let choices = choices_of vector in
+      let total = Array.fold_left (fun acc c -> acc * Array.length c) 1 choices in
+      let lo = ref 0 in
+      while !lo < total do
+        let hi = min total (!lo + chunk) in
+        tasks := (li, (choices, !lo, hi)) :: !tasks;
+        lo := hi
+      done) level;
+    let tasks = Array.of_list (List.rev !tasks) in
+    let results = WorkerPool.map pool eval_range (Array.map snd tasks) in
+    let next_task = ref 0 in
+    Array.iteri (fun li (_, from_state) ->
+      let emitted = Hashtbl.create 16 in
+      while !next_task < Array.length tasks && fst tasks.(!next_task) = li do
+        (match results.(!next_task) with
+         | Error e -> raise e
+         | Ok successors ->
+             List.iter (fun (next, symbolic) ->
+               let to_state = intern next in
+               let key = (to_state, symbolic.action, symbolic.guard, symbolic.offers,
+                          symbolic.offers_pending, symbolic.maybe_offers) in
+               if not (Hashtbl.mem emitted key) then (
+                 Hashtbl.add emitted key ();
+                 product_automaton.transitions <-
+                   { symbolic with from_state; to_state } :: product_automaton.transitions))
+               successors);
+        incr next_task
+      done;
+      if Hashtbl.length emitted = 0 then
+        DebugLog.line "product" "unified_product.log" "Product state %d has no synchronized successor" from_state)
+      level
+  done);
   recompute_state_summaries product_automaton;
   if verbose then CliOutput.status "Unified product: %d reachable states, %d transitions"
     (Hashtbl.length product_automaton.states) (List.length product_automaton.transitions);

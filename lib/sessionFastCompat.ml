@@ -5,6 +5,12 @@ open SessionBuildAutomaton
 open SessionUtils
 
 
+(* One product state's outcome: accepting, its successor edges and progress ticks, or a dead end. *)
+type product_step =
+  | Accepting
+  | Edges of (int list * LabelSet.t * bool * bool * bool * bool) list * int
+  | DeadEnd of bool list
+
 let create_product ?(silent = false) (session_ids: (((session_type ast_node)*identifier) list))  (verbose : bool) (_name : identifier)  =
   let automata_ids_list = List.map (fun (st_node, intf_id) ->
     let auto = build_automaton (Some intf_id) st_node.d st_node.span in
@@ -66,26 +72,32 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
         !iter (Queue.length worklist) (IntListSet.cardinal !visited)
     )
   in
-  while not (Queue.is_empty worklist) do
-    let current_states = Queue.take worklist in
-
-    if not (IntListSet.mem current_states !visited) then (
-      
-      visited := IntListSet.add current_states !visited;
-      let prod_state_id = get_product_state current_states in
+  (* Edges in first-added order, indexed by the fields add_transition merges on; it scans every edge. *)
+  let edges = Dynarray.create () in
+  let edge_index = Hashtbl.create 1024 in
+  let add_edge from_s to_s label is_epsilon is_theta is_recurse is_conditional =
+    let key = (from_s, to_s, is_epsilon, is_theta, is_conditional) in
+    match Hashtbl.find_opt edge_index key with
+    | Some i ->
+        let (t : transition) = Dynarray.get edges i in
+        Dynarray.set edges i { t with label = LabelSet.union t.label label }
+    | None ->
+        Hashtbl.add edge_index key (Dynarray.length edges);
+        Dynarray.add_last edges
+          ({ from_state = from_s; to_state = to_s; label; is_epsilon; is_theta;
+             is_recurse; is_conditional; in_winning = false } : transition)
+  in
+  let flush_edges () = prod_auto.transitions <- List.rev (Dynarray.to_list edges) in
+  let load_edges () =
+    Dynarray.clear edges;
+    Hashtbl.reset edge_index;
+    List.iter (fun (t : transition) ->
+      add_edge t.from_state t.to_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional)
+      (List.rev prod_auto.transitions)
+  in
+  (* What one product state contributes; reads only the component automata. *)
+  let step current_states =
       let current_states_arr = Array.of_list current_states in
-
-      let is_all_start_state =
-        let rec aux idx =
-          if idx = automata_count then true
-          else
-            let auto, _ = automata_ids.(idx) in
-            current_states_arr.(idx) = auto.start_state && aux (idx + 1)
-        in
-        aux 0
-      in
-
-      if is_all_start_state then TypeAutomaton.reroute_transitions prod_auto 0 prod_state_id [] ;
 
       let is_accepting_array =
         List.init automata_count (fun idx ->
@@ -95,15 +107,11 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
         )
       in
 
-      if List.for_all (fun x -> x) is_accepting_array then (
-        (Hashtbl.find prod_auto.states prod_state_id).accepting <- true;
-        let combined_label =
-          Array.to_list (Array.map (fun (_, id) -> LabelSet.singleton (Recurse id)) automata_ids)
-        in
-        let combined_label = union_labelsets combined_label in
-        TypeAutomaton.add_transition prod_auto prod_state_id prod_auto.start_state combined_label false false true false;
-      ) 
+      if List.for_all (fun x -> x) is_accepting_array then Accepting
       else (
+        let edges = ref [] and ticks = ref 0 in
+        let emit ns (t_label, t_eps, t_theta, t_rec, t_cond) =
+          edges := (ns, t_label, t_eps, t_theta, t_rec, t_cond) :: !edges in
         let current_state_info_arr =
           Array.init automata_count (fun idx ->
             let auto, _ = automata_ids.(idx) in
@@ -316,12 +324,9 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
           List.iter (fun (ns, combined_actions) ->
             if ns <> current_states && combined_actions <> [] then begin
               found := true;
-              inc_iter ();
-              let next_prod_state = get_product_state ns in
+              incr ticks;
               let combined_label = List.fold_left (fun acc a -> LabelSet.add (Action a) acc) LabelSet.empty combined_actions in
-              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label false false false false;
-              if not (IntListSet.mem ns !visited) then
-                Queue.add ns worklist
+              emit ns (combined_label, false, false, false, false)
             end
           ) pruned_candidates;
 
@@ -337,7 +342,7 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
               )
             in
             List.iteri(fun id tset ->
-              inc_iter ();
+              incr ticks;
               let offers_in_future_of_this_state = offers_in_future_from_others_arr.(id) in
               List.iter (fun t -> 
                 let is_compatible =
@@ -351,10 +356,7 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
                 if is_compatible then (
                   found := true;
                   let next_states = List.mapi (fun idx s -> if idx = id then t.to_state else s) current_states in
-                  let next_prod_state = get_product_state next_states in
-                  TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-                  if not (IntListSet.mem next_states !visited) then 
-                      Queue.add next_states worklist
+                  emit next_states (t.label, t.is_epsilon, t.is_theta, t.is_recurse, t.is_conditional)
                 )
               )tset
             )conditional_trans;
@@ -374,16 +376,13 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
 
               if combined_label <> LabelSet.empty then (
                 found := true;
-                let next_prod_state = get_product_state next_states in
-                TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state combined_label false false true false;
-                if not (IntListSet.mem next_states !visited) then 
-                    Queue.add next_states worklist
+                emit next_states (combined_label, false, false, true, false)
               )
             );
           
 
           if not !found && all_has_delay then (
-              inc_iter ();
+              incr ticks;
               found := true;
                 let all_delay_combinations = cartesian_product2 delay_transitions in
                 List.iter( fun transition_set -> (
@@ -394,10 +393,7 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
                           t.to_state
                         ) current_states in
 
-                        let next_prod_state = get_product_state next_states in
-                        TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state (LabelSet.singleton Delay) false false false false;
-                        if not (IntListSet.mem next_states !visited) then 
-                          Queue.add next_states worklist
+                        emit next_states (LabelSet.singleton Delay, false, false, false, false)
                     )
                 )
             ) all_delay_combinations;
@@ -428,11 +424,7 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
                   if is_compatible  then (
                     found := true;
                     let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
-                    let next_prod_state = get_product_state next_states in
-                    TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-                    if not (IntListSet.mem next_states !visited) then 
-                        Queue.add next_states worklist
-                    ;
+                    emit next_states (t.label, t.is_epsilon, t.is_theta, t.is_recurse, t.is_conditional);
                     true
                   )
                   else false
@@ -443,7 +435,58 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
               ()
           );
           
-          if not !found && not !found_epsilon then (
+          if not !found && not !found_epsilon then
+            DeadEnd (List.map (fun dt -> dt <> []) delay_transitions)
+          else Edges (List.rev !edges, !ticks)
+      )
+      else
+      (
+          List.iteri (fun i ep_set -> 
+            List.iter (fun t ->
+              let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
+              emit next_states (t.label, t.is_epsilon, t.is_theta, t.is_recurse, t.is_conditional)
+            ) ep_set
+          )epsilon_transitions;
+          Edges (List.rev !edges, !ticks)
+      )
+      )
+
+  in
+  (* Add one state's results to the product, in the order the sequential search did. *)
+  let commit current_states result =
+    let prod_state_id = get_product_state current_states in
+    let current_states_arr = Array.of_list current_states in
+    let is_all_start_state =
+      let rec aux idx =
+        if idx = automata_count then true
+        else
+          let auto, _ = automata_ids.(idx) in
+          current_states_arr.(idx) = auto.start_state && aux (idx + 1)
+      in
+      aux 0
+    in
+    if is_all_start_state then (
+      flush_edges ();
+      TypeAutomaton.reroute_transitions prod_auto 0 prod_state_id [];
+      load_edges ());
+    match result with
+    | Error e -> raise e
+    | Ok Accepting ->
+        (Hashtbl.find prod_auto.states prod_state_id).accepting <- true;
+        let combined_label =
+          Array.to_list (Array.map (fun (_, id) -> LabelSet.singleton (Recurse id)) automata_ids)
+        in
+        let combined_label = union_labelsets combined_label in
+        add_edge prod_state_id prod_auto.start_state combined_label false false true false
+    | Ok (Edges (edges, ticks)) ->
+        for _ = 1 to ticks do inc_iter () done;
+        List.iter (fun (ns, label, eps, theta, recurse, cond) ->
+          let next_prod_state = get_product_state ns in
+          add_edge prod_state_id next_prod_state label eps theta recurse cond;
+          if not (IntListSet.mem ns !visited) then Queue.add ns worklist
+        ) edges
+    | Ok (DeadEnd has_delay) ->
+            flush_edges ();
             let trace = collect_dead_ends_paths prod_auto [prod_state_id] in
             let trace = Printf.sprintf "Dead-end trace leading to product state %d:\n%s\n" prod_state_id (List.hd trace|> snd) in
             let summary = Printf.sprintf "No compatible transitions found from product state %d corresponding to states %s" prod_state_id (String.concat "," (List.map string_of_int current_states)) in
@@ -455,30 +498,27 @@ let create_product ?(silent = false) (session_ids: (((session_type ast_node)*ide
             Printf.bprintf details "Offers of each automaton in current state: %s\n" (String.concat " | " (List.mapi (fun idx st_id ->
               let auto, _ = automata_ids.(idx) in
               let state = Hashtbl.find auto.states st_id in
-              Printf.sprintf "\nAutomaton %d offers: [%s] | has delay: %b" idx (String.concat "," (List.map Lang.string_of_msg_spec state.offers)) ((List.nth delay_transitions idx) <> [])
+              Printf.sprintf "\nAutomaton %d offers: [%s] | has delay: %b" idx (String.concat "," (List.map Lang.string_of_msg_spec state.offers)) (List.nth has_delay idx)
             ) current_states));
             DebugLog.text "compat" (_name ^ "_failure.log") (Buffer.contents details);
             DebugLog.file "product" (_name ^ "_incompatible.dot") (print_automaton_dot prod_auto);
             let msg = SessionGame2.explain_trace ~silent _name summary (Some trace) in
             raise (Failure msg)
-          )
-      )
-      else
-      (
-          List.iteri (fun i ep_set -> 
-            List.iter (fun t ->
-              let next_states = List.mapi (fun idx s -> if idx = i then t.to_state else s) current_states in
-              let next_prod_state = get_product_state next_states in
-              TypeAutomaton.add_transition prod_auto prod_state_id next_prod_state t.label t.is_epsilon t.is_theta t.is_recurse t.is_conditional;
-              if not (IntListSet.mem next_states !visited) then 
-                  Queue.add next_states worklist
-            ) ep_set
-          )epsilon_transitions;
-      )   
-
-    )
-  )
-  done;
+  in
+  WorkerPool.with_pool (fun pool ->
+  while not (Queue.is_empty worklist) do
+    (* One BFS level: unvisited states in queue order, each once. *)
+    let seen = Hashtbl.create 64 in
+    let level = Queue.fold (fun acc s ->
+      if IntListSet.mem s !visited || Hashtbl.mem seen s then acc
+      else (Hashtbl.add seen s (); s :: acc)) [] worklist |> List.rev |> Array.of_list in
+    Queue.clear worklist;
+    let results = WorkerPool.map pool step level in
+    Array.iteri (fun i current_states ->
+      visited := IntListSet.add current_states !visited;
+      commit current_states results.(i)) level
+  done);
+  flush_edges ();
 
   (* Assign offers/fair/adversary flags as before... *)
   Hashtbl.iter (fun states prod_state_id ->
@@ -536,7 +576,9 @@ let check_compatibility_multiparty ?(silent = false)
     : (bool * string) =
 
 
+    let t0 = Unix.gettimeofday () in
     let prod_auto = create_product ~silent session_ids verbose pool_id in
+    let t1 = Unix.gettimeofday () in
     if verbose then
       CliOutput.counts stderr "Product" pool_id
         (Hashtbl.length prod_auto.states) (List.length prod_auto.transitions);
@@ -548,6 +590,8 @@ let check_compatibility_multiparty ?(silent = false)
     let ids_list = List.map snd session_ids in
     
     let result, err = play_game ~silent prod_auto ids_list in
+    if verbose then
+      CliOutput.status "Time for %s: product %.1fs, game %.1fs" pool_id (t1 -. t0) (Unix.gettimeofday () -. t1);
 
     DebugLog.file "product" (pool_id ^ "_product.dot") (print_automaton_dot prod_auto);
     (result, err)

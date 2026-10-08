@@ -58,6 +58,7 @@ let parse_args () : compile_config =
       ("-disable-compat-checks", Arg.Set disable_compat_checks, "Disable compatibility checks");
       ("-debug-choice", Arg.Set_int debug_choice, "Debug mode: 0/2 fast compatibility, 1 profiling, 3 simultaneous compatibility, 4 sequential compatibility, 5/6/7 as 2/3/4 with types inferred from processes");
       ("-O", Arg.Set_int opt_level, "Set optimisation level: 0, 1, 2 (default), 3");
+      ("-j", Arg.Set_int WorkerPool.jobs, "Domains used to build compatibility products (default 1)");
       ("-merge-reg-writes", Arg.Set merge_reg_writes, "Merge multi-writer registers into one always_comb next-state signal instead of one guarded non-blocking assign per writer event (behaviour-preserving; off by default, see Config.mli)");
       ("-o", Arg.String (fun s -> output_filename := Some s), "Set output filename");
       ("-just-check", Arg.Set just_check, "Only typecheck and validate the input files");
