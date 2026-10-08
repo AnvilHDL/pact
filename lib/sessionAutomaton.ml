@@ -174,18 +174,42 @@ module TypeAutomaton = struct
     auto.transitions <- List.filter (fun t -> t.from_state <> state_id && t.to_state <> state_id) auto.transitions
 
  
+  (* Transitions by the fields add_transition merges on; valid while the list is the same one. *)
+  let edge_cache : (t * transition list * (int * int * bool * bool * bool, transition list) Hashtbl.t) option Domain.DLS.key =
+    Domain.DLS.new_key (fun () -> None)
+
+  let edge_key t = (t.from_state, t.to_state, t.is_epsilon, t.is_theta, t.is_conditional)
+
+  let edges_by_key auto =
+    match Domain.DLS.get edge_cache with
+    | Some (owner, edges, tbl) when owner == auto && edges == auto.transitions -> tbl
+    | _ ->
+        let tbl = Hashtbl.create 64 in
+        List.iter (fun t ->
+          let key = edge_key t in
+          Hashtbl.replace tbl key (t :: Option.value (Hashtbl.find_opt tbl key) ~default:[]))
+          auto.transitions;
+        tbl
+
   let add_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) (is_epsilon: bool) (is_theta : bool) (is_recurse: bool) (is_conditional: bool) : unit =
-    let found = ref false in
-    let new_transitions = List.map (fun t ->
-      if t.from_state = from_s && t.to_state = to_s && t.is_epsilon = is_epsilon && t.is_theta = is_theta && t.is_conditional = is_conditional then
-        (found := true; { t with label = LabelSet.union t.label label_set })
-      else t
-    ) auto.transitions in
-    if !found then
-      auto.transitions <- new_transitions
-    else
-      let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon; is_theta; is_recurse; is_conditional; in_winning = false } in
-      auto.transitions <- trans :: auto.transitions
+    let tbl = edges_by_key auto in
+    let key = (from_s, to_s, is_epsilon, is_theta, is_conditional) in
+    (match Hashtbl.find_opt tbl key with
+     | Some (_ :: _ as matches) ->
+         (* Merge the label into every matching transition, in place in the list. *)
+         let merged = ref [] in
+         auto.transitions <- List.map (fun t ->
+           if List.memq t matches then (
+             let t' = { t with label = LabelSet.union t.label label_set } in
+             merged := t' :: !merged;
+             t')
+           else t) auto.transitions;
+         Hashtbl.replace tbl key !merged
+     | _ ->
+         let trans = { from_state = from_s; to_state = to_s; label = label_set; is_epsilon; is_theta; is_recurse; is_conditional; in_winning = false } in
+         auto.transitions <- trans :: auto.transitions;
+         Hashtbl.replace tbl key [trans]);
+    Domain.DLS.set edge_cache (Some (auto, auto.transitions, tbl))
 
   let remove_transition (auto: t) (from_s: int) (to_s: int) (label_set: LabelSet.t) : unit =
     auto.transitions <- List.filter (fun t ->

@@ -437,6 +437,16 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
       type t = int * int
       let compare = Stdlib.compare
     end) in
+    (* Outgoing transitions per state, in list order; filtering the whole list per state is quadratic. *)
+    let index_outgoing (sub_auto : TypeAutomaton.t) =
+      let idx = Hashtbl.create 64 in
+      List.iter (fun t ->
+        Hashtbl.replace idx t.from_state (t :: Option.value (Hashtbl.find_opt idx t.from_state) ~default:[]))
+        (List.rev sub_auto.transitions);
+      idx
+    in
+    let outgoing_in_order idx s = Option.value (Hashtbl.find_opt idx s) ~default:[] in
+    let out1 = index_outgoing auto1 and out2 = index_outgoing auto2 in
     let worklist = ref [(auto1.start_state, auto2.start_state)] in
     let visited = ref IntPairSet.empty in 
     
@@ -448,8 +458,8 @@ let rec build_automaton (name : identifier option) (st: Lang.session_type) (defa
         visited := IntPairSet.add (s1, s2) !visited;
         let ps = get_product_state (s1, s2) in
         
-        let trans1 = List.filter (fun t -> t.from_state = s1) auto1.transitions in
-        let trans2 = List.filter (fun t -> t.from_state = s2) auto2.transitions in
+        let trans1 = outgoing_in_order out1 s1 in
+        let trans2 = outgoing_in_order out2 s2 in
 
         let s1_accepting = s1 = end1 in
         let s2_accepting = s2 = end2 in

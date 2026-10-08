@@ -329,6 +329,21 @@ module TypeAutomaton = struct
   let make_adversary auto state_id =
     (Hashtbl.find auto.states state_id).adversary <- true
 
+  (* Transitions by endpoint pair for the duplicate check; valid while the list is the same one. *)
+  let edge_cache : (t * transition list * (int * int, transition list) Hashtbl.t) option Domain.DLS.key =
+    Domain.DLS.new_key (fun () -> None)
+
+  let edges_by_endpoints auto =
+    match Domain.DLS.get edge_cache with
+    | Some (owner, edges, tbl) when owner == auto && edges == auto.transitions -> tbl
+    | _ ->
+        let tbl = Hashtbl.create 64 in
+        List.iter (fun t ->
+          let key = (t.from_state, t.to_state) in
+          Hashtbl.replace tbl key (t :: Option.value (Hashtbl.find_opt tbl key) ~default:[]))
+          auto.transitions;
+        tbl
+
   let add_transition_full ?(boundary_now = MsgSet.empty)
       ?(boundary_future = MsgSet.empty) ?(boundary_guard = any_guard)
       ?internal_action ?(offers = MsgSet.empty) ?(offers_pending = MsgSet.empty)
@@ -352,8 +367,13 @@ module TypeAutomaton = struct
         transition_debug_info;
       }
     in
-    if not (List.exists (( = ) trans) auto.transitions) then
-      auto.transitions <- trans :: auto.transitions
+    let tbl = edges_by_endpoints auto in
+    let key = (from_state, to_state) in
+    let same = Option.value (Hashtbl.find_opt tbl key) ~default:[] in
+    if not (List.exists (( = ) trans) same) then (
+      auto.transitions <- trans :: auto.transitions;
+      Hashtbl.replace tbl key (trans :: same));
+    Domain.DLS.set edge_cache (Some (auto, auto.transitions, tbl))
 
   let add_transition ?offers_pending auto from_state to_state action guard offer =
     add_transition_full ?offers_pending auto from_state to_state action guard ~offers:offer
