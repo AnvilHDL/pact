@@ -340,50 +340,66 @@ let compare_msg_spec (m1: Lang.message_specifier) (m2: Lang.message_specifier) :
   let m1_str = Lang.string_of_msg_spec m1 in
   let m2_str = Lang.string_of_msg_spec m2 in
   String.compare m1_str m2_str
+(* A state's future offers: the offers of every state it reaches within the cycle, i.e. along
+   transitions that are neither delays nor self-loops. Computed per strongly connected component,
+   in reverse topological order, so each state and transition is visited once. *)
 let collect_future_messages (auto: TypeAutomaton.t) : unit =
+  let module MsgSpecSet = Set.Make (struct
+    type t = Lang.message_specifier
+    let compare = compare_msg_spec
+  end) in
   let is_delay_label (label_set: LabelSet.t) : bool =
     LabelSet.exists (function
       | Delay -> true
       | OptionDelay _ -> true
       | _ -> false
     ) label_set in
-  
-
-  let rec dfs_collect (visited: IntSet.t) (current_state: int) : Lang.message_specifier list =
-    if IntSet.mem current_state visited then []
-    else
-      let visited' = IntSet.add current_state visited in
-      let current_state_info = Hashtbl.find auto.states current_state in
-      let collected = ref current_state_info.offers in
-      
-      let outgoing = List.filter (fun t -> 
-        t.from_state = current_state && t.to_state <> current_state
-      ) auto.transitions in
-      
-      List.iter (fun t ->
-        if not (is_delay_label t.label) then
-          (* No delay, continue DFS *)
-          let child_offers = dfs_collect visited' t.to_state in
-          collected := !collected @ child_offers
-      ) outgoing;
-      
-      !collected
+  let succ = Hashtbl.create 64 in
+  List.iter (fun t ->
+    if t.from_state <> t.to_state && not (is_delay_label t.label) then
+      Hashtbl.replace succ t.from_state
+        (t.to_state :: Option.value (Hashtbl.find_opt succ t.from_state) ~default:[]))
+    auto.transitions;
+  let successors q = Option.value (Hashtbl.find_opt succ q) ~default:[] in
+  let offers q = MsgSpecSet.of_list (Hashtbl.find auto.states q).offers in
+  (* Tarjan's algorithm; a component is finished after every component it reaches. *)
+  let index = Hashtbl.create 64 and low = Hashtbl.create 64 in
+  let on_stack = Hashtbl.create 64 and stack = ref [] and counter = ref 0 in
+  let future = Hashtbl.create 64 in
+  let rec visit q =
+    Hashtbl.replace index q !counter;
+    Hashtbl.replace low q !counter;
+    incr counter;
+    stack := q :: !stack;
+    Hashtbl.replace on_stack q ();
+    List.iter (fun r ->
+      if not (Hashtbl.mem index r) then (
+        visit r;
+        Hashtbl.replace low q (min (Hashtbl.find low q) (Hashtbl.find low r)))
+      else if Hashtbl.mem on_stack r then
+        Hashtbl.replace low q (min (Hashtbl.find low q) (Hashtbl.find index r)))
+      (successors q);
+    if Hashtbl.find low q = Hashtbl.find index q then begin
+      let rec pop acc =
+        match !stack with
+        | r :: rest ->
+            stack := rest;
+            Hashtbl.remove on_stack r;
+            if r = q then r :: acc else pop (r :: acc)
+        | [] -> acc
+      in
+      let members = pop [] in
+      let reached = List.fold_left (fun acc r ->
+        List.fold_left (fun acc s ->
+          match Hashtbl.find_opt future s with
+          | Some f -> MsgSpecSet.union acc f
+          | None -> acc) (MsgSpecSet.union acc (offers r)) (successors r)) MsgSpecSet.empty members in
+      List.iter (fun r -> Hashtbl.replace future r reached) members
+    end
   in
-  
-  let changed = ref true in
-  while !changed do
-    changed := false;
-    Hashtbl.iter (fun state_id state_info ->
-      let current_offers_in_future = state_info.offers_in_future in
-      let new_offers_in_future = dfs_collect IntSet.empty state_id in
-      let unique_new_offers = List.sort_uniq compare_msg_spec new_offers_in_future in
-      if not (List.sort_uniq compare_msg_spec current_offers_in_future = unique_new_offers) then
-        begin
-          state_info.offers_in_future <- unique_new_offers;
-          changed := true
-        end
-    ) auto.states
-  done
+  Hashtbl.iter (fun q _ -> if not (Hashtbl.mem index q) then visit q) auto.states;
+  Hashtbl.iter (fun q state ->
+    state.offers_in_future <- MsgSpecSet.elements (Hashtbl.find future q)) auto.states
 
 let infer_fair_choice (b1 : Lang.session_type) (b2 : Lang.session_type) : bool =
   let rec first_messages (st: Lang.session_type) : Lang.message_specifier list =
