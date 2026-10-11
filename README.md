@@ -8,6 +8,8 @@
 
 # An Extension of AnvilHDL with a Type System for Communication Safety
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23301148.svg)](https://doi.org/10.5281/zenodo.23301148)
+
 **Pact** extends [AnvilHDL](https://github.com/AnvilHDL/anvil), a timing-safe hardware description language, with **session types** for the communication between components.
 - Each component declares its protocol as an *interface*: which messages it sends and receives, in what order, and with what timing.
 - Components are wired together in a *pool*.
@@ -265,6 +267,8 @@ or in BibTeX format:
 ```
 
 A preprint will be available soon.
+
+The paper's artifact (this compiler, the benchmarks and the Lean mechanization) is archived on Zenodo: [10.5281/zenodo.23301148](https://doi.org/10.5281/zenodo.23301148).
 
 Pact builds on AnvilHDL. To cite the underlying language, please use:
 
