@@ -8,14 +8,15 @@
 
 # An Extension of AnvilHDL with a Type System for Communication Safety
 
-**Pact** extends [AnvilHDL](https://github.com/jasonyu1996/anvil), a timing-safe hardware description language, with **session types** for the communication between components.
+**Pact** extends [AnvilHDL](https://github.com/AnvilHDL/anvil), a timing-safe hardware description language, with **session types** for the communication between components.
 - Each component declares its protocol as an *interface*: which messages it sends and receives, in what order, and with what timing.
 - Components are wired together in a *pool*.
 - The compiler checks that every process follows its declared protocol, and that the components in each pool are *compatible*.
 
-Compatible components never deadlock, never wait for a message that cannot arrive, and keep making progress. This holds under the fairness the designer declares. The checking happens at compile time, on top of Anvil's timing-safety guarantees. Designs compile to SystemVerilog.
+Compatible components keep making progress. Similar to Anvil's the checks are compile-time and the designs compile to SystemVerilog.
 
-> **Note** Pact builds on AnvilHDL, whose type system and timing contracts are described in [**Anvil: A General-Purpose Timing-Safe Hardware Description Language**](https://arxiv.org/abs/2503.19447) (ASPLOS 2026).
+> **Note** Pact is described in **A Type System for Communication Safe Hardware Design** (POPL 2027). A preprint will be available soon.
+> Pact builds on AnvilHDL, whose type system and timing contracts are described in [**Anvil: A General-Purpose Timing-Safe Hardware Description Language**](https://arxiv.org/abs/2503.19447) (ASPLOS 2026).
 
 -----
 
@@ -103,7 +104,7 @@ If `foo2` waited for `ack` before `reset`, each side would wait on the other, an
 | `s1 \|\| s2` | Parallel threads |
 | `rec X . s`, `F s` | Recursion; `F s` means `s` eventually happens |
 
-The Unicode forms `⨁`, `⋀`, `∑`, `∏`, `μ` and `∀` are also accepted. In processes, `fair if` and `fair xoffer` correspond to the fair constructs.
+The Unicode forms `⨁`, `⋀`, `∑`, `∏`, `μ` and `∀` are also accepted. The fair constructs are annotations of intent: in processes, the programmer writes `fair if` and `fair xoffer` to match them.
 
 ### New to AnvilHDL?
 
@@ -236,13 +237,34 @@ bash test-all.sh       # Simulation tests
 
 Pact is **experimental** and under active development. We welcome feedback and contributions!
 
-  - **Found a bug or need a feature?** [Open an Issue](https://github.com/arj4web/Pact/issues/new)
-  - **Want to contribute?** [Submit a Pull Request](https://github.com/arj4web/Pact/compare)
-  - **Issues in the underlying AnvilHDL language** can also be reported [upstream](https://github.com/jasonyu1996/anvil/issues).
+  - **Found a bug or need a feature?** [Open an Issue](https://github.com/AnvilHDL/Pact/issues/new)
+  - **Want to contribute?** [Submit a Pull Request](https://github.com/AnvilHDL/Pact/compare)
+  - **Issues in the underlying AnvilHDL language** can also be reported [upstream](https://github.com/AnvilHDL/anvil/issues).
 
 -----
 
 ## Citing
+
+If you use Pact, please cite:
+
+```text
+A. R. Jha, J. Z. Yu, U. Mathur, and P. Saxena, “A type system for communication safe hardware design,” Proceedings of the ACM on Programming Languages, no. POPL, 2027. To appear.
+```
+
+or in BibTeX format:
+
+```bibtex
+@article{Jhacommunicationsafehardware2027,
+   title={A Type System for Communication Safe Hardware Design},
+   author={Jha, Aditya Ranjan and Yu, Jason Zhijingcheng and Mathur, Umang and Saxena, Prateek},
+   journal={Proceedings of the ACM on Programming Languages},
+   year={2027},
+   number={POPL},
+   note={To appear}
+}
+```
+
+A preprint will be available soon.
 
 Pact builds on AnvilHDL. To cite the underlying language, please use:
 
