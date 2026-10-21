@@ -1,0 +1,75 @@
+// The README's first example: a memory, a writer and an inferred reader.
+struct write_t { addr : logic[8], data : logic[8] }
+
+chan read_ch  { right req : (logic[8]@#1), left res : (logic[8]@#1) }
+chan write_ch { left req : (write_t@#1) }
+
+// Each cycle the memory takes a read, a write, both, or neither; a read is answered a cycle later.
+interface mem_intfc (rd : right read_ch, wr : left write_ch) =
+    ⋀(#rd.req : #1 ; #rd.res, #wr.req : #1, *) ; #1
+
+// The writer writes on some cycles and idles on others; both happen infinitely often.
+interface writer_intfc (wr : right write_ch) = (wr.req ++ #1) ; #1
+
+proc memory (mem_intfc) {
+    reg mem : logic[256][8];
+    reg rd_data : logic[8];
+    loop {
+        offer {
+            addr = irecv rd.req => (
+                set rd_data := *mem[addr] >>
+                isend rd.res(*rd_data)
+            ),
+            w = irecv wr.req => set mem[w.addr] := w.data
+        } else {
+            ()
+        } >>
+        cycle 1
+    }
+}
+
+proc writer (writer_intfc) {
+    reg n : logic[8];
+    reg turn : logic;
+    loop {
+        fair if (*turn) {
+            send wr.req(write_t::{addr = *n; data = *n + 8'd100})
+        } else {
+            cycle 1
+        } >>
+        {
+            set n := *n + 8'd1;
+            set turn := ~*turn
+        }
+    }
+}
+
+// No interface: the reader's type is inferred from its body.
+proc reader (rd : left read_ch) {
+    reg addr : logic[8];
+    loop {
+        send rd.req(*addr) >>
+        let v = recv rd.res >>
+        dprint "mem[%d] = %d\n" (*addr, v) >>
+        set addr := *addr + 8'd1
+    }
+}
+
+pool mem_pool {
+    rd_le -- rd_ri : read_ch,
+    wr_le -- wr_ri : write_ch;
+    imem : mem_intfc(rd_ri, wr_le),
+    iwriter : writer_intfc(wr_ri),
+    ireader : proc reader(rd_le)
+}
+
+proc test_memory_pool () {
+    pool p : mem_pool;
+    spawn memory[p.imem];
+    spawn writer[p.iwriter];
+    spawn p.ireader;
+    loop {
+        cycle 100 >>
+        dfinish
+    }
+}

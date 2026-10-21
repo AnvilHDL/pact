@@ -35,66 +35,103 @@ Pact keeps AnvilHDL's guarantees and adds safety for communication between compo
 
 -----
 
+
 ## A First Example
 
-Two components exchange a request, a reset and an acknowledgement over the channel `ch`. Each declares its side of the protocol, and the pool connects them:
+> [!IMPORTANT]
+> **The documentation will be released soon.** Until then, please see [session_examples](session_examples/README.md) for a list of examples.
+
+A memory serves a writer and a reader. The memory and the writer declare their protocols as interfaces. The reader declares none, so its type is inferred:
 
 ```anvil
-chan ch {
-    left req : (logic@#1),
-    left reset : (logic@#1),
-    right ack : (logic@#1)
-}
+struct write_t { addr : logic[8], data : logic[8] }
 
-// foo1 sends req, waits 4 cycles, sends reset at once, then receives ack.
-interface foo1_intfc (ep : right ch) = ep.req ; #4 ; #ep.reset ; ep.ack ; #1
-interface foo2_intfc (ep : left ch)  = ep.req ; ep.reset ; ep.ack ; #1
+chan read_ch  { right req : (logic[8]@#1), left res : (logic[8]@#1) }
+chan write_ch { left req : (write_t@#1) }
 
-proc foo1 (foo1_intfc) {
+// Each cycle the memory takes a read, a write, both, or neither; a read is answered a cycle later.
+interface mem_intfc (rd : right read_ch, wr : left write_ch) =
+    ⋀(#rd.req : #1 ; #rd.res, #wr.req : #1, *) ; #1
+
+// The writer writes on some cycles and idles on others; both happen infinitely often.
+interface writer_intfc (wr : right write_ch) = (wr.req ++ #1) ; #1
+
+proc memory (mem_intfc) {
+    reg mem : logic[256][8];
+    reg rd_data : logic[8];
     loop {
-        send ep.req(1'd1) >>
-        cycle 4 >>
-        isend ep.reset(1'd0) >>
-        let ack = recv ep.ack >>
+        offer {
+            addr = irecv rd.req => (
+                set rd_data := *mem[addr] >>
+                isend rd.res(*rd_data)
+            ),
+            w = irecv wr.req => set mem[w.addr] := w.data
+        } else {
+            ()
+        } >>
         cycle 1
     }
 }
 
-proc foo2 (foo2_intfc) {
+proc writer (writer_intfc) {
+    reg n : logic[8];
+    reg turn : logic;
     loop {
-        let req = recv ep.req >>
-        let reset = recv ep.reset >>
-        send ep.ack(1'd1) >>
-        cycle 1
+        fair if (*turn) {
+            send wr.req(write_t::{addr = *n; data = *n + 8'd100})
+        } else {
+            cycle 1
+        } >>
+        {
+            set n := *n + 8'd1;
+            set turn := ~*turn
+        }
     }
 }
 
-pool compat_pool {
-    ep_le -- ep_ri : ch;
-    i1 : foo1_intfc(ep_ri),
-    i2 : foo2_intfc(ep_le)
+// No interface: the reader's type is inferred from its body.
+proc reader (rd : left read_ch) {
+    reg addr : logic[8];
+    loop {
+        send rd.req(*addr) >>
+        let v = recv rd.res >>
+        dprint "mem[%d] = %d\n" (*addr, v) >>
+        set addr := *addr + 8'd1
+    }
+}
+
+pool mem_pool {
+    rd_le -- rd_ri : read_ch,
+    wr_le -- wr_ri : write_ch;
+    imem : mem_intfc(rd_ri, wr_le),
+    iwriter : writer_intfc(wr_ri),
+    ireader : proc reader(rd_le)
 }
 
 proc top () {
-    pool p : compat_pool;
-    spawn foo1[p.i1];
-    spawn foo2[p.i2];
+    pool p : mem_pool;
+    spawn memory[p.imem];
+    spawn writer[p.iwriter];
+    spawn p.ireader;
     loop { cycle 1 }
 }
 ```
 
-The compiler checks that each process follows its interface, then checks that the two interfaces are compatible:
+The compiler checks each process against its interface, infers the reader's type, and checks that the three components are compatible:
 
 ```text
 $ dune exec pact -- -just-check -verbose top.anvil
-[info] Session check passed for process foo1 thread 0
-[info] Session check passed for process foo2 thread 0
+[info] Session check passed for process memory thread 0
+[info] Session check passed for process writer thread 0
+[info] Inferred type of process reader: rd.req;rd.res;#<1>
 [info] Compatibility check passed for pool instance p in process top
 ```
 
-If `foo2` waited for `ack` before `reset`, each side would wait on the other, and the compatibility check would reject the pool. A longer version of this example is in [`session_examples/test_compatiblity.anvil`](session_examples/test_compatiblity.anvil).
-
-A pool member can also be a process, written `i1 : proc foo1(ep_ri)`. Its type is inferred from the process, so it needs no interface, and `spawn p.i1;` spawns that process on the member's endpoints.
+The example uses:
+- a conjunctive offer `⋀(...)`: in one cycle the memory takes a read, a write, both, or neither (`*`), with `#m` marking an exchange completed within the cycle;
+- delays `#n`: a read is answered one cycle after its request;
+- a fair choice `++`, matched by `fair if` in the writer: writing and idling must both recur, an annotation of the designer's intent that the checker uses;
+- a process as a pool member: `ireader : proc reader(rd_le)` has no interface, its type is inferred, and `spawn p.ireader` spawns it on the member's endpoints, while interface members are spawned with `spawn memory[p.imem]`.
 
 ### Session types at a glance
 

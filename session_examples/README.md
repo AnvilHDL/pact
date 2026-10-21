@@ -1,6 +1,6 @@
 # Pact Session Examples
 
-This directory contains Pact examples for session types, offers, pools and compatibility checking. The examples are grouped by what they demonstrate.
+This directory contains some examples for types and processes in Pact. 
 
 ---
 
@@ -33,7 +33,8 @@ The *Result* column is the outcome of `-just-check`. Pools that no process insta
 
 | Example | Features | Result |
 | --- | --- | --- |
-| [test_compatiblity](test_compatiblity.anvil) | The README's first example: request, reset and acknowledgement over one channel | compatible |
+| [test_memory_pool](test_memory_pool.anvil) | The README's first example: a memory with a conjunctive offer, a fair writer, and a reader typed by inference | compatible |
+| [test_compatiblity](test_compatiblity.anvil) | Request, reset and acknowledgement over one channel | compatible |
 | [test_deadlock](test_deadlock.anvil) | Each side waits for the other first | incompatible |
 | [test_process_member](test_process_member.anvil) | A process as a pool member (`i1 : proc foo1(ep_ri)`), its type inferred; `spawn p.i1` | compatible |
 | [test_wildcard_top](test_wildcard_top.anvil) | A conjunctive offer with an else arm against a delayed peer | compatible |
@@ -114,4 +115,4 @@ The *Result* column is the outcome of `-just-check`. Pools that no process insta
 | [test_automata_construction](test_automata_construction.anvil) | Small types for checking automaton construction: instant actions, parallel, conjunctive offers, recursion |
 | [type_aesthetics](type_aesthetics.anvil) | Quantified types: `∀`, `∏`, `∑`, exclusions, nested quantifiers |
 
-> **Total:** 39 examples
+> **Total:** 40 examples
