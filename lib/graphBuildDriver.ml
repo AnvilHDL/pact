@@ -181,7 +181,7 @@ let build_proc (config : Config.compile_config) sched module_name param_values
         shared_vars_info = Hashtbl.create 0; messages = msg_collection;
         proc_body = proc.body; spawns = []}
 
-let build (config : Config.compile_config) sched module_name param_values (cunit : compilation_unit) =
+let build ?all_procs (config : Config.compile_config) sched module_name param_values (cunit : compilation_unit) =
   let macro_defs = cunit.macro_defs in
   let typedefs = TypedefMap.of_list cunit.type_defs in
   let func_defs = cunit.func_defs in
@@ -257,10 +257,10 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
     match interface_opt with
     | Some interface_member ->
       (
-        match interface_member.d.interface_class_id with
-        | Some intf_id ->
+        match interface_member.d.interface_class_id, interface_member.d.member_proc with
+        | Some intf_id, _ | None, Some intf_id ->
           List.map (fun param -> Lang.SingleEp param) intf_id.params
-        | None ->
+        | None, None ->
           raise (Except.TypeError [Text ("Currently only interface instantiation is supported in pool members, but got none for " ^ ip.pifc_id ^ " in pool " ^ ip.pid); Except.codespan_local default_span])
       )
     | None ->
@@ -277,16 +277,10 @@ let build (config : Config.compile_config) sched module_name param_values (cunit
         p.channels <- p.channels @ channels ;
 
           let pool_def = lookup_pool_inst_from_pools ps.d.p_ty cunit.pools ps.span in
-          (* With -infer, members spawned here take the types inferred from their processes. *)
-          let override =
-            if config.infer then
-              let inferred = SessionInfer.spawned_member_types cunit.procs cunit.func_defs p
-                |> List.filter_map (fun (pool_inst, member, _, sty) ->
-                     if pool_inst = ps.d.p_id then Some (member, sty) else None) in
-              fun member -> List.assoc_opt member inferred
-            else fun _ -> None
-          in
-          let session_with_ids = SessionHelper.preprocess_pool_for_compatibility ~override pool_def cunit.session_defs in
+          (* The unit holds only the process being built; members may name any process. *)
+          let procs = Option.value all_procs ~default:cunit.procs in
+          let proc_member = SessionInfer.process_member procs cunit.func_defs cunit.session_defs in
+          let session_with_ids = SessionHelper.preprocess_pool_for_compatibility ~proc_member pool_def cunit.session_defs in
 
           if not config.disable_compat_checks then
           (

@@ -4,21 +4,19 @@ chan ch {
 }
 
 
-interface test_parallel_interface (ep : left ch) = ((ep.req ; ep.ack) || (ep.ack ; ep.req)) ; #1
+interface test_parallel_interface (ep : left ch) = (ep.req || ep.ack) ; #1
 proc test_parallel_top(test_parallel_interface){
     reg cyc : logic[8];
     loop{
         (
         (
             let r1 = recv ep.req  >>
-            let r2 = recv ep.ack  >>
-            dprint "[Cycle %d] Parallel thread 0 try received req: %d and ack: %d" (*cyc, r1, r2)
+            dprint "[Cycle %d] Parallel thread 0 received req: %d" (*cyc, r1)
         )
         ;
         (
             let r2 = recv ep.ack  >>
-            let r1 = recv ep.req  >>
-            dprint "[Cycle %d] Parallel thread 1 received req: %d and ack: %d" (*cyc, r1, r2)
+            dprint "[Cycle %d] Parallel thread 1 received ack: %d" (*cyc, r2)
         )
         )
         >>

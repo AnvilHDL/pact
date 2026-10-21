@@ -4,34 +4,22 @@ chan local_ch{
     protocol :: (ep.req ; ep.ack)
 }
 
-interface test_local (ep : left local_ch) = (ep.req ; #3 ; ep.ack ; ep.req ; #1)
+interface test_local (ep : left local_ch) = (ep.req ; #3 ; ep.ack ; #1)
 proc test_local(test_local){
     loop{
-        let r = recv ep.req  >> 
-        cycle 2 >>
-        cycle 1 >>
+        let r = recv ep.req >>
+        cycle 3 >>
         send ep.ack(1'd1) >>
-        let r2 = recv ep.req >>
-        dprint "Received req2: %d" (r2) >>
-        cycle 1 >>
-        let r = recv ep.req  >> 
-        cycle 2 >>
-        cycle 1 >>
-        send ep.ack(1'd1) >>
-        let r2 = recv ep.req >>
-        dprint "Received req2: %d" (r2) >>
         cycle 1
-               
     }
 }
 
-interface test_dual (ep : right local_ch) = (ep.req ; F ep.ack)
+interface test_dual (ep : right local_ch) = (ep.req ; F ep.ack ; #1)
 proc test_dual(test_dual){
     loop{
+        send ep.req(1'd1) >>
         let ack = recv ep.ack >>
         dprint "Received ack: %d" (ack) >>
-        cycle 2 >>
-        send ep.req(1'd1) >>
         cycle 1
     }
 }

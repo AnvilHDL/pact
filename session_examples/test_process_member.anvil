@@ -1,0 +1,45 @@
+// A pool member can be a process: its type is inferred from the process.
+// foo1 is a process member; foo2 keeps its declared interface.
+chan ch {
+    left req : (logic@#1),
+    left reset : (logic@#1),
+    right ack : (logic@#1)
+}
+
+interface foo2_intfc (ep : left ch) = ep.req ; ep.reset ; ep.ack ; #1
+
+proc foo1 (ep : right ch) {
+    loop {
+        send ep.req(1'd1) >>
+        cycle 4 >>
+        isend ep.reset(1'd0) >>
+        let ack = recv ep.ack >>
+        cycle 1
+    }
+}
+
+proc foo2 (foo2_intfc) {
+    loop {
+        let req = recv ep.req >>
+        let reset = recv ep.reset >>
+        send ep.ack(1'd1) >>
+        cycle 1
+    }
+}
+
+pool process_member_pool {
+    ep_le -- ep_ri : ch;
+    i1 : proc foo1(ep_ri),
+    i2 : foo2_intfc(ep_le)
+}
+
+proc test_process_member () {
+    pool p : process_member_pool;
+    // spawn p.i1 spawns the member's process on its endpoints.
+    spawn p.i1;
+    spawn foo2[p.i2];
+    loop {
+        cycle 50 >>
+        dfinish
+    }
+}

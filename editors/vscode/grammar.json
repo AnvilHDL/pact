@@ -557,6 +557,38 @@
 					}
 				},
 				{
+					"begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*(proc)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
+					"beginCaptures": {
+						"1": {
+							"name": "variable.other.member.anvil"
+						},
+						"2": {
+							"name": "keyword.operator.type.annotation.anvil"
+						},
+						"3": {
+							"name": "storage.type.proc.anvil"
+						},
+						"4": {
+							"name": "entity.name.function.proc.anvil"
+						},
+						"5": {
+							"name": "punctuation.section.parens.begin.anvil"
+						}
+					},
+					"end": "\\)",
+					"endCaptures": {
+						"0": {
+							"name": "punctuation.section.parens.end.anvil"
+						}
+					},
+					"patterns": [
+						{
+							"match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+							"name": "variable.other.object.endpoint.anvil"
+						}
+					]
+				},
+				{
 					"begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(:)\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*(\\()",
 					"beginCaptures": {
 						"1": {
@@ -1055,6 +1087,23 @@
 						},
 						"2": {
 							"name": "variable.other.register.anvil"
+						}
+					}
+				},
+				{
+					"match": "\\b(spawn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(\\.)\\s*([A-Za-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "storage.type.spawn.anvil"
+						},
+						"2": {
+							"name": "variable.other.pool.anvil"
+						},
+						"3": {
+							"name": "punctuation.accessor.anvil"
+						},
+						"4": {
+							"name": "variable.other.member.anvil"
 						}
 					}
 				},

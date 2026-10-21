@@ -12,11 +12,17 @@ let inferred_override inferred cunits =
   in
   fun (pool : Lang.interface_pool_def Lang.ast_node) member -> Hashtbl.find_opt types (pool.d.pool_id, member)
 
+(* A process member is typed by inference from its process. *)
+let proc_member cunits =
+  let all f = List.concat_map (fun (_, (cunit : Lang.compilation_unit)) -> f cunit) cunits in
+  SessionInfer.process_member (all (fun c -> c.procs)) (all (fun c -> c.func_defs)) (all (fun c -> c.session_defs))
+
 let generalized_type_debug ?(inferred = false) _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename;
+        SessionHelper.resolve_member_spawns (List.map snd !cunits)
     with
       | Except.TypeError msg ->
         (Except.Text "Type error:")::msg
@@ -57,7 +63,7 @@ let generalized_type_debug ?(inferred = false) _out config =
     let open SessionFastCompat in
     
     (* Preprocess the pool to get session_ids with unified endpoints *)
-    let session_ids = SessionHelper.preprocess_pool_for_compatibility ~override:(override pool)
+    let session_ids = SessionHelper.preprocess_pool_for_compatibility ~override:(override pool) ~proc_member:(proc_member !cunits)
         pool session_type_defs in
     if config.verbose then
       CliOutput.info "Checking pool %s (%d members together)"
@@ -111,7 +117,8 @@ let generalized_type_v2_debug ?(sequential = false) ?(inferred = false) _out con
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename;
+        SessionHelper.resolve_member_spawns (List.map snd !cunits)
     with
       | Except.TypeError msg ->
         (Except.Text "Type error:")::msg
@@ -154,7 +161,7 @@ let generalized_type_v2_debug ?(sequential = false) ?(inferred = false) _out con
     let result, err =
       try
         let session_ids, message_sets =
-          SessionCompatiblity2.prepare_pool ~override:(override pool) channel_classes session_type_defs pool
+          SessionCompatiblity2.prepare_pool ~override:(override pool) ~proc_member:(proc_member !cunits) channel_classes session_type_defs pool
         in
         if config.verbose then
           CliOutput.info "Checking pool %s (%d members, %s)"
@@ -182,7 +189,8 @@ let profile_compatibility_checks _out config =
   let toplevel_filename = List.hd config.Config.input_filenames in
   let cunits = ref [] in
   (
-    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename
+    try parse_recursive cunits (ref Utils.StringSet.empty) config toplevel_filename;
+        SessionHelper.resolve_member_spawns (List.map snd !cunits)
     with
       | Except.TypeError msg ->
         (Except.Text "Type error:")::msg
@@ -209,7 +217,7 @@ let profile_compatibility_checks _out config =
   List.iter (fun (pool : Lang.interface_pool_def Lang.ast_node) ->
     Printf.eprintf "Profiling Pool %s...\n" pool.d.pool_id;
     
-    let session_ids = SessionHelper.preprocess_pool_for_compatibility pool session_type_defs in
+    let session_ids = SessionHelper.preprocess_pool_for_compatibility ~proc_member:(proc_member !cunits) pool session_type_defs in
     
     let start_time = Unix.gettimeofday () in
     
@@ -302,11 +310,11 @@ let profile_compatibility_checks _out config =
 let debug_types_custom out config =
 let open Config in
 match config.debug_choice with
-| 0 -> generalized_type_debug ~inferred:config.infer out config
+| 0 -> generalized_type_debug out config
 | 1 -> profile_compatibility_checks out config
-| 2 -> generalized_type_debug ~inferred:config.infer out config
-| 3 -> generalized_type_v2_debug ~inferred:config.infer out config
-| 4 -> generalized_type_v2_debug ~sequential:true ~inferred:config.infer out config
+| 2 -> generalized_type_debug out config
+| 3 -> generalized_type_v2_debug out config
+| 4 -> generalized_type_v2_debug ~sequential:true out config
 | 5 -> generalized_type_debug ~inferred:true out config
 | 6 -> generalized_type_v2_debug ~inferred:true out config
 | 7 -> generalized_type_v2_debug ~sequential:true ~inferred:true out config

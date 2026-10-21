@@ -1,0 +1,80 @@
+// Three processes relay a request around a ring; every pool member is a process with inferred type.
+chan ch{
+    left req : (logic@#1),
+    right ack : (logic@#1)
+}
+
+
+proc foo1 (ep12 : left ch, ep13 : right ch){
+    reg cyc : logic[8];
+    reg relayed : logic;
+    loop{
+        let req_from_2 = recv ep12.req >>
+        dprint "[Cycle %d] [foo1] Relaying req: %d\n" (*cyc, req_from_2) >>
+        set relayed := req_from_2 >>
+        send ep13.req(*relayed) >>
+        let ack_from_3 = recv ep13.ack >>
+        dprint "[Cycle %d] [foo1] Relaying ack: %d\n" (*cyc, ack_from_3) >>
+        set relayed := ack_from_3 >>
+        send ep12.ack(*relayed) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo2 (ep12 : right ch, ep23 : left ch){
+    reg cyc : logic[8];
+    loop{
+        send ep12.req(1'd1) >>
+        let req_from_3 = recv ep23.req >>
+        dprint "[Cycle %d] [foo2] Received req: %d\n" (*cyc, req_from_3) >>
+        send ep23.ack(1'd1) >>
+        let ack_from_1 = recv ep12.ack >>
+        dprint "[Cycle %d] [foo2] Received ack: %d\n" (*cyc, ack_from_1) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+proc foo3 (ep13 : left ch, ep23 : right ch){
+    reg cyc : logic[8];
+    loop{
+        let req_from_1 = recv ep13.req >>
+        dprint "[Cycle %d] [foo3] Received req: %d\n" (*cyc, req_from_1) >>
+        send ep23.req(1'd1) >>
+        let ack_from_2 = recv ep23.ack >>
+        dprint "[Cycle %d] [foo3] Received ack: %d\n" (*cyc, ack_from_2) >>
+        send ep13.ack(1'd1) >>
+        cycle 1
+    }
+    loop{
+        set cyc := *cyc + 8'd1
+    }
+}
+
+
+pool process_multiparty_pool {
+    ep_12_le -- ep_12_ri : ch,
+    ep_13_le -- ep_13_ri : ch,
+    ep_23_le -- ep_23_ri : ch;
+    i1 : proc foo1(ep_12_le, ep_13_ri),
+    i2 : proc foo2(ep_12_ri, ep_23_le),
+    i3 : proc foo3(ep_13_le, ep_23_ri)
+}
+
+proc test_process_member_multiparty(){
+    pool p : process_multiparty_pool;
+    spawn p.i1;
+    spawn p.i2;
+    spawn p.i3;
+
+    loop{
+        cycle 100 >>
+        dfinish
+    }
+}
+    

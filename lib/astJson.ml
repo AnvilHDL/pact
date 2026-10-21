@@ -364,23 +364,23 @@ and offering (o : offering_session_type) : json =
     ("continuation", opt session_type o.continuation);
   ]
 
-(** A session type in Pact syntax, parenthesised by precedence ([F] > [+] > [||] > [;]). *)
+(** A session type in mathematical notation, parenthesised by precedence ([F] > [+] > [∥] > [;]). *)
 let rec session_text ?(prec = 0) (s : session_type) : string =
   let paren level text = if prec > level then "(" ^ text ^ ")" else text in
   match s with
   | StySkip -> "()"
   | StyEnd id -> "$" ^ id
   | StySeq (a, b) -> paren 0 (session_text ~prec:1 a ^ " ; " ^ session_text b)
-  | StyParallel (a, b) -> paren 1 (session_text ~prec:1 a ^ " || " ^ session_text ~prec:2 b)
+  | StyParallel (a, b) -> paren 1 (session_text ~prec:1 a ^ " ∥ " ^ session_text ~prec:2 b)
   | StyChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " + " ^ session_text ~prec:3 b)
-  | StyFairChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " ++ " ^ session_text ~prec:3 b)
+  | StyFairChoice (a, b) -> paren 2 (session_text ~prec:2 a ^ " +ᶠ " ^ session_text ~prec:3 b)
   | StyFuture s -> paren 3 ("F " ^ session_text ~prec:3 s)
   | StyAtom a -> action_text a
-  | StyOffer arms -> "&(" ^ offerings_text arms ^ ")"
-  | StyXOffer arms -> "^(" ^ offerings_text arms ^ ")"
-  | StyFairXOffer arms -> "^^(" ^ offerings_text arms ^ ")"
+  | StyOffer arms -> "⋀(" ^ offerings_text arms ^ ")"
+  | StyXOffer arms -> "⨁(" ^ offerings_text arms ^ ")"
+  | StyFairXOffer arms -> "⨁ᶠ(" ^ offerings_text arms ^ ")"
   | StyOfferMatch (arms, cases) ->
-    "&(" ^ offerings_text arms ^ ").(" ^ String.concat ", " (List.map (fun (c : offer_match_case) ->
+    "⋀(" ^ offerings_text arms ^ ").(" ^ String.concat ", " (List.map (fun (c : offer_match_case) ->
       let on = match c.match_on with
         | None -> "*"
         | Some [m] -> string_of_msg_spec m
@@ -389,21 +389,21 @@ let rec session_text ?(prec = 0) (s : session_type) : string =
       on ^ " : " ^ session_text c.match_body) cases) ^ ")"
   | StyLet (id, v, body) ->
     paren 0 ("let " ^ id ^ " = " ^ session_text ~prec:3 v ^ " in " ^ session_text ~prec:3 body)
-  | StyRec (id, body) -> paren 0 ("rec " ^ id ^ " . " ^ session_text ~prec:3 body)
+  | StyRec (id, body) -> paren 0 ("μ" ^ id ^ ". " ^ session_text body)
   | StyVar id -> id
   | StyForall (op, id, QuantRange (lo, hi), body, excluded) ->
     let excluded = match excluded with
       | None -> ""
-      | Some (QuantSingleInt n) -> Printf.sprintf " not %d" n
-      | Some (QuantIntList ns) -> " not (" ^ String.concat ", " (List.map string_of_int ns) ^ ")"
+      | Some (QuantSingleInt n) -> Printf.sprintf " ̸ %d" n
+      | Some (QuantIntList ns) -> " ̸ (" ^ String.concat ", " (List.map string_of_int ns) ^ ")"
     in
     let op, body = match op, body with
-      | QuantOffer, StyOffer arms -> ("&", offerings_text arms)
-      | QuantXOffer, StyXOffer arms -> ("^", offerings_text arms)
-      | QuantProduct, _ -> ("||", session_text body)
-      | _ -> ("+", session_text body)
+      | QuantOffer, StyOffer arms -> ("⋀", offerings_text arms)
+      | QuantXOffer, StyXOffer arms -> ("⨁", offerings_text arms)
+      | QuantProduct, _ -> ("∏", session_text body)
+      | _ -> ("∑", session_text body)
     in
-    Printf.sprintf "forall (%s : [%d..%d]%s) %s { %s }" id lo hi excluded op body
+    Printf.sprintf "∀ (%s ∈ [%d..%d]%s) %s { %s }" id lo hi excluded op body
 
 and action_text (a : atomic_action_with_gap) : string =
   let message = function
@@ -732,14 +732,18 @@ let pool_def sc refs (n : interface_pool_def ast_node) =
   let p = n.d in
   let endpoints = add_channel_defs p.pool_channels SM.empty in
   let member (m : interface_mem_def ast_node) =
-    let defs = match m.d.interface_class_id with
-      | Some inst -> interface_defs sc inst.id
-      | None -> []
+    let defs = match m.d.interface_class_id, m.d.member_proc with
+      | Some inst, _ -> interface_defs sc inst.id
+      | None, Some inst ->
+          SM.find_opt inst.id sc.procs |> Option.map (fun (p : proc_def) -> p.span) |> Option.to_list
+      | None, None -> []
     in
     node ~defs m.span (kind "pool_member" [
       ("name", str m.d.inf_mem_id);
       ("interface", opt (fun (i : interface_instantiation) -> str i.id) m.d.interface_class_id);
-      ("endpoints", list str (match m.d.interface_class_id with Some i -> i.params | None -> []));
+      ("process", opt (fun (i : interface_instantiation) -> str i.id) m.d.member_proc);
+      ("endpoints", list str (match m.d.interface_class_id, m.d.member_proc with
+         | Some i, _ | None, Some i -> i.params | None, None -> []));
       ("session_type", opt session_type m.d.interface_def);
       ("refs", session_refs sc ~endpoints refs m.span);
     ])
@@ -825,7 +829,30 @@ let proc_body sc (body : proc_def_body_maybe_extern) =
            ("ack_port", opt str ack)]) b.msg_ports);
     ]
 
-let proc_def sc (p : proc_def) =
+(* A process's type: its declared interfaces in parallel, or else its threads' inferred types. *)
+let process_type (cunits : compilation_unit list) (p : proc_def) : json =
+  let par a b = match a with StySkip -> b | _ -> StyParallel (a, b) in
+  let session_defs = List.concat_map (fun (c : compilation_unit) -> c.session_defs) cunits in
+  match p.interface, p.body with
+  | [], Extern _ -> `Null
+  | [], Native body ->
+      let funcs = List.concat_map (fun (c : compilation_unit) -> c.func_defs) cunits in
+      (try
+         let sty = List.fold_left (fun acc (thread, _) -> par acc (SessionInfer.infer_thread funcs thread))
+           StySkip body.threads in
+         kind "process_type" [("source", str "inferred"); ("interfaces", list str []); ("type", session_type sty)]
+       with _ -> `Null)
+  | interfaces, _ ->
+      let declared = List.filter_map (fun (i : identifier ast_node) ->
+        List.find_opt (fun (s : session_def ast_node) -> s.d.name = i.d) session_defs
+        |> Option.map (fun (s : session_def ast_node) -> (i.d, s.d.body.d))) interfaces in
+      if declared = [] then `Null
+      else kind "process_type" [
+        ("source", str "declared");
+        ("interfaces", list str (List.map fst declared));
+        ("type", session_type (List.fold_left (fun acc (_, t) -> par acc t) StySkip declared))]
+
+let proc_def ?(ptype = fun _ -> `Null) sc (p : proc_def) =
   let sc' = proc_scope sc p in
   kind "proc_def" [
     ("name", str p.name);
@@ -835,9 +862,10 @@ let proc_def sc (p : proc_def) =
     ("span", code_span p.span);
     ("interfaces", list (fun (i : identifier ast_node) ->
        node ~defs:(interface_defs sc i.d) i.span (kind "interface_ref" [("interface", str i.d)])) p.interface);
+    ("process_type", ptype p);
   ]
 
-let compilation_unit sc (c : compilation_unit) =
+let compilation_unit ?ptype sc (c : compilation_unit) =
   kind "compilation_unit" [
     ("schema", str schema_version);
     ("file_name", opt str c.cunit_file_name);
@@ -845,7 +873,7 @@ let compilation_unit sc (c : compilation_unit) =
     ("type_defs", list type_def c.type_defs);
     ("macro_defs", list macro_def c.macro_defs);
     ("func_defs", list (func_def sc) c.func_defs);
-    ("procs", list (proc_def sc) c.procs);
+    ("procs", list (proc_def ?ptype sc) c.procs);
     ("imports", list import_directive c.imports);
     ("_extern_procs", list (proc_def sc) c._extern_procs);
     ("interfaces", list (interface_def sc c.session_refs) c.session_defs);
@@ -862,4 +890,4 @@ let traced_session_at (span : Lang.code_span) =
 (** Serialises the compilation units, resolving names across all of them. *)
 let of_compilation_units ?(session_at = fun _ -> None) (cunits : compilation_unit list) : json =
   let sc = global_scope session_at cunits in
-  list (compilation_unit sc) cunits
+  list (compilation_unit ~ptype:(process_type cunits) sc) cunits

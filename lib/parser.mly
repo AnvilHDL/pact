@@ -358,7 +358,8 @@ interface_members_def:
     {
       inf_mem_id = id1;
       interface_class_id = None;
-      interface_def = Some intf
+      interface_def = Some intf;
+      member_proc = None
     } : Lang.interface_mem_def
   }
 | id1 = IDENT; COLON; intf = IDENT; LEFT_PAREN; params = separated_list(COMMA,IDENT); RIGHT_PAREN
@@ -366,9 +367,19 @@ interface_members_def:
     {
       inf_mem_id = id1;
       interface_class_id = Some {id = intf; params = params};
-      interface_def = None
+      interface_def = None;
+      member_proc = None
     } : Lang.interface_mem_def
-  } 
+  }
+| id1 = IDENT; COLON; KEYWORD_PROC; proc = IDENT; LEFT_PAREN; params = separated_list(COMMA,IDENT); RIGHT_PAREN
+  {
+    {
+      inf_mem_id = id1;
+      interface_class_id = None;
+      interface_def = None;
+      member_proc = Some {id = proc; params = params}
+    } : Lang.interface_mem_def
+  }
 ;
 
 session_def:
@@ -696,6 +707,15 @@ channel_class_concrete:
 
 // Instantiating the proc for comm
 spawn:
+| pid = IDENT; PERIOD; member = IDENT
+  {
+    {
+      proc = "";
+      params = [];
+      compile_params = [];
+      interface_params = Some [ { pid; pifc_id = member } ]
+    } : Lang.spawn_def
+  }
 | proc = IDENT; LEFT_PAREN; params = separated_list(COMMA,args_spawn); RIGHT_PAREN
   {
     {

@@ -440,7 +440,8 @@ type interface_pool_def = {
 and interface_mem_def ={
   inf_mem_id : identifier;
   interface_class_id : interface_instantiation option;
-  interface_def : session_type option
+  interface_def : session_type option;
+  member_proc : interface_instantiation option; (** a process member, typed by inference *)
 }
 
 and interface_instantiation = {
@@ -598,7 +599,7 @@ type cycle_proc = {
 
 (** A spawn of a process. *)
 type spawn_def = {
-  proc: identifier;
+  mutable proc: identifier; (** empty for [spawn pool.member] until resolved from the pool *)
   (* channels to pass as args *)
   (* TODO: this naming collides with compile-time parameters *)
   mutable params: args_spawn list; (** names of the endpoints passed to the spawned process *)

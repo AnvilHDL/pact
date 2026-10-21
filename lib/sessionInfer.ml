@@ -122,3 +122,23 @@ let pool_member_types (procs : proc_def list) (funcs : func_def list) =
           | _ -> ()) (spawned_member_types procs funcs body)
     | Extern _ -> ()) procs;
   tbl
+
+(* A process used as a pool member: its endpoint parameters and its threads' types in parallel. *)
+let process_member (procs : proc_def list) (funcs : func_def list)
+    (session_defs : session_def ast_node list) name span =
+  let fail what = raise (Except.TypeError [Text what; Except.codespan_local span]) in
+  match List.find_opt (fun (p : proc_def) -> p.name = name) procs with
+  | None -> fail ("Undefined process " ^ name ^ " in pool member")
+  | Some { body = Extern _; _ } -> fail ("Extern process " ^ name ^ " has no body to infer a type from")
+  | Some ({ body = Native body; _ } as proc) ->
+      (* Interface endpoints follow the explicit arguments, as when the process is built. *)
+      let interface_params = List.concat_map (fun (itf : identifier ast_node) ->
+        match List.find_opt (fun (s : session_def ast_node) -> s.d.name = itf.d) session_defs with
+        | Some s -> List.map (fun (ep : endpoint_def ast_node) -> ep.d.name) s.d.params
+        | None -> fail ("Undefined interface " ^ itf.d)) proc.interface in
+      let arg_names = List.map (fun (ep : endpoint_def ast_node) -> ep.d.name) proc.args in
+      let params = arg_names @ List.filter (fun n -> not (List.mem n arg_names)) interface_params in
+      let sty = List.fold_left (fun acc (thread, _) -> par acc (infer_thread funcs thread))
+        StySkip body.threads in
+      CliOutput.info "Inferred type of process %s: %s" name (string_of_protocol sty);
+      (params, sty)

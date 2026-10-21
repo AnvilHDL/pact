@@ -94,6 +94,8 @@ $ dune exec pact -- -just-check -verbose top.anvil
 
 If `foo2` waited for `ack` before `reset`, each side would wait on the other, and the compatibility check would reject the pool. A longer version of this example is in [`session_examples/test_compatiblity.anvil`](session_examples/test_compatiblity.anvil).
 
+A pool member can also be a process, written `i1 : proc foo1(ep_ri)`. Its type is inferred from the process, so it needs no interface, and `spawn p.i1;` spawns that process on the member's endpoints.
+
 ### Session types at a glance
 
 | Construct | Meaning |
@@ -178,7 +180,6 @@ dune exec pact -- [OPTIONS] <source-file>
 
 **Session-type and compatibility options:**
 
-  - `-infer`: Check compatibility with the types inferred from the spawned processes instead of the declared interfaces.
   - `-debug-choice <n>`: Run only the compatibility check, with a chosen checker. Compilation itself always uses the fast check.
     - `2` is the fast check.
     - `3` is the cycle-accurate simultaneous check.

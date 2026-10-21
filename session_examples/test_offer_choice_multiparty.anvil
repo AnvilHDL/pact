@@ -1,32 +1,42 @@
+// foo3 chooses the order in which foo1 sends reset and receives ack, as data;
+// foo2 follows that order with an exclusive offer.
 chan ch {
     left req : (logic@#1),
     left reset : (logic@#1),
-    right ack : (logic@#1) <<
+    right ack : (logic@#1)
 }
 
-interface foo1_intfc (ep : right ch, ep1 : right ch) = ep.req ; ep1.req ; ⋀(ep1.ack : (#4 ; ep.reset ; ep.ack), ep1.reset : (#2 ; ep.ack ; ep.reset)) ; #1
-interface foo2_intfc (ep : left ch) = ep.req ; ⨁(ep.reset : F ep.ack,ep.ack : F ep.reset) ; #1
-interface foo3_intfc (ep1 : left ch) = ep1.req ; #1
+chan sel_ch {
+    right choice : (logic@#1)
+}
 
+interface foo1_intfc (ep : right ch, sel : right sel_ch) =
+    sel.choice ; #1 ; ep.req ; #1 ;
+    ((#4 ; ep.reset ; #1 ; ep.ack) + (#2 ; ep.ack ; #1 ; ep.reset)) ; #1
+interface foo2_intfc (ep : left ch) = ep.req ; #1 ; ⨁(ep.reset : F ep.ack, ep.ack : F ep.reset) ; #1
+interface foo3_intfc (sel : left sel_ch) = sel.choice ; #1
 
 proc foo1 (foo1_intfc){
     reg cyc : logic[8];
+    reg reset_first : logic;
     loop{
+        let c = recv sel.choice >>
+        set reset_first := c >>
         send ep.req(1'd1) >>
-        if (1'd1){
-            cycle 2 >>
-            cycle 1 >>
-            cycle 1 >>
+        cycle 1 >>
+        if (*reset_first) {
+            cycle 4 >>
             send ep.reset(1'd0) >>
+            cycle 1 >>
             let ack = recv ep.ack >>
-            dprint "[Cycle %d] [foo1] Sent reset" (*cyc)
-        }else{
+            dprint "[Cycle %d] [foo1] Sent reset, received ack: %d\n" (*cyc, ack)
+        } else {
             cycle 2 >>
             let ack = recv ep.ack >>
-            dprint "[Cycle %d] [foo1] Received ack: %d\n" (*cyc, ack) >>
+            dprint "[Cycle %d] [foo1] Received ack: %d, sending reset\n" (*cyc, ack) >>
+            cycle 1 >>
             send ep.reset(1'd0)
-        } 
-        >>
+        } >>
         cycle 1
     }
     loop{
@@ -38,44 +48,49 @@ proc foo2 (foo2_intfc){
     reg cyc : logic[8];
     loop{
         let req = recv ep.req >>
+        cycle 1 >>
         xoffer{
             reset = recv ep.reset => (
-                dprint "[Cycle %d] [foo2] Received req: %d and reset: %d\n" (*cyc, req, reset) >>
-                cycle 2 >>
-                cycle 1 >>
-                send ep.ack(1'd1) >>
-                dprint "[Cycle %d] [foo2] Sent ack: 1'd1\n" (*cyc)
+                dprint "[Cycle %d] [foo2] Received reset: %d\n" (*cyc, reset) >>
+                cycle 3 >>
+                send ep.ack(1'd1)
             ),
             send ep.ack(1'd1) => (
-                cycle 2 >>
-                cycle 1 >>
+                cycle 3 >>
                 let reset = recv ep.reset >>
-                dprint "[Cycle %d] [foo2] Received req: %d | reset = %d and sent ack:  1'd1\n" (*cyc, req, reset)
+                dprint "[Cycle %d] [foo2] Sent ack, then received reset: %d\n" (*cyc, reset)
             )
-        }
-        >>
+        } >>
         cycle 1
     }
     loop{
         set cyc := *cyc + 8'd1
     }
-    
 }
 
-pool compat_pool {
-    ep_le -- ep_ri : ch;
-    i1 : foo1_intfc(ep_ri),
+proc foo3 (foo3_intfc){
+    reg reset_first : logic;
+    loop{
+        send sel.choice(*reset_first) >>
+        set reset_first := ~*reset_first
+    }
+}
+
+pool offer_choice_pool {
+    ep_le -- ep_ri : ch,
+    sel_le -- sel_ri : sel_ch;
+    i1 : foo1_intfc(ep_ri, sel_ri),
     i2 : foo2_intfc(ep_le),
-    i3 : foo3_intfc(ep_le)
+    i3 : foo3_intfc(sel_le)
 }
 
-proc test_offer_choice_compatiblity(){
-    pool p : compat_pool;
+proc test_offer_choice_multiparty(){
+    pool p : offer_choice_pool;
     spawn foo1[p.i1];
     spawn foo2[p.i2];
+    spawn foo3[p.i3];
     loop{
         cycle 100 >>
         dfinish
     }
 }
-    

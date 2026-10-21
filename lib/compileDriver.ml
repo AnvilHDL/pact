@@ -39,6 +39,9 @@ let parse ?recover config =
           |> raise_compile_error None
   );
   check_duplicate_procs ?recover !cunits;
+  (try SessionHelper.resolve_member_spawns (List.map snd !cunits)
+   with Except.TypeError msg ->
+     (match recover with Some report -> report msg | None -> raise_compile_error None msg));
   List.iter (fun (file_name, cunit) ->
     DebugLog.file "ast" (Filename.basename file_name ^ ".dot") (AstDump.print cunit)
   ) !cunits;
@@ -95,7 +98,7 @@ let compile_units out config cunits =
             func_defs = all_func_defs;
             macro_defs = all_macro_defs} in
           let graph_collection =
-            match GraphBuildDriver.build config sched task.module_name task.param_values cunit
+            match GraphBuildDriver.build ~all_procs:(List.map snd all_procs) config sched task.module_name task.param_values cunit
             with
             | res -> res
             | exception exc ->

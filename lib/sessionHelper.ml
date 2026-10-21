@@ -75,10 +75,10 @@ let rec highest_level_endpoint (session_type : session_type) : identifier list =
     match interface_opt with
     | Some interface_member ->
       (
-        match interface_member.d.interface_class_id with
-        | Some intf_id ->
+        match interface_member.d.interface_class_id, interface_member.d.member_proc with
+        | Some intf_id, _ | None, Some intf_id ->
           List.map (fun param -> Lang.SingleEp param) intf_id.params
-        | None ->
+        | None, None ->
           raise (Except.TypeError [Text ("Currently only interface instantiation is supported in pool members, but got none for " ^ ip.pifc_id ^ " in pool " ^ ip.pid); Except.codespan_local default_span])
       )
     | None ->
@@ -483,60 +483,55 @@ let expand_session_type_quantifiers (sty : Lang.session_type) : Lang.session_typ
 
 
 
-let build_endpoint_mapping 
-    (interface_member : interface_mem_def ast_node) 
+(* Map a member's parameter names to pool endpoints, both ends of a used channel to its left end. *)
+let map_member_endpoints (member : interface_mem_def ast_node) (inst : interface_instantiation)
+    (param_names : identifier list) (pool_channels : channel_def ast_node list) : identifier Utils.string_map =
+  let actual_endpoints = inst.params in
+  if List.length param_names <> List.length actual_endpoints then
+    raise (Except.TypeError [
+      Text (Printf.sprintf "Interface instantiation parameter mismatch: interface '%s' expects %d parameters but got %d arguments"
+        inst.id
+        (List.length param_names)
+        (List.length actual_endpoints));
+      Except.codespan_local member.span
+    ]);
+  let actual_endpoints_set = Utils.StringSet.of_list actual_endpoints in
+  let relevant_unification_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
+    let left_used = Utils.StringSet.mem chan.d.endpoint_left actual_endpoints_set in
+    let right_used = Utils.StringSet.mem chan.d.endpoint_right actual_endpoints_set in
+    if left_used || right_used then
+      (* At least one endpoint is used - unify both to left *)
+      Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
+    else
+      map
+  ) Utils.StringMap.empty pool_channels in
+  let base_mapping = List.fold_left2 (fun map param_name actual_ep ->
+    let unified_ep = match Utils.StringMap.find_opt actual_ep relevant_unification_map with
+      | Some left_ep -> left_ep  (* actual_ep is a right endpoint, use left instead *)
+      | None -> actual_ep        (* actual_ep is already a left endpoint or standalone *)
+    in
+    Utils.StringMap.add param_name unified_ep map
+  ) Utils.StringMap.empty param_names actual_endpoints in
+  Utils.StringMap.fold Utils.StringMap.add relevant_unification_map base_mapping
+
+let build_endpoint_mapping
+    (interface_member : interface_mem_def ast_node)
     (pool_channels : channel_def ast_node list)
     (session_defs : session_def ast_node list)
     : identifier Utils.string_map =
   match interface_member.d.interface_class_id with
   | Some intf_inst ->
-      (* Look up the interface definition to get parameter names *)
-      let interface_opt = lookup_interface session_defs intf_inst.id in
-      (match interface_opt with
+      (match lookup_interface session_defs intf_inst.id with
       | Some interface_def ->
-          let endpoint_param_names = List.map (fun (ep : Lang.endpoint_def ast_node) -> ep.d.name) interface_def.d.params in
-          let actual_endpoints = intf_inst.params in
-          
-
-          if List.length endpoint_param_names <> List.length actual_endpoints then
-            raise (Except.TypeError [
-              Text (Printf.sprintf "Interface instantiation parameter mismatch: interface '%s' expects %d parameters but got %d arguments" 
-                intf_inst.id 
-                (List.length endpoint_param_names) 
-                (List.length actual_endpoints));
-              Except.codespan_local interface_member.span
-            ]);
-          
-
-          let actual_endpoints_set = List.fold_left (fun set ep ->
-            Utils.StringSet.add ep set
-          ) Utils.StringSet.empty actual_endpoints in
-          
-
-          let relevant_unification_map = List.fold_left (fun map (chan : Lang.channel_def ast_node) ->
-            let left_used = Utils.StringSet.mem chan.d.endpoint_left actual_endpoints_set in
-            let right_used = Utils.StringSet.mem chan.d.endpoint_right actual_endpoints_set in
-            if left_used || right_used then
-              (* At least one endpoint is used - unify both to left *)
-              Utils.StringMap.add chan.d.endpoint_right chan.d.endpoint_left map
-            else
-              map
-          ) Utils.StringMap.empty pool_channels in
-          
-          let base_mapping = List.fold_left2 (fun map param_name actual_ep ->
-            let unified_ep = match Utils.StringMap.find_opt actual_ep relevant_unification_map with
-              | Some left_ep -> left_ep  (* actual_ep is a right endpoint, use left instead *)
-              | None -> actual_ep        (* actual_ep is already a left endpoint or standalone *)
-            in
-            Utils.StringMap.add param_name unified_ep map
-          ) Utils.StringMap.empty endpoint_param_names actual_endpoints in
-          
-          Utils.StringMap.fold Utils.StringMap.add relevant_unification_map base_mapping
+          let param_names = List.map (fun (ep : Lang.endpoint_def ast_node) -> ep.d.name) interface_def.d.params in
+          map_member_endpoints interface_member intf_inst param_names pool_channels
       | None -> Utils.StringMap.empty)
   | None -> Utils.StringMap.empty
 
-
 let preprocess_pool_for_compatibility ?(override = fun _ -> None)
+    ?(proc_member = fun name span ->
+        raise (Except.TypeError [Text ("Process member " ^ name ^ " needs its process to infer a type");
+                                 Except.codespan_local span]))
     (pool_def : interface_pool_def ast_node)
     (session_defs : session_def ast_node list)
     : ((session_type ast_node) * identifier) list =
@@ -545,7 +540,15 @@ let preprocess_pool_for_compatibility ?(override = fun _ -> None)
   
   List.filter_map (fun (intf_member : interface_mem_def ast_node) ->
 
-    match intf_member.d.interface_def with
+    match intf_member.d.member_proc, intf_member.d.interface_def with
+    | Some inst, _ ->
+        (* A process member is typed by inference from its process. *)
+        let param_names, session_ty = proc_member inst.id intf_member.span in
+        let endpoint_mapping = map_member_endpoints intf_member inst param_names pool_channels in
+        Some ({d = preprocess_session_type endpoint_mapping session_ty; span = intf_member.span},
+              intf_member.d.inf_mem_id)
+    | None, interface_def ->
+    match interface_def with
     | Some session_ty ->
         let endpoint_mapping = build_endpoint_mapping intf_member pool_channels session_defs in
         (* A member may be given another type, e.g. one inferred from its process. *)
@@ -577,3 +580,28 @@ let preprocess_pool_for_compatibility ?(override = fun _ -> None)
               Except.codespan_local intf_member.span])
         )
   ) pool_def.d.interface_members
+
+(* [spawn p.m] spawns the process of pool member m, with its endpoints. *)
+let resolve_member_spawns (cunits : compilation_unit list) =
+  let pools = List.concat_map (fun (c : compilation_unit) -> c.pools) cunits in
+  List.iter (fun (c : compilation_unit) ->
+    List.iter (fun (proc : proc_def) ->
+      match proc.body with
+      | Extern _ -> ()
+      | Native body ->
+          List.iter (fun (sp : spawn_def ast_node) ->
+            match sp.d.proc, sp.d.interface_params with
+            | "", Some [ ip ] ->
+                let pool_ty = lookup_pool_ty_from_id ip.pid body.pool_insts sp.span in
+                let pool_def = lookup_pool_inst_from_pools pool_ty pools sp.span in
+                (match List.find_opt (fun (m : interface_mem_def ast_node) -> m.d.inf_mem_id = ip.pifc_id)
+                         pool_def.d.interface_members with
+                 | Some { d = { member_proc = Some inst; _ }; _ } -> sp.d.proc <- inst.id
+                 | Some _ ->
+                     raise (Except.TypeError [Text ("spawn " ^ ip.pid ^ "." ^ ip.pifc_id
+                       ^ " needs a process member; write spawn <process>[" ^ ip.pid ^ "." ^ ip.pifc_id ^ "] for an interface member");
+                       Except.codespan_local sp.span])
+                 | None ->
+                     raise (Except.TypeError [Text ("Undefined interface member " ^ ip.pifc_id ^ " in pool " ^ ip.pid);
+                       Except.codespan_local sp.span]))
+            | _ -> ()) body.spawns) c.procs) cunits
