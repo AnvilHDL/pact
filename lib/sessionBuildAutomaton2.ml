@@ -559,7 +559,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
       (List.sort_uniq (fun (_, a) (_, b) -> MsgSet.compare a b) msg_branches);
     (match wildcard_continuation_opt offerings with
     | Some else_ty ->
-        (* Else once every arm is missing a message that will not come this cycle. *)
+        (* Else once no arm can complete this cycle; it still offers every head. *)
         let else_target = TypeAutomaton.new_state auto false in
         let missing_choices =
           List.fold_left
@@ -574,7 +574,7 @@ let rec build_automaton (name : identifier option) (st : session_type)
           (fun missing ->
             TypeAutomaton.add_transition auto current else_target epsilon
               (xoffer_else_guard missing missing)
-              singleton_head)
+              head_set)
           missing_choices;
         finals := build else_ty else_target rec_env let_env @ !finals
     | None ->
@@ -720,27 +720,43 @@ let rec build_automaton (name : identifier option) (st : session_type)
          finals := build else_ty else_target rec_env let_env @ !finals
      | None -> ());
 
-    (* Commit one head; the other branches retain their continuations and defaults. *)
-    List.iteri
-      (fun j (_, group_j) ->
-        let committed =
-          List.mapi
-            (fun k (off_k, _) ->
-              if k = j then
-                StySeq (StyAtom (nonblocking_trigger off_k.trigger),
-                        continuation_or_true off_k)
-              else
-                StyXOffer [ off_k; { trigger = AtomDelay 0; continuation = None } ])
-            msg_branches
-        in
+    (* Fire exactly the arms present now; the others remain optional. *)
+    let arms = Array.of_list msg_branches in
+    let n = Array.length arms in
+    for mask = 1 to (1 lsl n) - 1 do
+      let in_k k = mask land (1 lsl k) <> 0 in
+      let fired = ref MsgSet.empty and others = ref [] in
+      Array.iteri (fun k (_, group) ->
+        if in_k k then fired := MsgSet.union !fired group else others := group :: !others) arms;
+      let fired = !fired in
+      (* Each arm outside K misses at least one message now. *)
+      let missing_choices =
+        List.fold_left
+          (fun acc group ->
+            List.concat_map
+              (fun chosen -> List.map (fun m -> MsgSet.add m chosen) (MsgSet.elements group))
+              acc)
+          [ MsgSet.empty ] !others
+        |> List.filter (MsgSet.disjoint fired)
+        |> List.sort_uniq MsgSet.compare
+      in
+      if missing_choices <> [] then begin
         let target = TypeAutomaton.new_state auto false in
-        (* Commitment exposes the target's future menu without firing a message. *)
-        TypeAutomaton.add_transition auto current target epsilon
-          { any_guard with require_now = group_j; forbid_clock = true }
-          MsgSet.empty;
-        finals :=
-          build (parallel_of_list committed) target rec_env let_env @ !finals)
-      msg_branches;
+        List.iter
+          (fun missing ->
+            TypeAutomaton.add_transition auto current target (message_actions fired)
+              { any_guard with require_now = fired; forbid_now = missing; forbid_clock = false }
+              head_set)
+          missing_choices;
+        let product =
+          Array.to_list arms
+          |> List.mapi (fun k (off_k, _) ->
+                 if in_k k then continuation_or_true off_k
+                 else StyXOffer [ off_k; { trigger = AtomDelay 0; continuation = None } ])
+        in
+        finals := build (parallel_of_list product) target rec_env let_env @ !finals
+      end
+    done;
     !finals)
   in
   ignore (build st auto.start_state [] [] : int list);
