@@ -17,8 +17,8 @@
 
 Compatible components keep making progress. Similar to Anvil's the checks are compile-time and the designs compile to SystemVerilog.
 
-> **Note** Pact is described in **A Type System for Communication Safe Hardware Design** (POPL 2027). A preprint will be available soon.
-> Pact builds on AnvilHDL, whose type system and timing contracts are described in [**Anvil: A General-Purpose Timing-Safe Hardware Description Language**](https://arxiv.org/abs/2503.19447) (ASPLOS 2026).
+> **Note** Pact is described in [**A Type System for Communication-Safe Hardware Design**](https://arxiv.org/abs/2610.26599), conditionally accepted to POPL 2027.
+> Pact builds on AnvilHDL, whose type system and timing contracts are described in [**Anvil: A General-Purpose Timing-Safe Hardware Description Language**](https://doi.org/10.1145/3779212.3790125) (ASPLOS 2026).
 
 -----
 
@@ -288,30 +288,29 @@ Pact is **experimental** and under active development. We welcome feedback and c
 If you use Pact, please cite:
 
 ```text
-A. R. Jha, J. Z. Yu, U. Mathur, and P. Saxena, “A type system for communication safe hardware design,” Proceedings of the ACM on Programming Languages, no. POPL, 2027. To appear.
+A. R. Jha, J. Z. Yu, U. Mathur, and P. Saxena, “A type system for communication-safe hardware design,” Proceedings of the ACM on Programming Languages, no. POPL, 2027. Conditionally accepted. [Online]. Available: https://arxiv.org/abs/2610.26599
 ```
 
 or in BibTeX format:
 
 ```bibtex
 @article{Jhacommunicationsafehardware2027,
-   title={A Type System for Communication Safe Hardware Design},
+   title={A Type System for Communication-Safe Hardware Design},
    author={Jha, Aditya Ranjan and Yu, Jason Zhijingcheng and Mathur, Umang and Saxena, Prateek},
    journal={Proceedings of the ACM on Programming Languages},
    year={2027},
    number={POPL},
-   note={To appear}
+   url={https://arxiv.org/abs/2610.26599},
+   note={Conditionally accepted. Preprint available at arXiv:2610.26599}
 }
 ```
-
-A preprint will be available soon.
 
 The paper's artifact (this compiler, the benchmarks and the Lean mechanization) is archived on Zenodo: [10.5281/zenodo.23301148](https://doi.org/10.5281/zenodo.23301148).
 
 Pact builds on AnvilHDL. To cite the underlying language, please use:
 
 ```text
-J. Z. Yu, A. R. Jha, U. Mathur, T. E. Carlson, and P. Saxena, “Anvil: a general-purpose timing-safe hardware description language,” in Proceedings of the 31st ACM international conference on architectural support for programming languages and operating systems, in ASPLOS ’26. Pittsburgh, PA, USA: Association for Computing Machinery, 2026. [Online]. Available: https://arxiv.org/abs/2503.19447
+J. Z. Yu, A. R. Jha, U. Mathur, T. E. Carlson, and P. Saxena, “Anvil: a general-purpose timing-safe hardware description language,” in Proceedings of the 31st ACM international conference on architectural support for programming languages and operating systems, volume 2, in ASPLOS ’26. Pittsburgh, PA, USA: Association for Computing Machinery, 2026, pp. 110–136. doi: 10.1145/3779212.3790125
 ```
 
 or in BibTeX format:
@@ -322,11 +321,11 @@ or in BibTeX format:
    author={Yu, Jason Zhijingcheng and Jha, Aditya Ranjan and Mathur, Umang and Carlson, Trevor E and Saxena, Prateek},
    year={2026},
    publisher={Association for Computing Machinery},
-   booktitle={Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems},
+   booktitle={Proceedings of the 31st ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 2},
    series={ASPLOS '26},
    address={Pittsburgh, PA, USA},
-   url={https://arxiv.org/abs/2503.19447},
-   note={To appear. Preprint available at arXiv:2503.19447}
+   pages={110--136},
+   doi={10.1145/3779212.3790125}
 }
 ```
 
