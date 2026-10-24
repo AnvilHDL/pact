@@ -85,11 +85,21 @@ let build_proc (config : Config.compile_config) sched module_name param_values
         | _ -> acc
       ) ci'.macro_defs proc.params param_values 
     in
+  (* Type parameters resolve like type definitions local to this instance,
+     so they can also appear in expressions such as casts. *)
+  let typedefs_extended =
+    List.fold_left2 (fun acc (p : Lang.param) (pval : param_value) ->
+      match p.param_ty, pval with
+      | TypeParam, TypeParamValue t ->
+        TypedefMap.add {name = p.param_name; body = t; params = []; span = code_span_dummy} acc
+      | _ -> acc
+    ) ci'.typedefs proc.params param_values
+  in
 
   
   let ci = {
     file_name = ci'.file_name;
-    typedefs = ci'.typedefs;
+    typedefs = typedefs_extended;
     channel_classes = ci'.channel_classes;
     macro_defs = macro_defs_extended;
     func_defs = ci'.func_defs;

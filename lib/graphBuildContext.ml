@@ -174,9 +174,18 @@ module Typing = struct
 
     let branch g (ctx : t) (br_info : branch_info) (file_name : identifier): t =
       let new_branch_ends = List.filter (fun (eid : event) -> (not eid.is_recurse)&&(not (match eid.source with `Recurse _ -> true | _ -> false))) br_info.branches_val in
+      (* Restarting the thread is how a [recursive] thread loops, so only a
+         side that ends in a named [recurse X] makes the branch suspicious.
+         A nested branch that never completes has already been reported. *)
+      let restarts_thread (eid : event) =
+        eid.is_loop_terminal
+        || (eid.is_recurse && match eid.source with `Branch (_, {branches_val = []; _}) -> true | _ -> false)
+      in
+      let ends_in_named_recursion = not (List.for_all restarts_thread br_info.branches_val) in
       let br_info = {br_info with branches_val = new_branch_ends} in
       if List.length br_info.branches_val = 0 then(
-        SpanPrinter.warn "Branch with all branches being recursive detected: This may lead to non-termination!" g.thread_codespan file_name;
+        if ends_in_named_recursion then
+          SpanPrinter.warn "Branch with all branches being recursive detected: This may lead to non-termination!" g.thread_codespan file_name;
         (* Every side recurses, so the branch never completes: its result is a
            join that never fires, marked so enclosing branches drop it too. *)
         let never = event_create g (`Branch (ctx.current, br_info)) in

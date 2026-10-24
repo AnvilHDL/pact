@@ -9,6 +9,9 @@ val empty : t
 (** Create a typedef map from a list of type definitions. *)
 val of_list : Lang.type_def list -> t
 
+(** Add a type definition, replacing any earlier one of the same name. *)
+val add : Lang.type_def -> t -> t
+
 (** Name-resolve a given data type. *)
 val data_type_name_resolve : t -> Lang.data_type -> Lang.data_type option
 

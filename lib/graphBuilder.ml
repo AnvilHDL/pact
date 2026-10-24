@@ -424,7 +424,8 @@ and construct_graphIR_untraced (graph : event_graph) (ci : cunit_info)
           raise (event_graph_error_default ("Conflicting Identifier " ^ ident ^ " declarations found") e.span)
         | Some binding, None -> Typing.use_binding binding |> Typing.sync_data  graph ctx.current
         | None, Some value ->
-          let sz = 32 in
+          (* sized like the same integer written inline *)
+          let sz = Utils.int_log2 (value + 1) in
           let (wires', w) = WireCollection.add_literal graph.thread_id
               ci.typedefs ci.macro_defs
               (WithLength (sz, value)) graph.wires in

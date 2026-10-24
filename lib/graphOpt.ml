@@ -664,13 +664,21 @@ module CombSimplPass = struct
       else
         optimize_pass_merge merge_pass config for_lt_check ci changed graph
     in
+    (* The lifetime check always gets these merges; without them it runs on a
+       much larger graph. *)
+    let basic min_opt_level merge_pass graph =
+      if not for_lt_check && config.opt_level < min_opt_level then
+        graph
+      else
+        optimize_pass_merge merge_pass config for_lt_check ci changed graph
+    in
     let graph = ref graph in
     while !changed do
       changed := false;
       graph :=
-        codegen_only 1 merge_pass_simpl_comb !graph
-        |> codegen_only 1 merge_pass_isomorphic
-        |> codegen_only 1 merge_pass_joint
+        basic 1 merge_pass_simpl_comb !graph
+        |> basic 1 merge_pass_isomorphic
+        |> basic 1 merge_pass_joint
         |> codegen_only 1 merge_pass_isomorphic_branch
         |> codegen_only 1 merge_pass_isomorphic
         |> codegen_only 1 merge_pass_joint

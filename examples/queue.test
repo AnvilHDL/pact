@@ -1,5 +1,5 @@
-Enqueuing   1 in cycle    0
 Dequeue Request Sent in cycle    0
+Enqueuing   1 in cycle    0
 Cant Accept Dequeue Request: Queue Empty
 Enqueued   1 in cycle    1
 Cant Accept Dequeue Request: Queue Empty
@@ -18,9 +18,9 @@ Enqueued   6 in cycle   16
 Enqueuing   7 in cycle   18
 Enqueued   7 in cycle   19
 Enqueuing   8 in cycle   21
-Enqueued   8 in cycle   22
 Dequeued   2 in cycle   22
 Dequeue Request Sent in cycle   22
+Enqueued   8 in cycle   22
 Enqueuing   1 in cycle   24
 Enqueued   1 in cycle   25
 Enqueuing   2 in cycle   27

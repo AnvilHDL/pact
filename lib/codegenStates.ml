@@ -186,9 +186,11 @@ let delay_sharing (config : Config.compile_config) (g : EventGraph.event_graph) 
       end
     ) groups;
     GraphAnalysis.events_prepare_outs g.events;
+    (* Only a thread with a single loop terminal can start from it; with
+       several, the root must wait for any of them. *)
     let start_delay =
-      match List.find_opt (fun e -> e.is_loop_terminal && List.is_empty e.outs) g.events with
-      | Some t when Option.is_some (plain_delay t) && readers t = [] -> Some t.id
+      match List.filter (fun e -> e.is_loop_terminal) g.events with
+      | [t] when List.is_empty t.outs && Option.is_some (plain_delay t) && readers t = [] -> Some t.id
       | _ -> None
     in
     { shared_rep; shared_inputs; start_delay }
@@ -358,7 +360,12 @@ let codegen_next config printer (graphs : EventGraph.event_graph_collection)
   in
   GraphAnalysis.events_prepare_outs g.events;
   let sharing = delay_sharing config g in
-  let recurse_event = List.find (fun e -> let open EventGraph in e.is_loop_terminal && (List.is_empty e.outs)) g.events in
+  (* Every [recurse] restarts the thread, and in a [recursive] thread a
+     terminal can still be followed by other events. *)
+  let restart =
+    List.filter (fun e -> e.EventGraph.is_loop_terminal) g.events
+    |> List.map (fun (e : EventGraph.event) -> EventStateFormatter.format_current g.thread_id e.id)
+  in
   let need_delay_reg = GraphAnalysis.make_branch_root_delay_checker g.events in
   let print_compute_next (e : EventGraph.event) =
       CodegenPrinter.print_comment printer
@@ -522,13 +529,12 @@ let codegen_next config printer (graphs : EventGraph.event_graph_collection)
         | `Root None when Option.is_some sharing.start_delay ->
           (* the loop-end delay is reset to 1, so it also starts the loop *)
           Printf.sprintf "assign %s = %s %s;" cn
-            (EventStateFormatter.format_current g.thread_id recurse_event.id) trigger |> print_line
+            (EventStateFormatter.format_current g.thread_id (Option.get sharing.start_delay)) trigger |> print_line
         | `Root None ->
           [
-            Printf.sprintf "assign %s = (_init_%d || %s) %s;"
+            Printf.sprintf "assign %s = (%s) %s;"
               cn
-              g.thread_id
-              (EventStateFormatter.format_current g.thread_id recurse_event.id)
+              (String.concat " || " (Printf.sprintf "_init_%d" g.thread_id :: restart))
               trigger
           ] |> print_lines
         | `Root (Some (e', br_side_info)) ->

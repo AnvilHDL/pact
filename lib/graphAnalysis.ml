@@ -377,27 +377,25 @@ let rec has_only_empty_path_to_recurse (target_event : EventGraph.event) (src_ev
     a combinational loop after an all-empty-path parallel branch. *)
 let make_branch_root_delay_checker events =
   events_prepare_outs events;
-  (* let root_event = List.find (fun (ev : EventGraph.event) -> ev.source = `Root None) events in *)
-  let terminal_event = List.find_opt (fun (ev : EventGraph.event) -> ev.is_loop_terminal) events in
+  let terminal_events = List.filter (fun (ev : EventGraph.event) -> ev.is_loop_terminal) events in
   let root_node = find_graph_root_opt events in
-  (* let dist = event_min_distance_with_later events root_event root_event in *)
 
   fun (e : EventGraph.event) ->
-    (* let has_zero_delay = IntHashtbl.find dist e.id = 0 in *)
     if not (is_empty_true_false_branch_root e) then
       false
     else
-      match terminal_event, root_node with
-      | Some terminal_event, Some root_node ->
-          let has_empty_path_to_terminal =
-            has_only_empty_path_to_recurse e terminal_event  []
-          in
-          let has_empty_path_to_root = has_only_empty_path_to_recurse root_node e [] in
-          (match (has_empty_path_to_terminal, has_empty_path_to_root) with
-          | (Reaches true, Reaches true) -> true
-          | (Reaches _ , Reaches _) -> false
-          | _ -> raise (Except.unknown_error_default "Unexpected case in branch root delay checker!"))
-      | _ -> false
+      match root_node with
+      | None -> false
+      | Some root_node ->
+        (match has_only_empty_path_to_recurse root_node e [] with
+         | Reaches true ->
+           (* A loop closes only through a terminal reached in the same cycle;
+              a branch whose join leads to no terminal (e.g. an if used only
+              for its value) closes none. *)
+           List.exists (fun t -> has_only_empty_path_to_recurse e t [] = Reaches true) terminal_events
+         | Reaches false -> false
+         | DoesntReach _ ->
+           raise (Except.unknown_error_default "Unexpected case in branch root delay checker!"))
 
 let event_is_dominant e1 e2 =
   let preds = (event_predecessors e1) @ [e1] in
@@ -1004,12 +1002,20 @@ let recurse_unfold_for_checks construct_graphIR ci shared_vars_info graph (expr_
   (* now just check the total *)
   match
     find_graph_root_opt tmp_graph.events,
-    List.find_opt (fun e -> e.is_loop_terminal) tmp_graph.events
+    List.filter (fun e -> e.is_loop_terminal) tmp_graph.events
   with
-  | Some root, Some recurse ->
+  | Some root, (_ :: _ as terminals) ->
       let dists = event_min_distance_with_later tmp_graph.events root root in
-      let full_dist = IntHashTbl.find dists td.ld.lt.live.id in
-      let recurse_dist = IntHashTbl.find dists recurse.id in
+      let terminal_dists = List.map (fun (t : event) -> IntHashTbl.find dists t.id) terminals in
+      (* The shortest gap between iterations, over every [recurse]. *)
+      let recurse_dist = List.fold_left min event_distance_max terminal_dists in
+      (* When every path recurses, the end of the body is a join that never
+         fires; the body then lasts until its latest [recurse]. *)
+      let full_dist =
+        let end_dist = IntHashTbl.find dists td.ld.lt.live.id in
+        if end_dist >= event_distance_max then List.fold_left max 0 terminal_dists
+        else end_dist
+      in
       if recurse_dist = 0 then
         raise (event_graph_error_default "Recurse delay must be greater than 0!" expr_node.span);
       (* The number of unrolls needed for the recurse time to first pass the end event. *)

@@ -71,21 +71,20 @@ let check_linear lookup_message (g : event_graph) =
   let rec check_reg_violation = function
     | (ev, range, span)::remaining ->
       List.iter (fun (ev', range', span') ->
-        let order = events_get_order g.events lookup_message ev ev' in
+        (* Ordering events is costly, so only do it for overlapping ranges. *)
         if EventGraphOps.subreg_ranges_possibly_intersect range range' then begin
+          let order = events_get_order g.events lookup_message ev ev' in
           log "Register %s assigned at %d and %d: %s\n" range.subreg_name ev.id ev'.id
             (string_of_event_order order);
           if not (is_strict_ordered order) then begin
-            let d1 = (events_max_dist g.events lookup_message ev).(ev'.id)
-            and d2 = (events_max_dist g.events lookup_message ev').(ev.id) in
-            let pd e e' = let a = events_pred_min_dist e in
-              if e'.id < Array.length a then a.(e'.id) else -1 in
-            log "  latest %d after %d: %d; latest %d after %d: %d; min gap %d before %d: %d; %d before %d: %d\n"
-              ev'.id ev.id d1 ev.id ev'.id d2 ev'.id ev.id (pd ev ev') ev.id ev'.id (pd ev' ev)
-          end
-        end;
-        if (EventGraphOps.subreg_ranges_possibly_intersect range range') &&
-           (order |> is_strict_ordered |> not) then
+            if DebugLog.enabled () then begin
+              let d1 = (events_max_dist g.events lookup_message ev).(ev'.id)
+              and d2 = (events_max_dist g.events lookup_message ev').(ev.id) in
+              let pd e e' = let a = events_pred_min_dist e in
+                if e'.id < Array.length a then a.(e'.id) else -1 in
+              log "  latest %d after %d: %d; latest %d after %d: %d; min gap %d before %d: %d; %d before %d: %d\n"
+                ev'.id ev.id d1 ev.id ev'.id d2 ev'.id ev.id (pd ev ev') ev.id ev'.id (pd ev' ev)
+            end;
             raise (LifetimeCheckError
                 [
                   Text "Non-linearizable register assignment!";
@@ -93,6 +92,8 @@ let check_linear lookup_message (g : event_graph) =
                   Text "Conflicting with:";
                   Except.codespan_local span';
                 ])
+          end
+        end
       ) remaining;
       check_reg_violation remaining
     | [] -> ()

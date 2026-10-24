@@ -51,12 +51,11 @@ Below is a categorized list of the available examples, along with brief descript
 | [subreg_var](subreg_var.anvil)                         | Sub-register / bit-slice borrowing with variable indices |
 | [test_in](test_in.anvil)                               | `in` construct                                           |
 | [test_match_endpoint](test_match_endpoint.anvil)       | State machine encoding using `match` and `func`          |
-| [test_until](test_until.anvil)                         | tests `until` loops                                      |
-| [test_general_recursion](test_general_recursion.anvil) | Simple example testing general recursion               |
+| [test_gen_rec](test_gen_rec.anvil)                     | Named recursion with `rec X { ... }` and `recurse X`     |
 | [test_nested_rec](test_nested_rec.anvil)               | Nested recursion with multiple levels of `recurse`       |
 | [test_shift](test_shift.anvil)                         | Bitwise shift operators (`shl`, `shr`)                   |
 
-> **Total:** 20 examples
+> **Total:** 19 examples
 
 ---
 
@@ -94,10 +93,9 @@ Below is a categorized list of the available examples, along with brief descript
 
 | Example                                  | Features                                        |
 | ---------------------------------------- | ----------------------------------------------- |
-| [RCATop](RCATop.anvil)                   | Multi-channel communication, `shared` variables |
 | [static_sync](static_sync.anvil)         | Static synchronization mode                     |
 | [static_dyn_sync](static_dyn_sync.anvil) | Mixed static and dynamic synchronization        |
-| [try_recv](try_recv.anvil)               | Non-blocking `try recv ... else`                |
+| [try_recv](try_recv.anvil)               | Non-blocking `try irecv ... else`               |
 | [test_ready](test_ready.anvil)           | `ready` channel state checks                    |
 | [reset_msg](reset_msg.anvil)             | Built-in channel flush/reset                    |
 | [test_void](test_void.anvil)             | `void` messages for pure synchronization        |
@@ -113,7 +111,7 @@ Below is a categorized list of the available examples, along with brief descript
 | [xoffer_single_instant](xoffer_single_instant.anvil) | Single-branch `xoffer` with `else`; never blocks |
 | [xoffer_single_blocking](xoffer_single_blocking.anvil) | Single-branch blocking `xoffer`; waits for the peer |
 
-> **Total:** 18 examples
+> **Total:** 17 examples
 
 ---
 
@@ -175,4 +173,4 @@ Keeping this README up to date helps maintain clarity and usability for future u
 
 ---
 
-> **Current Example Count:** 59
+> **Current Example Count:** 57
